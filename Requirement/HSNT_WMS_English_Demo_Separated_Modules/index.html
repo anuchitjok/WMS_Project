@@ -1,0 +1,572 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HSNT WMS Interactive Demo</title>
+
+<style>
+:root{
+  --bg:#f3f6fb;
+  --card:#ffffff;
+  --primary:#0f766e;
+  --primary2:#14b8a6;
+  --text:#0f172a;
+  --muted:#64748b;
+  --border:#dbe3ef;
+  --green:#16a34a;
+  --red:#dc2626;
+  --amber:#f59e0b;
+  --blue:#2563eb;
+  --shadow:0 15px 35px rgba(0,0,0,.08);
+}
+
+*{
+  box-sizing:border-box;
+}
+
+body{
+  margin:0;
+  background:var(--bg);
+  font-family:Inter,Arial,sans-serif;
+  color:var(--text);
+}
+
+.app{
+  display:grid;
+  grid-template-columns:260px 1fr;
+  min-height:100vh;
+}
+
+.sidebar{
+  background:linear-gradient(180deg,#0f172a,#134e4a);
+  color:#fff;
+  padding:24px;
+}
+
+.logo{
+  font-size:24px;
+  font-weight:900;
+  margin-bottom:30px;
+}
+
+.menu{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.menu button{
+  border:none;
+  padding:14px;
+  border-radius:14px;
+  background:rgba(255,255,255,.08);
+  color:#fff;
+  text-align:left;
+  cursor:pointer;
+  font-weight:700;
+}
+
+.menu button:hover{
+  background:rgba(255,255,255,.15);
+}
+
+.main{
+  padding:30px;
+}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:25px;
+}
+
+.search{
+  width:300px;
+  padding:12px;
+  border-radius:12px;
+  border:1px solid var(--border);
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:20px;
+  margin-bottom:25px;
+}
+
+.card{
+  background:var(--card);
+  border-radius:22px;
+  padding:22px;
+  box-shadow:var(--shadow);
+}
+
+.kpi{
+  font-size:34px;
+  font-weight:900;
+  margin-top:10px;
+}
+
+.small{
+  color:var(--muted);
+  font-size:13px;
+}
+
+.table-card{
+  background:#fff;
+  border-radius:22px;
+  padding:22px;
+  box-shadow:var(--shadow);
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+}
+
+th{
+  text-align:left;
+  padding:14px;
+  background:#f8fafc;
+}
+
+td{
+  padding:14px;
+  border-bottom:1px solid #edf2f7;
+}
+
+.badge{
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+}
+
+.green{
+  background:#dcfce7;
+  color:#166534;
+}
+
+.blue{
+  background:#dbeafe;
+  color:#1d4ed8;
+}
+
+.amber{
+  background:#fef3c7;
+  color:#92400e;
+}
+
+.red{
+  background:#fee2e2;
+  color:#991b1b;
+}
+
+.actions{
+  display:flex;
+  gap:10px;
+  margin-bottom:20px;
+}
+
+.btn{
+  border:none;
+  padding:12px 16px;
+  border-radius:12px;
+  cursor:pointer;
+  font-weight:800;
+}
+
+.btn-primary{
+  background:var(--primary);
+  color:white;
+}
+
+.btn-secondary{
+  background:#fff;
+  border:1px solid var(--border);
+}
+
+.modal-bg{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.4);
+  display:none;
+  justify-content:center;
+  align-items:center;
+}
+
+.modal{
+  background:#fff;
+  width:500px;
+  border-radius:22px;
+  padding:25px;
+}
+
+.input{
+  width:100%;
+  padding:12px;
+  border-radius:12px;
+  border:1px solid var(--border);
+  margin-bottom:15px;
+}
+
+.toast{
+  position:fixed;
+  right:20px;
+  bottom:20px;
+  background:#0f172a;
+  color:#fff;
+  padding:15px 20px;
+  border-radius:16px;
+  display:none;
+}
+
+@media(max-width:1000px){
+  .grid{
+    grid-template-columns:repeat(2,1fr);
+  }
+
+  .app{
+    grid-template-columns:1fr;
+  }
+
+  .sidebar{
+    display:none;
+  }
+}
+
+@media(max-width:640px){
+  .grid{
+    grid-template-columns:1fr;
+  }
+
+  .search{
+    width:100%;
+  }
+
+  .topbar{
+    flex-direction:column;
+    gap:15px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="sidebar">
+    <div class="logo">HSNT WMS</div>
+
+    <div class="menu">
+      <button onclick="showToast('Dashboard Loaded')">
+        📊 Dashboard
+      </button>
+
+      <button onclick="showToast('Receiving Module Loaded')">
+        📥 Receiving
+      </button>
+
+      <button onclick="showToast('Inventory Module Loaded')">
+        📦 Inventory
+      </button>
+
+      <button onclick="showToast('Picking Module Loaded')">
+        🚚 Pick / Pack
+      </button>
+
+      <button onclick="showToast('RTV Module Loaded')">
+        ↩ RTV
+      </button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <div class="topbar">
+      <div>
+        <h1>Enterprise WMS Dashboard</h1>
+        <div class="small">
+          Interactive ERP/WMS Demo Prototype
+        </div>
+      </div>
+
+      <input 
+        class="search"
+        id="searchInput"
+        placeholder="Search request, serial, SKU..."
+        onkeyup="filterTable()"
+      />
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" onclick="openModal()">
+        + Create Request
+      </button>
+
+      <button class="btn btn-secondary" onclick="simulateScan()">
+        📷 Scan Barcode
+      </button>
+    </div>
+
+    <div class="grid">
+
+      <div class="card">
+        <div class="small">Total Inventory</div>
+        <div class="kpi">108</div>
+      </div>
+
+      <div class="card">
+        <div class="small">Open Requests</div>
+        <div class="kpi">12</div>
+      </div>
+
+      <div class="card">
+        <div class="small">Pending RTV</div>
+        <div class="kpi">3</div>
+      </div>
+
+      <div class="card">
+        <div class="small">Warehouse Usage</div>
+        <div class="kpi">68%</div>
+      </div>
+
+    </div>
+
+    <div class="table-card">
+
+      <h2>Withdrawal Requests</h2>
+
+      <table id="requestTable">
+        <thead>
+          <tr>
+            <th>Request No</th>
+            <th>RMA</th>
+            <th>Part</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+
+        <tbody id="tableBody">
+
+          <tr>
+            <td>REQ-001</td>
+            <td>RMA-2026-001</td>
+            <td>ZB-BATT-TC52</td>
+            <td>
+              <span class="badge blue">
+                Picking
+              </span>
+            </td>
+            <td>
+              <button class="btn btn-primary" onclick="completeRequest(this)">
+                Complete
+              </button>
+            </td>
+          </tr>
+
+          <tr>
+            <td>REQ-002</td>
+            <td>RMA-2026-002</td>
+            <td>VF-MB-VX520</td>
+            <td>
+              <span class="badge amber">
+                Pending
+              </span>
+            </td>
+            <td>
+              <button class="btn btn-primary" onclick="completeRequest(this)">
+                Complete
+              </button>
+            </td>
+          </tr>
+
+          <tr>
+            <td>REQ-003</td>
+            <td>RMA-2026-003</td>
+            <td>EP-PRINT-HEAD</td>
+            <td>
+              <span class="badge green">
+                Completed
+              </span>
+            </td>
+            <td>
+              <button class="btn btn-secondary">
+                View
+              </button>
+            </td>
+          </tr>
+
+        </tbody>
+      </table>
+
+    </div>
+
+  </div>
+
+</div>
+
+<!-- MODAL -->
+
+<div class="modal-bg" id="modal">
+
+  <div class="modal">
+
+    <h2>Create Withdrawal Request</h2>
+
+    <input 
+      class="input"
+      id="rma"
+      placeholder="RMA Number"
+    />
+
+    <input 
+      class="input"
+      id="part"
+      placeholder="Part Number"
+    />
+
+    <button class="btn btn-primary" onclick="createRequest()">
+      Submit Request
+    </button>
+
+    <button 
+      class="btn btn-secondary"
+      onclick="closeModal()"
+      style="margin-left:10px;"
+    >
+      Cancel
+    </button>
+
+  </div>
+
+</div>
+
+<!-- TOAST -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+
+function openModal(){
+  document.getElementById('modal').style.display='flex';
+}
+
+function closeModal(){
+  document.getElementById('modal').style.display='none';
+}
+
+function showToast(message){
+
+  const toast=document.getElementById('toast');
+
+  toast.innerText=message;
+  toast.style.display='block';
+
+  setTimeout(()=>{
+    toast.style.display='none';
+  },2500);
+}
+
+function createRequest(){
+
+  const rma=document.getElementById('rma').value;
+  const part=document.getElementById('part').value;
+
+  if(!rma || !part){
+    showToast('Please fill all fields');
+    return;
+  }
+
+  const table=document.getElementById('tableBody');
+
+  const row=`
+    <tr>
+      <td>REQ-NEW</td>
+      <td>${rma}</td>
+      <td>${part}</td>
+      <td>
+        <span class="badge amber">
+          Pending
+        </span>
+      </td>
+      <td>
+        <button class="btn btn-primary">
+          Complete
+        </button>
+      </td>
+    </tr>
+  `;
+
+  table.innerHTML += row;
+
+  closeModal();
+
+  showToast('Request Created Successfully');
+}
+
+function completeRequest(button){
+
+  const row=button.closest('tr');
+
+  row.cells[3].innerHTML=`
+    <span class="badge green">
+      Completed
+    </span>
+  `;
+
+  showToast('Request Completed');
+}
+
+function filterTable(){
+
+  const keyword=document
+    .getElementById('searchInput')
+    .value
+    .toLowerCase();
+
+  const rows=document.querySelectorAll('#tableBody tr');
+
+  rows.forEach(row=>{
+
+    const text=row.innerText.toLowerCase();
+
+    if(text.includes(keyword)){
+      row.style.display='';
+    }else{
+      row.style.display='none';
+    }
+
+  });
+}
+
+function simulateScan(){
+
+  const demoScans=[
+    'ZB-BATT-TC52',
+    'VF-MB-VX520',
+    'EP-PRINT-HEAD'
+  ];
+
+  const random=
+    demoScans[
+      Math.floor(Math.random()*demoScans.length)
+    ];
+
+  document.getElementById('searchInput').value=random;
+
+  filterTable();
+
+  showToast('Barcode Scanned: '+random);
+}
+
+</script>
+
+</body>
+</html>
+```

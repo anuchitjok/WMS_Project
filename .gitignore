@@ -1,0 +1,43 @@
+# Node
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Python (legacy)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.db
+
+# Prisma
+generated/
+
+# Misc
+*.pptx~
+~$*

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "HSNT WMS",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
+      "cwd": "app",
+      "port": 8000
+    }
+  ]
+}

@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HSNT WMS – Customer Demo Prototype</title>
+  <style>
+    :root{
+      --bg:#f4f7fb;
+      --card:#ffffff;
+      --text:#0f172a;
+      --muted:#64748b;
+      --line:#e2e8f0;
+      --primary:#0f766e;
+      --primary2:#14b8a6;
+      --primarySoft:#ccfbf1;
+      --blue:#2563eb;
+      --blueSoft:#dbeafe;
+      --green:#16a34a;
+      --greenSoft:#dcfce7;
+      --amber:#f59e0b;
+      --amberSoft:#fef3c7;
+      --red:#dc2626;
+      --redSoft:#fee2e2;
+      --purple:#7c3aed;
+      --purpleSoft:#ede9fe;
+      --slate:#334155;
+      --shadow:0 18px 45px rgba(15,23,42,.08);
+      --radius:20px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+    }
+    .app{display:grid;grid-template-columns:292px 1fr;min-height:100vh}
+    aside{
+      position:sticky;
+      top:0;
+      height:100vh;
+      overflow-y:auto;
+      padding:20px 16px;
+      color:#fff;
+      background:
+        radial-gradient(circle at 25% 0%, rgba(20,184,166,.35), transparent 28%),
+        linear-gradient(180deg,#0f172a,#134e4a);
+    }
+    .brand{
+      display:flex;
+      gap:12px;
+      align-items:center;
+      margin-bottom:18px;
+      padding-bottom:16px;
+      border-bottom:1px solid rgba(255,255,255,.12);
+    }
+    .logo{
+      width:48px;
+      height:48px;
+      border-radius:16px;
+      display:grid;
+      place-items:center;
+      background:linear-gradient(135deg,#5eead4,#93c5fd);
+      color:#083344;
+      font-weight:900;
+      letter-spacing:.6px;
+      box-shadow:0 14px 30px rgba(20,184,166,.3)
+    }
+    .brand h1{font-size:15px;line-height:1.25;margin:0}
+    .brand p{font-size:12px;color:#cbd5e1;margin:3px 0 0}
+    .role-box{
+      background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.13);
+      border-radius:18px;
+      padding:13px;
+      margin-bottom:14px
+    }
+    label{display:block;font-size:12px;font-weight:800;color:#475569;margin-bottom:7px}
+    .role-box label{color:#dbeafe}
+    select,input,textarea{
+      width:100%;
+      border:1px solid var(--line);
+      border-radius:13px;
+      padding:10px 12px;
+      background:#fff;
+      color:var(--text);
+      font:inherit;
+      outline:none
+    }
+    textarea{min-height:88px;resize:vertical}
+    select:focus,input:focus,textarea:focus{border-color:var(--primary2);box-shadow:0 0 0 3px rgba(20,184,166,.13)}
+    .role-box select{background:#0f172a;color:#fff;border-color:rgba(255,255,255,.18)}
+    .role-box p{font-size:12px;line-height:1.4;color:#cbd5e1;margin:9px 0 0}
+    .nav-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;font-weight:900;margin:17px 8px 8px}
+    .nav{display:flex;flex-direction:column;gap:5px}
+    .nav-btn{
+      border:0;
+      background:transparent;
+      color:#dbeafe;
+      border-radius:14px;
+      padding:10px 11px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      cursor:pointer;
+      text-align:left;
+      font-weight:800;
+      transition:.18s
+    }
+    .nav-btn:hover{background:rgba(255,255,255,.08)}
+    .nav-btn.active{background:#fff;color:var(--primary);box-shadow:0 14px 28px rgba(0,0,0,.18)}
+    .nav-left{display:flex;align-items:center;gap:10px}
+    .nav-sub{font-size:10px;font-weight:800;color:rgba(255,255,255,.55)}
+    .nav-btn.active .nav-sub{color:#64748b}
+    .locked{opacity:.38;cursor:not-allowed}
+    main{padding:22px 26px 42px;overflow:hidden}
+    .topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:20px}
+    .title h2{font-size:29px;margin:0;letter-spacing:-.02em}
+    .title p{margin:5px 0 0;color:var(--muted)}
+    .actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .search{position:relative;width:min(420px,38vw)}
+    .search input{padding-left:40px}
+    .search:before{content:"⌕";position:absolute;left:14px;top:50%;transform:translateY(-50%);font-size:20px;color:#94a3b8}
+    .btn{
+      border:0;
+      border-radius:13px;
+      padding:10px 14px;
+      font-weight:900;
+      cursor:pointer;
+      background:var(--primary);
+      color:#fff;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      white-space:nowrap;
+      transition:.16s
+    }
+    .btn:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(15,118,110,.18)}
+    .btn.secondary{background:#fff;color:#1e293b;border:1px solid var(--line)}
+    .btn.red{background:var(--red)}
+    .btn.blue{background:var(--blue)}
+    .btn.green{background:var(--green)}
+    .btn.amber{background:var(--amber)}
+    .panel{display:none}
+    .panel.active{display:block}
+    .grid{display:grid;gap:16px}
+    .cards{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:17px}
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      padding:18px
+    }
+    .kpi{min-height:128px;display:flex;justify-content:space-between;gap:14px}
+    .kpi h3{margin:0;color:var(--muted);font-size:13px}
+    .kpi .num{font-size:31px;font-weight:950;letter-spacing:-.03em;margin:9px 0 5px}
+    .kpi .cap{font-size:12px;color:var(--muted)}
+    .ico{width:44px;height:44px;border-radius:15px;display:grid;place-items:center;font-size:21px;font-weight:900;flex:0 0 44px}
+    .teal{background:var(--primarySoft);color:var(--primary)}
+    .blueI{background:var(--blueSoft);color:var(--blue)}
+    .greenI{background:var(--greenSoft);color:#166534}
+    .amberI{background:var(--amberSoft);color:#92400e}
+    .redI{background:var(--redSoft);color:#991b1b}
+    .purpleI{background:var(--purpleSoft);color:#5b21b6}
+    .layout2{display:grid;grid-template-columns:1.55fr .95fr;gap:16px;align-items:start}
+    .layout3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px}
+    .section-head h3{font-size:18px;margin:0}
+    .section-head p{margin:4px 0 0;color:var(--muted);font-size:13px;line-height:1.4}
+    .toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+    .filters{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .filters select,.filters input{width:auto;min-width:160px}
+    table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+    th{
+      text-align:left;
+      background:#f8fafc;
+      color:#475569;
+      padding:11px 10px;
+      border-top:1px solid var(--line);
+      border-bottom:1px solid var(--line);
+      white-space:nowrap
+    }
+    td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+    tr:hover td{background:#fbfdff}
+    .small{font-size:12px;color:var(--muted);line-height:1.35}
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:5px;
+      border-radius:999px;
+      padding:5px 9px;
+      font-size:12px;
+      font-weight:900;
+      white-space:nowrap
+    }
+    .b-green{background:var(--greenSoft);color:#166534}
+    .b-blue{background:var(--blueSoft);color:#1d4ed8}
+    .b-amber{background:var(--amberSoft);color:#92400e}
+    .b-red{background:var(--redSoft);color:#991b1b}
+    .b-purple{background:var(--purpleSoft);color:#5b21b6}
+    .b-gray{background:#f1f5f9;color:#475569}
+    .mini{border:0;background:#f1f5f9;color:#334155;border-radius:10px;padding:7px 9px;font-size:12px;font-weight:900;cursor:pointer}
+    .mini.primary{background:var(--primary);color:#fff}
+    .mini.blue{background:var(--blue);color:#fff}
+    .mini.red{background:var(--red);color:#fff}
+    .mini.green{background:var(--green);color:#fff}
+    .mini.amber{background:var(--amber);color:#fff}
+    .hero{
+      background:radial-gradient(circle at 90% 5%,rgba(20,184,166,.18),transparent 30%),linear-gradient(135deg,#fff,#effdf9);
+      border:1px solid #ccfbf1;
+      border-radius:24px;
+      padding:22px;
+      box-shadow:var(--shadow)
+    }
+    .hero h3{font-size:23px;margin:0 0 8px}
+    .hero p{color:#475569;line-height:1.58;margin:0}
+    .pillrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+    .timeline{display:flex;flex-direction:column;gap:12px}
+    .event{display:grid;grid-template-columns:36px 1fr;gap:10px;align-items:start}
+    .dot{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:var(--primarySoft);color:var(--primary);font-weight:950}
+    .event h4{margin:0;font-size:14px}
+    .event p{margin:4px 0 0;color:var(--muted);font-size:12px}
+    .alert{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);background:#f8fafc;border-radius:16px;padding:12px;margin-bottom:10px}
+    .alert strong{display:block;margin-bottom:3px}
+    .kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+    .lane{background:#f8fafc;border:1px solid var(--line);border-radius:18px;padding:12px;min-height:270px}
+    .lane h4{margin:0 0 10px}
+    .ticket{background:#fff;border:1px solid var(--line);border-radius:15px;padding:12px;margin-bottom:10px;box-shadow:0 8px 18px rgba(15,23,42,.05)}
+    .ticket strong{display:block;margin-bottom:5px}
+    .ticket p{margin:0;color:var(--muted);font-size:12px;line-height:1.4}
+    .ticket .row{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
+    .flowline{display:flex;gap:8px;margin:10px 0 4px}
+    .flowline span{height:8px;flex:1;border-radius:99px;background:#e2e8f0}
+    .flowline span.done{background:linear-gradient(90deg,var(--primary),var(--primary2))}
+    .warehouse-map{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+    .warehouse-card{background:#f8fafc;border:1px solid var(--line);border-radius:18px;padding:12px}
+    .warehouse-card h4{margin:0 0 4px}
+    .slots{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+    .slot{height:34px;border-radius:9px;display:grid;place-items:center;background:#e2e8f0;color:#475569;font-size:11px;font-weight:950;cursor:pointer}
+    .slot.used{background:var(--primarySoft);color:var(--primary)}
+    .slot.full{background:var(--redSoft);color:var(--red)}
+    .slot.hold{background:var(--amberSoft);color:#92400e}
+    .chart{display:flex;align-items:end;gap:10px;height:180px;padding-top:18px}
+    .bar{flex:1;min-width:26px;border-radius:12px 12px 4px 4px;background:linear-gradient(180deg,var(--primary2),var(--primary));position:relative;display:flex;align-items:flex-end;justify-content:center;color:#fff;font-weight:950;font-size:12px;padding-bottom:8px}
+    .bar span{position:absolute;bottom:-23px;color:var(--muted);font-size:11px;font-weight:850}
+    .route-card{border:1px solid var(--line);background:#fff;border-radius:16px;padding:14px}
+    .route-card h4{margin:0 0 6px}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.52);display:none;align-items:center;justify-content:center;z-index:60;padding:22px}
+    .modal{width:min(930px,100%);max-height:91vh;overflow:auto;background:#fff;border-radius:26px;padding:22px;box-shadow:0 34px 80px rgba(0,0,0,.25)}
+    .modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}
+    .modal-head h3{margin:0;font-size:23px}
+    .modal-head p{margin:5px 0 0;color:var(--muted)}
+    .close{border:0;background:#f1f5f9;border-radius:12px;width:38px;height:38px;font-size:22px;cursor:pointer}
+    .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .form-grid .full{grid-column:1/-1}
+    .toast{display:none;position:fixed;right:24px;bottom:24px;z-index:80;background:#0f172a;color:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 18px 42px rgba(0,0,0,.25);min-width:290px}
+    .toast strong{display:block;margin-bottom:4px}
+    .mobile-menu{display:none}
+    @media(max-width:1180px){
+      .app{grid-template-columns:1fr}
+      aside{position:fixed;z-index:50;width:292px;transform:translateX(-105%);transition:.2s}
+      aside.open{transform:translateX(0)}
+      .mobile-menu{display:inline-flex}
+      .cards{grid-template-columns:repeat(2,1fr)}
+      .layout2,.layout3,.kanban{grid-template-columns:1fr}
+      .warehouse-map{grid-template-columns:repeat(2,1fr)}
+      .search{width:100%}
+      .topbar{flex-direction:column}
+      .actions{width:100%}
+    }
+    @media(max-width:680px){
+      main{padding:16px 14px 32px}
+      .cards,.form-grid,.warehouse-map{grid-template-columns:1fr}
+      .filters select,.filters input{width:100%}
+      table{font-size:12px}
+      th:nth-child(4),td:nth-child(4){display:none}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <div class="logo">HS</div>
+        <div>
+          <h1>HSNT WMS</h1>
+          <p>Inventory & RMA Warehouse Management System</p>
+        </div>
+      </div>
+      <div class="role-box">
+        <label>Mock Login / Role Switcher</label>
+        <select id="roleSelect"></select>
+        <p id="roleHint"></p>
+      </div>
+      <div id="navContainer"></div>
+    </aside>
+
+    <main>
+      <div class="topbar">
+        <button class="btn secondary mobile-menu" onclick="toggleSidebar()">☰ Menu</button>
+        <div class="title">
+          <h2 id="pageTitle">Dashboard</h2>
+          <p id="pageSubtitle">Customer-presentable WMS concept prototype for Highpoint Service Network.</p>
+        </div>
+        <div class="actions">
+          <div class="search"><input id="globalSearch" placeholder="Search part, serial, RMA, request..." oninput="renderCurrent()" /></div>
+          <button class="btn secondary" onclick="openModal('notificationModal')">🔔 Alerts</button>
+          <button class="btn" onclick="openModal('requestModal')">+ New Request</button>
+        </div>
+      </div>
+
+      <section id="dashboard" class="panel active"></section>
+      <section id="workflow" class="panel"></section>
+      <section id="product" class="panel"></section>
+      <section id="warehouse" class="panel"></section>
+      <section id="receiving" class="panel"></section>
+      <section id="inventory" class="panel"></section>
+      <section id="request" class="panel"></section>
+      <section id="approval" class="panel"></section>
+      <section id="fulfillment" class="panel"></section>
+      <section id="handover" class="panel"></section>
+      <section id="rma" class="panel"></section>
+      <section id="doa" class="panel"></section>
+      <section id="rtv" class="panel"></section>
+      <section id="unused" class="panel"></section>
+      <section id="adjustment" class="panel"></section>
+      <section id="transfer" class="panel"></section>
+      <section id="reports" class="panel"></section>
+      <section id="users" class="panel"></section>
+      <section id="audit" class="panel"></section>
+      <section id="settings" class="panel"></section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="requestModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h3>Create Withdrawal Request</h3>
+          <p>Submit an RMA-linked withdrawal request. The system validates stock availability and approval rules.</p>
+        </div>
+        <button class="close" onclick="closeModal('requestModal')">×</button>
+      </div>
+      <div class="form-grid">
+        <div><label>Department</label><input id="newDept" value="RMA Service Team"></div>
+        <div><label>Requester Name</label><input id="newRequester" value="Natthanan"></div>
+        <div><label>Warehouse</label><select id="newWh"></select></div>
+        <div><label>RMA Case Number</label><input id="newRma" value="RMA-2026-0528"></div>
+        <div><label>Product / Part Required</label><select id="newPart"></select></div>
+        <div><label>Quantity</label><input id="newQty" type="number" min="1" value="1"></div>
+        <div><label>Expected Usage Date</label><input id="newDate" type="date" value="2026-05-29"></div>
+        <div><label>Priority</label><select id="newPriority"><option>Normal</option><option>High</option><option>Urgent</option></select></div>
+        <div class="full"><label>Purpose of Request</label><textarea id="newPurpose">Use for customer RMA repair case.</textarea></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+        <button class="btn secondary" onclick="closeModal('requestModal')">Cancel</button>
+        <button class="btn" onclick="submitRequest()">Submit Request</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="receiveModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h3>Goods Receiving</h3>
+          <p>Receive consignment parts or finished goods and assign warehouse, rack, and slot.</p>
+        </div>
+        <button class="close" onclick="closeModal('receiveModal')">×</button>
+      </div>
+      <div class="form-grid">
+        <div><label>Source Type</label><select id="rcvSource"><option>Brand Owner</option><option>Vendor</option><option>Customer Return</option><option>RTV Replacement</option></select></div>
+        <div><label>Brand / Vendor</label><input id="rcvVendor" value="Zebra Technologies"></div>
+        <div><label>Brand</label><input id="rcvBrand" value="Zebra"></div>
+        <div><label>Model</label><input id="rcvModel" value="TC52"></div>
+        <div><label>Part Number</label><input id="rcvPart" value="ZB-BATT-TC52"></div>
+        <div><label>Serial Number</label><input id="rcvSerial" value="N/A"></div>
+        <div><label>Product Type</label><select id="rcvType"><option>Spare Part</option><option>Finished Goods</option><option>Accessory</option><option>Main Board</option></select></div>
+        <div><label>Quantity</label><input id="rcvQty" type="number" min="1" value="10"></div>
+        <div><label>Condition</label><select id="rcvCondition"><option>New</option><option>Good</option><option>Pending Inspection</option><option>DOA</option><option>Damaged</option></select></div>
+        <div><label>Ownership Type</label><select id="rcvOwner"><option>Consignment</option><option>Company-owned</option><option>Customer-owned</option></select></div>
+        <div><label>Warehouse</label><select id="rcvWh"></select></div>
+        <div><label>Rack / Slot</label><input id="rcvLoc" value="WH01-A01-S001"></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+        <button class="btn secondary" onclick="closeModal('receiveModal')">Cancel</button>
+        <button class="btn" onclick="submitReceiving()">Receive & Update Stock</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="productModal">
+    <div class="modal">
+      <div class="modal-head">
+        <div>
+          <h3>Create Product Master</h3>
+          <p>Create product master data before receiving stock.</p>
+        </div>
+        <button class="close" onclick="closeModal('productModal')">×</button>
+      </div>
+      <div class="form-grid">
+        <div><label>Brand</label><input id="pmBrand" value="Verifone"></div>
+        <div><label>Model</label><input id="pmModel" value="V240m"></div>
+        <div><label>Part Number</label><input id="pmPart" value="VF-FG-V240M"></div>
+        <div><label>Product Type</label><select id="pmType"><option>Finished Goods</option><option>Spare Part</option><option>Accessory</option><option>Main Board</option></select></div>
+        <div><label>Serial Required</label><select id="pmSerialReq"><option>Yes</option><option>No</option></select></div>
+        <div><label>Warranty Rule</label><select id="pmWarranty"><option>Active</option><option>Pending</option><option>Expired</option></select></div>
+        <div class="full"><label>Description</label><textarea id="pmDesc">Finished goods terminal for RMA replacement stock.</textarea></div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+        <button class="btn secondary" onclick="closeModal('productModal')">Cancel</button>
+        <button class="btn" onclick="submitProduct()">Save Product Master</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="notificationModal">
+    <div class="modal" style="width:min(660px,100%)">
+      <div class="modal-head">
+        <div>
+          <h3>Notification Center</h3>
+          <p>Alerts for approvals, picking tasks, DOA, RTV, low stock, and overdue activities.</p>
+        </div>
+        <button class="close" onclick="closeModal('notificationModal')">×</button>
+      </div>
+      <div id="notificationList"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const roles=[
+      'System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Requester',
+      'Department Approver','RMA / Service Team','RTV Officer','Finance / Accounting Viewer',
+      'Brand / Vendor Viewer','Management Viewer','Auditor'
+    ];
+
+    const roleHints={
+      'System Administrator':'Full system access: users, settings, master data, workflow, reports, and audit trail.',
+      'Warehouse Manager':'Manage warehouse operations, inventory, fulfillment, reports, and audit review.',
+      'Warehouse Supervisor':'Approve warehouse processing and supervise receiving, putaway, picking, packing, and return tasks.',
+      'Warehouse Staff':'Execute receiving, putaway, picking, packing, shipping, and unused return verification.',
+      'Requester':'Create withdrawal requests and confirm RMA usage result: used, DOA, or unused return.',
+      'Department Approver':'Approve or reject withdrawal requests according to department authority.',
+      'RMA / Service Team':'Verify RMA usage, declare DOA/defective, and update consumed or unused results.',
+      'RTV Officer':'Manage DOA and RTV workflow from review to vendor return and closure.',
+      'Finance / Accounting Viewer':'View inventory, reports, RTV financial impact, and audit data.',
+      'Brand / Vendor Viewer':'Read-only access to consignment stock, RTV cases, and related reports.',
+      'Management Viewer':'Read-only access to dashboards, reports, workflow monitoring, and management KPIs.',
+      'Auditor':'Read-only access to audit trail, transaction history, and reports.'
+    };
+
+    const modules=[
+      {group:'Overview',id:'dashboard',icon:'📊',title:'Dashboard',sub:'KPIs, inventory, requests and bottlenecks',roles:['all']},
+      {group:'Overview',id:'workflow',icon:'🧩',title:'Workflow Center',sub:'End-to-end WMS workflow monitor',roles:['all']},
+      {group:'Master Data',id:'product',icon:'🏷️',title:'Product Master',sub:'Brand, model, part, serial and warranty',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Management Viewer','Auditor']},
+      {group:'Master Data',id:'warehouse',icon:'🏬',title:'Warehouse / Rack / Slot',sub:'Warehouse, rack, slot and bin map',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Management Viewer','Auditor']},
+      {group:'Operations',id:'receiving',icon:'📥',title:'Goods Receiving',sub:'Receive, verify and putaway stock',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Management Viewer','Auditor']},
+      {group:'Operations',id:'inventory',icon:'📦',title:'Inventory Stock',sub:'Stock balance and status tracking',roles:['all']},
+      {group:'Operations',id:'request',icon:'📝',title:'Withdrawal Request',sub:'Create and track stock requests',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Requester','Department Approver','RMA / Service Team','Management Viewer','Auditor']},
+      {group:'Operations',id:'approval',icon:'✅',title:'Approval Workflow',sub:'Approve or reject requests',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Department Approver','Management Viewer','Auditor']},
+      {group:'Operations',id:'fulfillment',icon:'🚚',title:'Pick / Pack / Ship',sub:'Warehouse fulfillment task board',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Management Viewer','Auditor']},
+      {group:'Operations',id:'handover',icon:'🤝',title:'Handover Confirmation',sub:'Receiver confirmation and closure',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Requester','RMA / Service Team','Management Viewer','Auditor']},
+      {group:'RMA & Returns',id:'rma',icon:'🛠️',title:'RMA Usage Confirmation',sub:'Used, DOA, defective or unused',roles:['System Administrator','Warehouse Manager','Requester','RMA / Service Team','RTV Officer','Management Viewer','Auditor']},
+      {group:'RMA & Returns',id:'doa',icon:'⚠️',title:'DOA Management',sub:'DOA and defective item control',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','RMA / Service Team','RTV Officer','Management Viewer','Auditor']},
+      {group:'RMA & Returns',id:'rtv',icon:'↩️',title:'RTV Management',sub:'Return-to-vendor workflow',roles:['System Administrator','Warehouse Manager','RTV Officer','RMA / Service Team','Management Viewer','Auditor','Brand / Vendor Viewer']},
+      {group:'RMA & Returns',id:'unused',icon:'🔁',title:'Unused Goods Return',sub:'Verify and return unused stock',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Requester','RMA / Service Team','Management Viewer','Auditor']},
+      {group:'Inventory Control',id:'adjustment',icon:'🧮',title:'Stock Adjustment',sub:'Controlled quantity adjustment',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Management Viewer','Auditor']},
+      {group:'Inventory Control',id:'transfer',icon:'🔄',title:'Stock Transfer',sub:'Move stock between warehouses and locations',roles:['System Administrator','Warehouse Manager','Warehouse Supervisor','Warehouse Staff','Management Viewer','Auditor']},
+      {group:'Monitoring',id:'reports',icon:'📈',title:'Reports',sub:'Inventory, RMA, RTV and SLA reports',roles:['System Administrator','Warehouse Manager','RTV Officer','Finance / Accounting Viewer','Brand / Vendor Viewer','Management Viewer','Auditor']},
+      {group:'Administration',id:'users',icon:'👥',title:'User Management',sub:'Users, roles and permissions',roles:['System Administrator']},
+      {group:'Administration',id:'audit',icon:'🧾',title:'Audit Trail',sub:'Transaction history and logs',roles:['System Administrator','Warehouse Manager','Finance / Accounting Viewer','Management Viewer','Auditor']},
+      {group:'Administration',id:'settings',icon:'⚙️',title:'Settings',sub:'Workflow and control settings',roles:['System Administrator']}
+    ];
+
+    let currentRole='System Administrator';
+    let currentModule='dashboard';
+
+    const whList=['Tower B1FL','Tower B2FL','Tower C1FL','SCG Warehouse','WH05 RTV Area'];
+
+    let products=[
+      {id:'PM-1001',brand:'Zebra',model:'TC52',part:'ZB-BATT-TC52',sku:'SKU-ZB-001',type:'Spare Part',serialReq:'No',warranty:'Active',description:'Battery pack for Zebra TC52'},
+      {id:'PM-1002',brand:'Verifone',model:'VX520',part:'VF-MB-VX520',sku:'SKU-VF-010',type:'Main Board',serialReq:'Yes',warranty:'Active',description:'Main board for Verifone VX520'},
+      {id:'PM-1003',brand:'Epson',model:'TM-T88VI',part:'EP-PRINT-HEAD',sku:'SKU-EP-015',type:'Spare Part',serialReq:'No',warranty:'Active',description:'Print head for Epson receipt printer'},
+      {id:'PM-1004',brand:'iMin',model:'D4',part:'IM-DISPLAY-D4',sku:'SKU-IM-005',type:'Spare Part',serialReq:'Yes',warranty:'Active',description:'Display module for iMin D4'}
+    ];
+
+    let inventory=[
+      {id:'ITM-1001',brand:'Zebra',model:'TC52',part:'ZB-BATT-TC52',serial:'N/A',type:'Spare Part',owner:'Consignment',condition:'New',warranty:'Active',status:'Available',wh:'Tower B1FL',rack:'A01',slot:'S001',qty:48,rma:'-'},
+      {id:'ITM-1002',brand:'Verifone',model:'VX520',part:'VF-MB-VX520',serial:'VF520-MB-00982',type:'Main Board',owner:'Consignment',condition:'Good',warranty:'Active',status:'Reserved',wh:'Tower B2FL',rack:'B01',slot:'S002',qty:1,rma:'RMA-2026-0509'},
+      {id:'ITM-1003',brand:'Epson',model:'TM-T88VI',part:'EP-PRINT-HEAD',serial:'N/A',type:'Spare Part',owner:'Company-owned',condition:'New',warranty:'Active',status:'Available',wh:'Tower C1FL',rack:'A02',slot:'S003',qty:21,rma:'-'},
+      {id:'ITM-1004',brand:'BenQ',model:'LH730',part:'BQ-LAMP-LH730',serial:'BQ-LH730-LP-001',type:'Finished Goods',owner:'Consignment',condition:'Pending Inspection',warranty:'Pending',status:'On Hold',wh:'SCG Warehouse',rack:'C01',slot:'S001',qty:1,rma:'-'},
+      {id:'ITM-1005',brand:'iMin',model:'D4',part:'IM-DISPLAY-D4',serial:'IMD4-SN-77210',type:'Spare Part',owner:'Consignment',condition:'DOA',warranty:'Active',status:'RTV Pending',wh:'WH05 RTV Area',rack:'DOA',slot:'S001',qty:1,rma:'RMA-2026-0466'},
+      {id:'ITM-1006',brand:'ViewSonic',model:'PA503',part:'VS-REMOTE-PA503',serial:'N/A',type:'Accessory',owner:'Company-owned',condition:'New',warranty:'Active',status:'Available',wh:'Tower B1FL',rack:'B01',slot:'S003',qty:33,rma:'-'},
+      {id:'ITM-1007',brand:'Zebra',model:'ZD420',part:'ZB-ROLLER-ZD420',serial:'N/A',type:'Spare Part',owner:'Customer-owned',condition:'Damaged',warranty:'Expired',status:'Damaged',wh:'Tower B2FL',rack:'A01',slot:'S004',qty:5,rma:'RMA-2026-0432'}
+    ];
+
+    let requests=[
+      {no:'REQ-260528-001',dept:'RMA Service',requester:'Narin',rma:'RMA-2026-0518',item:'ZB-BATT-TC52',qty:2,wh:'Tower B1FL',purpose:'Battery replacement',date:'2026-05-29',priority:'High',status:'Approved',progress:3},
+      {no:'REQ-260528-002',dept:'Onsite Service',requester:'Suda',rma:'RMA-2026-0520',item:'EP-PRINT-HEAD',qty:1,wh:'Tower C1FL',purpose:'Printer head replacement',date:'2026-05-30',priority:'Normal',status:'Picking',progress:4},
+      {no:'REQ-260527-006',dept:'RMA Service',requester:'Krit',rma:'RMA-2026-0509',item:'VF-MB-VX520',qty:1,wh:'Tower B2FL',purpose:'Repair Verifone terminal',date:'2026-05-28',priority:'Urgent',status:'Packed',progress:6},
+      {no:'REQ-260526-003',dept:'Call Center Support',requester:'Mali',rma:'RMA-2026-0498',item:'VS-REMOTE-PA503',qty:3,wh:'Tower B1FL',purpose:'Replace missing accessory',date:'2026-05-28',priority:'Normal',status:'Ready for Pickup',progress:7},
+      {no:'REQ-260525-007',dept:'RMA Service',requester:'Narin',rma:'RMA-2026-0466',item:'IM-DISPLAY-D4',qty:1,wh:'WH05 RTV Area',purpose:'Screen replacement',date:'2026-05-27',priority:'High',status:'DOA',progress:9},
+      {no:'REQ-260525-009',dept:'RMA Service',requester:'Palm',rma:'RMA-2026-0468',item:'ZB-BATT-TC52',qty:1,wh:'Tower B1FL',purpose:'Battery test',date:'2026-05-27',priority:'Normal',status:'Unused Return Pending',progress:8}
+    ];
+
+    let rtvCases=[
+      {caseNo:'RTV-260528-001',source:'DOA from RMA usage',item:'IM-DISPLAY-D4',serial:'IMD4-SN-77210',brand:'iMin',vendor:'iMin Thailand',status:'RTV Pending',aging:1,rma:'RMA-2026-0466'},
+      {caseNo:'RTV-260526-004',source:'Defective returned part',item:'ZB-ROLLER-ZD420',serial:'N/A',brand:'Zebra',vendor:'Zebra Technologies',status:'Shipped to Vendor',aging:4,rma:'RMA-2026-0432'},
+      {caseNo:'RTV-260521-002',source:'Vendor warranty claim',item:'VF-MB-VX520',serial:'VF520-MB-00877',brand:'Verifone',vendor:'Verifone Partner',status:'RTV Completed',aging:8,rma:'RMA-2026-0391'}
+    ];
+
+    let audit=[
+      {time:'2026-05-28 09:12',user:'Warehouse Staff',action:'Pick Confirmed',ref:'REQ-260528-002',detail:'Picked EP-PRINT-HEAD from Tower C1FL-A02-S003'},
+      {time:'2026-05-28 09:03',user:'Department Approver',action:'Request Approved',ref:'REQ-260528-001',detail:'Approved stock withdrawal for RMA-2026-0518'},
+      {time:'2026-05-28 08:45',user:'RTV Officer',action:'RTV Created',ref:'RTV-260528-001',detail:'DOA item moved to RTV Pending'},
+      {time:'2026-05-27 17:20',user:'Warehouse Staff',action:'Putaway Completed',ref:'GR-260527-011',detail:'10 units placed to Tower B1FL-A01-S001'}
+    ];
+
+    function init(){
+      document.getElementById('roleSelect').innerHTML=roles.map(r=>`<option>${r}</option>`).join('');
+      document.getElementById('roleSelect').value=currentRole;
+      document.getElementById('roleHint').textContent=roleHints[currentRole];
+      document.getElementById('roleSelect').addEventListener('change',e=>{
+        currentRole=e.target.value;
+        document.getElementById('roleHint').textContent=roleHints[currentRole];
+        renderNav();
+        if(!canAccess(modules.find(m=>m.id===currentModule))) showModule('dashboard');
+        toast('Role switched','Current mock login: '+currentRole);
+      });
+      document.getElementById('newWh').innerHTML=whList.map(w=>`<option>${w}</option>`).join('');
+      document.getElementById('rcvWh').innerHTML=whList.map(w=>`<option>${w}</option>`).join('');
+      document.getElementById('newPart').innerHTML=products.map(p=>`<option>${p.part}</option>`).join('');
+      renderNav();
+      renderCurrent();
+      renderNotifications();
+    }
+
+    function canAccess(m){return m&&(m.roles.includes('all')||m.roles.includes(currentRole))}
+    function renderNav(){
+      const groups=[...new Set(modules.map(m=>m.group))];
+      let html='';
+      groups.forEach(g=>{
+        html+=`<div class="nav-title">${g}</div><div class="nav">`;
+        modules.filter(m=>m.group===g).forEach(m=>{
+          const locked=canAccess(m)?'':'locked';
+          html+=`<button class="nav-btn ${currentModule===m.id?'active':''} ${locked}" onclick="navClick('${m.id}')">
+            <span class="nav-left"><span>${m.icon}</span><span>${m.title}<div class="nav-sub">${m.sub}</div></span></span>
+            <span>${locked?'🔒':'›'}</span>
+          </button>`;
+        });
+        html+=`</div>`;
+      });
+      document.getElementById('navContainer').innerHTML=html;
+    }
+
+    function navClick(id){
+      const m=modules.find(x=>x.id===id);
+      if(!canAccess(m)){toast('Access restricted',currentRole+' cannot access '+m.title);return}
+      showModule(id);
+      document.getElementById('sidebar').classList.remove('open');
+    }
+
+    function showModule(id){
+      currentModule=id;
+      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+      document.getElementById(id).classList.add('active');
+      const m=modules.find(x=>x.id===id);
+      document.getElementById('pageTitle').textContent=m.title;
+      document.getElementById('pageSubtitle').textContent=m.sub;
+      renderNav();
+      renderCurrent();
+    }
+
+    function renderCurrent(){
+      const renderers={
+        dashboard:renderDashboard,workflow:renderWorkflow,product:renderProduct,warehouse:renderWarehouse,
+        receiving:renderReceiving,inventory:renderInventory,request:renderRequest,approval:renderApproval,
+        fulfillment:renderFulfillment,handover:renderHandover,rma:renderRma,doa:renderDoa,rtv:renderRtv,
+        unused:renderUnused,adjustment:renderAdjustment,transfer:renderTransfer,reports:renderReports,
+        users:renderUsers,audit:renderAudit,settings:renderSettings
+      };
+      renderers[currentModule]();
+    }
+
+    function badge(status){
+      const s=String(status).toLowerCase();
+      let c='b-gray';
+      if(s.includes('available')||s.includes('approved')||s.includes('completed')||s.includes('returned to stock')||s.includes('closed'))c='b-green';
+      if(s.includes('picking')||s.includes('picked')||s.includes('packed')||s.includes('ready')||s.includes('shipped')||s.includes('reserved'))c='b-blue';
+      if(s.includes('pending')||s.includes('draft')||s.includes('hold')||s.includes('inspection')||s.includes('unused'))c='b-amber';
+      if(s.includes('doa')||s.includes('rejected')||s.includes('damaged')||s.includes('cancel')||s.includes('defective'))c='b-red';
+      if(s.includes('rtv')||s.includes('vendor')||s.includes('quarantine'))c='b-purple';
+      return `<span class="badge ${c}">${status}</span>`;
+    }
+
+    function kpi(title,value,caption,icon,cls){
+      return `<div class="card kpi"><div><h3>${title}</h3><div class="num">${value}</div><div class="cap">${caption}</div></div><div class="ico ${cls}">${icon}</div></div>`;
+    }
+    function getSearch(){return(document.getElementById('globalSearch')?.value||'').toLowerCase()}
+    function alertItem(t,x,i){return `<div class="alert"><div class="dot">${i}</div><div><strong>${t}</strong><p class="small">${x}</p></div></div>`}
+
+    function renderDashboard(){
+      const q=getSearch();
+      document.getElementById('dashboard').innerHTML=`
+        <div class="layout2" style="margin-bottom:16px">
+          <div class="hero">
+            <h3>HSNT WMS – Inventory & RMA Warehouse Management System</h3>
+            <p>This English customer demo illustrates a modern Warehouse Management System for consignment parts, finished goods, RMA materials, RTV/DOA returns, unused stock returns, inventory control, workflow approval, reporting, and audit trail.</p>
+            <div class="pillrow">${['Consignment Stock','Finished Goods','RMA Usage','RTV / DOA','Rack & Slot','Audit Trail'].map(badge).join('')}</div>
+          </div>
+          <div class="card">
+            <div class="section-head"><div><h3>End-to-End Process Summary</h3><p>Customer presentation storyline from receiving to final closure.</p></div></div>
+            <div class="timeline">
+              ${['Goods Receiving → Verification → Putaway','Withdrawal Request → Approval → Stock Reservation','Pick → Pack → Ready for Pickup / Shipment','RMA Usage → Used / DOA / Unused Return','RTV Closure or Returned to Stock → Audit Log'].map((x,i)=>`<div class="event"><div class="dot">${i+1}</div><div><h4>${x}</h4><p>Each step updates stock status, workflow status, notifications, and audit history.</p></div></div>`).join('')}
+            </div>
+          </div>
+        </div>
+        <div class="grid cards">
+          ${kpi('Total Inventory',inventory.reduce((a,b)=>a+b.qty,0),'All warehouse locations','📦','teal')}
+          ${kpi('Available Stock',inventory.filter(i=>i.status==='Available').reduce((a,b)=>a+b.qty,0),'Ready for withdrawal request','✅','greenI')}
+          ${kpi('Pending Approvals',requests.filter(r=>['Submitted','Pending Approval'].includes(r.status)).length,'Awaiting approval action','📝','amberI')}
+          ${kpi('RTV / DOA Pending',rtvCases.filter(r=>r.status!=='RTV Completed').length,'Requires RTV follow-up','↩️','purpleI')}
+        </div>
+        <div class="layout2">
+          <div class="card">
+            <div class="section-head"><div><h3>Recent Withdrawal Requests</h3><p>Interactive status simulation from request to closure.</p></div><button class="btn secondary" onclick="showModule('request')">View Requests</button></div>
+            ${requestTable(requests.filter(r=>JSON.stringify(r).toLowerCase().includes(q)).slice(0,6))}
+          </div>
+          <div class="card">
+            <div class="section-head"><div><h3>Operational Alerts</h3><p>Mock alerts and workflow bottlenecks.</p></div></div>
+            ${alertItem('RTV Pending','RTV-260528-001 is waiting for RTV officer review.','↩️')}
+            ${alertItem('Pickup Overdue','REQ-260526-003 is ready for pickup and waiting for requester.','⏱')}
+            ${alertItem('Low Stock Alert','VF-MB-VX520 has only 1 reserved unit.','↓')}
+            ${alertItem('Unused Return Pending','REQ-260525-009 requires warehouse verification.','🔁')}
+          </div>
+        </div>`;
+    }
+
+    function renderWorkflow(){
+      const statuses=[
+        ['Draft','Requester prepares request','Save draft','Requester','Submitted'],
+        ['Submitted','Request submitted','Submit request','Requester','Pending Approval'],
+        ['Pending Approval','Waiting approval','Validation completed','Department Approver','Approved / Rejected'],
+        ['Approved','Warehouse can process','Approval granted','Approver / Supervisor','Picking'],
+        ['Picking','Warehouse picking in progress','Start picking','Warehouse Staff','Picked'],
+        ['Picked','Items confirmed picked','Pick confirmation','Warehouse Staff','Packed'],
+        ['Packed','Items packed','Pack confirmation','Warehouse Staff','Ready for Pickup'],
+        ['Ready for Pickup','Awaiting handover','Notify requester','Warehouse Staff','Shipped / Completed'],
+        ['Issued to RMA','Goods issued for RMA task','Handover completed','Requester / RMA Team','Used / DOA / Unused'],
+        ['DOA','Item dead on arrival','Usage result DOA','Requester / RMA Team','RTV Pending'],
+        ['RTV Pending','Vendor return process starts','RTV case created','RTV Officer','RTV Completed'],
+        ['Unused Return Pending','Unused item returned','Requester return','Requester','Returned to Stock']
+      ];
+      document.getElementById('workflow').innerHTML=`
+        <div class="layout2">
+          <div class="card">
+            <div class="section-head"><div><h3>Workflow Center</h3><p>High-level process control from receiving to final closure.</p></div></div>
+            <div class="timeline">
+              ${['Goods Receiving Workflow','Withdrawal Request Workflow','Approval Workflow','Pick / Pack / Ship Workflow','Handover Confirmation','RMA Usage Confirmation','DOA / Defective Workflow','RTV Workflow','Unused Goods Return'].map((x,i)=>`<div class="event"><div class="dot">${i+1}</div><div><h4>${x}</h4><p>Status, responsible role, inventory impact, notification, and audit log are controlled by workflow rules.</p></div></div>`).join('')}
+            </div>
+          </div>
+          <div class="card">
+            <div class="section-head"><div><h3>My Pending Tasks</h3><p>Task list changes by selected mock role.</p></div></div>
+            ${pendingTasks().map(t=>alertItem(t[0],t[1],t[2])).join('')}
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <div class="section-head"><div><h3>Workflow Status Matrix</h3><p>Status meaning, trigger, responsible role, and next status.</p></div></div>
+          <table><thead><tr><th>Status</th><th>Meaning</th><th>Trigger</th><th>Responsible Role</th><th>Next Status</th></tr></thead><tbody>${statuses.map(s=>`<tr><td>${badge(s[0])}</td><td>${s[1]}</td><td>${s[2]}</td><td>${s[3]}</td><td>${s[4]}</td></tr>`).join('')}</tbody></table>
+        </div>`;
+    }
+
+    function pendingTasks(){
+      if(currentRole==='Department Approver')return[['Pending Approval','Review and approve withdrawal requests.','✅'],['RMA Validation','Check RMA case and stock availability.','📝']];
+      if(currentRole==='Warehouse Staff')return[['Picking Task','REQ-260528-002 is in picking stage.','📦'],['Unused Return','Verify returned stock condition.','🔁']];
+      if(currentRole==='Requester')return[['Usage Confirmation','Confirm if issued item was used, DOA, or unused.','🛠️'],['Pickup Reminder','REQ-260526-003 is ready for pickup.','🚚']];
+      if(currentRole==='RTV Officer')return[['RTV Review','RTV-260528-001 requires review.','↩️'],['Vendor Follow-up','One RTV case is pending vendor response.','⏱']];
+      return[['Workflow Bottleneck','Pickup and RTV tasks require follow-up.','⚠️'],['Recent Activity','4 transactions recorded today.','🧾']];
+    }
+
+    function renderProduct(){
+      const q=getSearch();
+      document.getElementById('product').innerHTML=`
+        <div class="toolbar"><div class="filters"><button class="btn" onclick="openModal('productModal')">+ Create Product Master</button><button class="btn secondary" onclick="toast('Import','Mock product master import opened')">Import</button></div><button class="btn secondary" onclick="toast('Export','Product master exported')">Export</button></div>
+        <div class="card">
+          <div class="section-head"><div><h3>Product Master Data</h3><p>Required before receiving, serial tracking, warranty control, and stock movement.</p></div></div>
+          <table><thead><tr><th>Product ID</th><th>Brand / Model</th><th>Part / SKU</th><th>Type</th><th>Serial Required</th><th>Warranty</th><th>Description</th><th>Action</th></tr></thead><tbody>${products.filter(p=>JSON.stringify(p).toLowerCase().includes(q)).map(p=>`<tr><td><strong>${p.id}</strong></td><td>${p.brand}<br><span class="small">${p.model}</span></td><td>${p.part}<br><span class="small">${p.sku}</span></td><td>${p.type}</td><td>${p.serialReq}</td><td>${badge(p.warranty)}</td><td>${p.description}</td><td><button class="mini" onclick="toast('Product Detail','Opened ${p.part}')">View</button></td></tr>`).join('')}</tbody></table>
+        </div>`;
+    }
+
+    function renderWarehouse(){
+      document.getElementById('warehouse').innerHTML=`
+        <div class="card">
+          <div class="section-head"><div><h3>Warehouse, Micro-Rack and Slot Structure</h3><p>Location hierarchy: Warehouse → Zone → Micro-Rack → Rack Level → Slot/Bin. Example: WH01-A-MR01-L02-S05.</p></div><button class="btn secondary" onclick="toast('Location Master','Rack & slot setup opened')">Manage Locations</button></div>
+          <div class="warehouse-map">
+            ${whList.map((w,idx)=>`<div class="warehouse-card"><h4>${w}</h4><p class="small">Rack A01, A02, B01 · Slot 001-003</p><div class="slots">${Array.from({length:12}).map((_,i)=>{const cls=((i+idx)%7===0)?'full':((i+idx)%5===0?'hold':((i+idx)%2===0?'used':''));return`<div class="slot ${cls}" onclick="toast('${w} Slot ${String(i+1).padStart(3,'0')}','${cls==='full'?'Full capacity':cls==='hold'?'On hold / quarantine':'Available or used'}')">${String(i+1).padStart(3,'0')}</div>`}).join('')}</div></div>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    function renderReceiving(){
+      document.getElementById('receiving').innerHTML=`
+        <div class="toolbar"><div class="filters"><button class="btn" onclick="openModal('receiveModal')">+ Goods Receiving</button><button class="btn secondary" onclick="toast('Pending Verification','Loaded pending inspection queue')">Pending Verification</button></div><button class="btn secondary" onclick="toast('Receiving Report','Receiving report exported')">Export Report</button></div>
+        <div class="card">
+          <div class="section-head"><div><h3>Goods Receiving Workflow</h3><p>Goods arrival → document verification → physical inspection → rack/slot assignment → stock update.</p></div></div>
+          <table><thead><tr><th>GR No.</th><th>Source</th><th>Item</th><th>Qty</th><th>Condition</th><th>Location</th><th>Status</th><th>Action</th></tr></thead><tbody>
+            <tr><td><strong>GR-260528-001</strong></td><td>Brand Owner</td><td>ZB-BATT-TC52</td><td>10</td><td>New</td><td>Tower B1FL-A01-S001</td><td>${badge('Pending Inspection')}</td><td><button class="mini primary" onclick="toast('Verified','Goods receipt verified and sent to putaway')">Verify</button></td></tr>
+            <tr><td><strong>GR-260527-011</strong></td><td>Vendor</td><td>EP-PRINT-HEAD</td><td>5</td><td>New</td><td>Tower C1FL-A02-S003</td><td>${badge('Completed')}</td><td><button class="mini" onclick="toast('Receiving History','Opened GR-260527-011')">View</button></td></tr>
+            <tr><td><strong>GR-260527-006</strong></td><td>Customer Return</td><td>IM-DISPLAY-D4</td><td>1</td><td>DOA</td><td>WH05 RTV Area-DOA-S001</td><td>${badge('RTV Pending')}</td><td><button class="mini red" onclick="showModule('rtv')">RTV</button></td></tr>
+          </tbody></table>
+        </div>`;
+    }
+
+    function inventoryRows(){const q=getSearch();return inventory.filter(i=>JSON.stringify(i).toLowerCase().includes(q))}
+    function inventoryTable(rows){
+      return`<table><thead><tr><th>Item ID</th><th>Brand / Model</th><th>Part / Serial</th><th>Type</th><th>Qty</th><th>Location</th><th>Ownership</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows.map(i=>`<tr><td><strong>${i.id}</strong></td><td>${i.brand}<br><span class="small">${i.model}</span></td><td>${i.part}<br><span class="small">${i.serial}</span></td><td>${i.type}</td><td>${i.qty}</td><td>${i.wh}-${i.rack}-${i.slot}</td><td>${i.owner}</td><td>${badge(i.status)}</td><td><button class="mini" onclick="toast('Stock Card','Opened movement history for ${i.part}')">Stock Card</button></td></tr>`).join('')}</tbody></table>`;
+    }
+
+    function renderInventory(){
+      document.getElementById('inventory').innerHTML=`
+        <div class="toolbar"><div class="filters"><select id="stockStatusFilter" onchange="filterStock()"><option>All Status</option><option>Available</option><option>Reserved</option><option>RTV Pending</option><option>Damaged</option><option>On Hold</option></select><button class="btn secondary" onclick="showModule('transfer')">Stock Transfer</button><button class="btn secondary" onclick="showModule('adjustment')">Stock Adjustment</button></div><button class="btn" onclick="openModal('receiveModal')">+ Receive Stock</button></div>
+        <div class="card"><div class="section-head"><div><h3>Inventory Stock Inquiry</h3><p>Track by brand, part, serial, ownership, status, warehouse, rack, and slot.</p></div></div><div id="stockTable">${inventoryTable(inventoryRows())}</div></div>`;
+    }
+
+    function filterStock(){
+      const st=document.getElementById('stockStatusFilter').value;
+      document.getElementById('stockTable').innerHTML=inventoryTable(inventoryRows().filter(i=>st==='All Status'||i.status===st));
+    }
+
+    function requestTable(rows){
+      return`<table><thead><tr><th>Request No.</th><th>Requester</th><th>RMA</th><th>Item</th><th>Qty</th><th>Priority</th><th>Status</th><th>Action</th></tr></thead><tbody>${rows.map(r=>`<tr><td><strong>${r.no}</strong><br><span class="small">${r.dept}</span></td><td>${r.requester}</td><td>${r.rma}</td><td>${r.item}</td><td>${r.qty}</td><td>${r.priority}</td><td>${badge(r.status)}</td><td><button class="mini primary" onclick="advanceRequest('${r.no}')">Next</button> <button class="mini" onclick="toast('Request Detail','Opened ${r.no}')">View</button></td></tr>`).join('')}</tbody></table>`;
+    }
+
+    function renderRequest(){
+      const q=getSearch();
+      document.getElementById('request').innerHTML=`
+        <div class="toolbar"><div class="filters"><button class="btn" onclick="openModal('requestModal')">+ New Withdrawal Request</button><button class="btn secondary" onclick="toast('Stock Validation','Stock availability, RMA number and duplicate request check completed')">Run Validation</button></div><button class="btn secondary" onclick="toast('Export','Withdrawal request report exported')">Export</button></div>
+        <div class="card"><div class="section-head"><div><h3>Withdrawal Request List</h3><p>Request cannot proceed to picking until approved and stock is reserved.</p></div></div>${requestTable(requests.filter(r=>JSON.stringify(r).toLowerCase().includes(q)))}</div>`;
+    }
+
+    function renderApproval(){
+      const pending=requests.filter(r=>['Submitted','Pending Approval','Approved'].includes(r.status));
+      document.getElementById('approval').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Approval Workflow</h3><p>Approver validates RMA case, stock availability, requester authority, quantity, and purpose of use.</p></div></div>
+        <table><thead><tr><th>Request</th><th>Requester</th><th>RMA</th><th>Item</th><th>Validation</th><th>Status</th><th>Approval Action</th></tr></thead><tbody>${pending.map(r=>`<tr><td><strong>${r.no}</strong></td><td>${r.requester}<br><span class="small">${r.dept}</span></td><td>${r.rma}</td><td>${r.item} × ${r.qty}</td><td>${badge('Stock OK')} ${badge('RMA OK')}</td><td>${badge(r.status)}</td><td><button class="mini green" onclick="approveRequest('${r.no}')">Approve</button> <button class="mini red" onclick="rejectRequest('${r.no}')">Reject</button></td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function renderFulfillment(){
+      const lanes=[['Picking',['Approved','Picking']],['Packing',['Picked','Packed']],['Ready / Shipped',['Ready for Pickup','Shipped']],['Closed / Exception',['Completed','DOA','Unused Return Pending','Returned to Stock']]];
+      document.getElementById('fulfillment').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Pick / Pack / Ship Task Board</h3><p>Warehouse fulfillment view with FIFO/FEFO, barcode/QR scan concept, packing, shipment, and handover control.</p></div></div>
+        <div class="kanban">${lanes.map(l=>`<div class="lane"><h4>${l[0]}</h4>${requests.filter(r=>l[1].includes(r.status)).map(ticket).join('')||'<p class="small">No task in this lane.</p>'}</div>`).join('')}</div></div>`;
+    }
+
+    function ticket(r){
+      return`<div class="ticket"><strong>${r.no}</strong><p>${r.item} × ${r.qty}<br>${r.wh} · ${r.rma}<br>${badge(r.status)}</p><div class="flowline">${Array.from({length:8}).map((_,i)=>`<span class="${i<r.progress?'done':''}"></span>`).join('')}</div><div class="row"><button class="mini primary" onclick="advanceRequest('${r.no}')">Move Next</button><button class="mini" onclick="toast('Scan Confirmed','Location and item scan confirmed for ${r.no}')">Scan</button></div></div>`;
+    }
+
+    function renderHandover(){
+      document.getElementById('handover').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Handover Confirmation</h3><p>Receiver confirms pickup or shipment receipt before goods are issued to the RMA process.</p></div></div>
+        <table><thead><tr><th>Request</th><th>Receiver</th><th>Delivery Method</th><th>Tracking / Signature</th><th>Status</th><th>Action</th></tr></thead><tbody>
+          <tr><td><strong>REQ-260526-003</strong></td><td>Mali</td><td>Self Pickup</td><td>Digital Signature Required</td><td>${badge('Ready for Pickup')}</td><td><button class="mini green" onclick="toast('Handover Completed','Receiver confirmation has been recorded')">Confirm Handover</button></td></tr>
+          <tr><td><strong>REQ-260527-006</strong></td><td>Krit</td><td>Internal Delivery</td><td>DLV-260527-009</td><td>${badge('Packed')}</td><td><button class="mini blue" onclick="advanceRequest('REQ-260527-006')">Ship</button></td></tr>
+        </tbody></table></div>`;
+    }
+
+    function renderRma(){
+      document.getElementById('rma').innerHTML=`
+        <div class="grid cards">${kpi('Pending Usage',requests.filter(r=>['Ready for Pickup','Shipped'].includes(r.status)).length,'Need requester confirmation','🛠️','amberI')}${kpi('Used / Consumed',7,'Mock consumed parts today','✅','greenI')}${kpi('DOA Items',requests.filter(r=>r.status==='DOA').length,'Trigger RTV workflow','⚠️','redI')}${kpi('Unused Return',requests.filter(r=>r.status==='Unused Return Pending').length,'Need warehouse verification','🔁','blueI')}</div>
+        <div class="card"><div class="section-head"><div><h3>RMA Usage Confirmation</h3><p>Requester confirms actual usage after RMA task: Used / Consumed, DOA, Defective, Wrong Item, or Unused Return.</p></div></div>
+        <table><thead><tr><th>Request</th><th>RMA</th><th>Item</th><th>Issued Qty</th><th>Current Status</th><th>Usage Action</th></tr></thead><tbody>${requests.filter(r=>['Ready for Pickup','Shipped','DOA','Unused Return Pending','Completed'].includes(r.status)).map(r=>`<tr><td><strong>${r.no}</strong></td><td>${r.rma}</td><td>${r.item}</td><td>${r.qty}</td><td>${badge(r.status)}</td><td><button class="mini green" onclick="setUsage('${r.no}','Used / Consumed')">Used</button> <button class="mini red" onclick="setUsage('${r.no}','DOA')">DOA</button> <button class="mini blue" onclick="setUsage('${r.no}','Unused Return Pending')">Unused</button></td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function renderDoa(){
+      document.getElementById('doa').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>DOA / Defective Management</h3><p>DOA may be identified during receiving, picking, RMA usage, technician testing, customer return, or unused return verification.</p></div><button class="btn red" onclick="createRtvCase()">Create RTV from DOA</button></div>
+        <table><thead><tr><th>DOA Record</th><th>Source</th><th>Item / Serial</th><th>Reason</th><th>Reported By</th><th>Status</th><th>Action</th></tr></thead><tbody>
+          <tr><td><strong>DOA-260528-001</strong></td><td>RMA Usage</td><td>IM-DISPLAY-D4<br><span class="small">IMD4-SN-77210</span></td><td>No display after testing</td><td>Narin</td><td>${badge('RTV Pending')}</td><td><button class="mini red" onclick="showModule('rtv')">Open RTV</button></td></tr>
+          <tr><td><strong>DOA-260527-002</strong></td><td>Receiving</td><td>BQ-LAMP-LH730<br><span class="small">BQ-LH730-LP-001</span></td><td>Damaged packaging</td><td>Warehouse Staff</td><td>${badge('Quarantine')}</td><td><button class="mini" onclick="toast('DOA Detail','Opened DOA record')">View</button></td></tr>
+        </tbody></table></div>`;
+    }
+
+    function renderRtv(){
+      document.getElementById('rtv').innerHTML=`
+        <div class="toolbar"><div class="filters"><button class="btn red" onclick="createRtvCase()">+ Create RTV Case</button><button class="btn secondary" onclick="toast('Vendor Reminder','Reminder sent to vendor for pending RTV response')">Send Vendor Reminder</button></div><button class="btn secondary" onclick="toast('Export','RTV aging report exported')">Export RTV Aging</button></div>
+        <div class="card"><div class="section-head"><div><h3>RTV Management</h3><p>DOA or defective items create RTV notification, vendor return, shipment tracking, replacement/credit note tracking, and closure.</p></div></div>
+        <table><thead><tr><th>RTV Case</th><th>Source</th><th>Brand / Vendor</th><th>Item / Serial</th><th>RMA</th><th>Aging</th><th>Status</th><th>Action</th></tr></thead><tbody>${rtvCases.map(c=>`<tr><td><strong>${c.caseNo}</strong></td><td>${c.source}</td><td>${c.brand}<br><span class="small">${c.vendor}</span></td><td>${c.item}<br><span class="small">${c.serial}</span></td><td>${c.rma}</td><td>${c.aging} days</td><td>${badge(c.status)}</td><td><button class="mini primary" onclick="advanceRtv('${c.caseNo}')">Next</button> <button class="mini" onclick="toast('RTV Detail','Opened ${c.caseNo}')">View</button></td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function renderUnused(){
+      const rows=requests.filter(r=>['Unused Return Pending','Returned to Stock'].includes(r.status));
+      document.getElementById('unused').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Unused Goods Return</h3><p>Requester returns unused goods. Warehouse verifies condition, assigns rack/slot, and updates stock as available, quarantine, or RTV pending.</p></div></div>
+        <table><thead><tr><th>Return Ref.</th><th>Original Request</th><th>RMA</th><th>Item</th><th>Qty</th><th>Status</th><th>Warehouse Action</th></tr></thead><tbody>${rows.map((r,i)=>`<tr><td><strong>UR-260528-00${i+1}</strong></td><td>${r.no}</td><td>${r.rma}</td><td>${r.item}</td><td>${r.qty}</td><td>${badge(r.status)}</td><td><button class="mini green" onclick="returnToStock('${r.no}')">Verify & Return</button> <button class="mini red" onclick="setUsage('${r.no}','DOA')">Mark DOA</button></td></tr>`).join('')||'<tr><td colspan="7">No unused return task.</td></tr>'}</tbody></table></div>`;
+    }
+
+    function renderAdjustment(){
+      document.getElementById('adjustment').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Stock Adjustment</h3><p>Controlled inventory adjustment requiring reason code, approval, and audit trail.</p></div><button class="btn amber" onclick="toast('Adjustment Request','Stock adjustment request created')">+ Adjustment Request</button></div>
+        <table><thead><tr><th>Adjustment No.</th><th>Item</th><th>Reason</th><th>Before</th><th>After</th><th>Status</th><th>Action</th></tr></thead><tbody>
+          <tr><td><strong>ADJ-260528-001</strong></td><td>ZB-BATT-TC52</td><td>Cycle count variance</td><td>50</td><td>48</td><td>${badge('Pending Approval')}</td><td><button class="mini green" onclick="toast('Approved','Adjustment approved and posted')">Approve</button></td></tr>
+          <tr><td><strong>ADJ-260527-002</strong></td><td>VS-REMOTE-PA503</td><td>Found stock</td><td>30</td><td>33</td><td>${badge('Completed')}</td><td><button class="mini" onclick="toast('Detail','Adjustment history opened')">View</button></td></tr>
+        </tbody></table></div>`;
+    }
+
+    function renderTransfer(){
+      document.getElementById('transfer').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Stock Transfer</h3><p>Move stock between warehouses, racks, or slot locations with scan confirmation and audit log.</p></div><button class="btn blue" onclick="toast('Transfer Request','Stock transfer form opened')">+ Transfer Request</button></div>
+        <table><thead><tr><th>Transfer No.</th><th>Item</th><th>From</th><th>To</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead><tbody>
+          <tr><td><strong>TRF-260528-001</strong></td><td>EP-PRINT-HEAD</td><td>Tower C1FL-A02-S003</td><td>Tower B1FL-B02-S002</td><td>2</td><td>${badge('Pending Putaway')}</td><td><button class="mini primary" onclick="toast('Transfer Confirmed','Transfer location confirmed')">Confirm</button></td></tr>
+          <tr><td><strong>TRF-260526-004</strong></td><td>ZB-BATT-TC52</td><td>Tower B1FL-A01-S001</td><td>SCG Warehouse-A01-S004</td><td>5</td><td>${badge('Completed')}</td><td><button class="mini" onclick="toast('Transfer Detail','Transfer record opened')">View</button></td></tr>
+        </tbody></table></div>`;
+    }
+
+    function renderReports(){
+      document.getElementById('reports').innerHTML=`
+        <div class="grid cards">${kpi('Request SLA','92%','Completed within target','⏱','greenI')}${kpi('DOA Rate','1.8%','Mock monthly DOA rate','⚠️','redI')}${kpi('RTV Pending',rtvCases.filter(r=>r.status!=='RTV Completed').length,'Open vendor return cases','↩️','purpleI')}${kpi('Low Stock Items','3','Below safety stock/on hold','↓','amberI')}</div>
+        <div class="layout2">
+          <div class="card"><div class="section-head"><div><h3>Warehouse Utilization</h3><p>Mock utilization by warehouse.</p></div></div><div class="chart">${[['B1FL',72],['B2FL',61],['C1FL',48],['SCG',84],['RTV',36]].map(x=>`<div class="bar" style="height:${x[1]}%">${x[1]}%<span>${x[0]}</span></div>`).join('')}</div></div>
+          <div class="card"><div class="section-head"><div><h3>Report Center</h3><p>Sample report screens for customer presentation.</p></div></div>${['Inventory Balance','Inventory Movement','Stock Card','Serial Number History','Receiving Report','Putaway Report','Withdrawal Report','Pick Pack Ship Report','RMA Usage','DOA Report','RTV Report','Unused Return','Consignment Stock','Aging Report','Audit Trail'].map(r=>alertItem(r,'Preview, filter, and export Excel/PDF in future system.','📄')).join('')}</div>
+        </div>`;
+    }
+
+    function renderUsers(){
+      document.getElementById('users').innerHTML=`
+        <div class="toolbar"><button class="btn" onclick="toast('Create User','New user modal opened')">+ Create User</button><button class="btn secondary" onclick="toast('Permission Matrix','Role permission matrix opened')">Permission Matrix</button></div>
+        <div class="card"><div class="section-head"><div><h3>User Management and Role Assignment</h3><p>Mock users and role-based menu visibility.</p></div></div>
+        <table><thead><tr><th>User</th><th>Role</th><th>Accessible Modules</th><th>Status</th><th>Action</th></tr></thead><tbody>${roles.map((r,i)=>`<tr><td><strong>User ${i+1}</strong><br><span class="small">${r.toLowerCase().replaceAll(' ','_').replaceAll('/','')}@hsnt.co.th</span></td><td>${r}</td><td>${modules.filter(m=>m.roles.includes('all')||m.roles.includes(r)).length} modules</td><td>${badge('Active')}</td><td><button class="mini" onclick="toast('User Detail','Opened user role setup for ${r}')">Edit</button></td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function renderAudit(){
+      document.getElementById('audit').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>Audit Trail / Transaction History</h3><p>Every status change, approval, stock movement, RTV action, and system setting update creates an audit log.</p></div><button class="btn secondary" onclick="toast('Export','Audit trail exported')">Export</button></div>
+        <table><thead><tr><th>Date / Time</th><th>User Role</th><th>Action</th><th>Reference</th><th>Detail</th></tr></thead><tbody>${audit.map(a=>`<tr><td>${a.time}</td><td>${a.user}</td><td>${a.action}</td><td><strong>${a.ref}</strong></td><td>${a.detail}</td></tr>`).join('')}</tbody></table></div>`;
+    }
+
+    function renderSettings(){
+      const settings=['Approval workflow by department','Stock reservation rule','Serial number control','Low stock threshold','RTV aging SLA','Notification template','Warehouse capacity rule','Audit log retention','Cycle count frequency'];
+      document.getElementById('settings').innerHTML=`
+        <div class="card"><div class="section-head"><div><h3>System Settings</h3><p>Configuration for workflow controls, validation rules, alerts, and notifications.</p></div></div>
+        <div class="layout3">${settings.map(s=>`<div class="route-card"><h4>${s}</h4><p class="small">Configure rule, owner, threshold, status, and active/inactive flag.</p><button class="mini" onclick="toast('Settings','Opened ${s}')">Configure</button></div>`).join('')}</div></div>`;
+    }
+
+    function approveRequest(no){
+      const r=requests.find(x=>x.no===no);
+      if(r){r.status='Approved';r.progress=Math.max(r.progress,3);addAudit('Department Approver','Request Approved',no,'Request approved and released to warehouse');renderCurrent();toast('Approved',no+' approved and sent to warehouse.')}
+    }
+    function rejectRequest(no){
+      const r=requests.find(x=>x.no===no);
+      if(r){r.status='Rejected';addAudit('Department Approver','Request Rejected',no,'Request rejected by approver');renderCurrent();toast('Rejected',no+' rejected.')}
+    }
+    function advanceRequest(no){
+      const flow=['Draft','Submitted','Pending Approval','Approved','Picking','Picked','Packed','Ready for Pickup','Shipped','Issued to RMA','Completed'];
+      const r=requests.find(x=>x.no===no);
+      if(!r)return;
+      const idx=flow.indexOf(r.status);
+      if(idx>=0&&idx<flow.length-1)r.status=flow[idx+1];
+      else if(r.status==='DOA')r.status='RTV Pending';
+      else if(r.status==='Unused Return Pending')r.status='Returned to Stock';
+      else r.status='Completed';
+      r.progress=Math.min(9,(r.progress||1)+1);
+      addAudit(currentRole,'Request Status Updated',no,'Request moved to '+r.status);
+      renderCurrent();
+      toast('Status Updated',no+' is now '+r.status);
+    }
+    function setUsage(no,status){
+      const r=requests.find(x=>x.no===no);
+      if(!r)return;
+      if(status==='Used / Consumed'){r.status='Completed';addAudit(currentRole,'RMA Used / Consumed',no,'Issued item confirmed consumed');toast('Usage Confirmed',no+' consumed and closed.')}
+      if(status==='DOA'){r.status='DOA';createRtvCase(no,true);addAudit(currentRole,'DOA Declared',no,'DOA declared and RTV notification created');toast('DOA Declared',no+' moved to RTV workflow.')}
+      if(status==='Unused Return Pending'){r.status='Unused Return Pending';addAudit(currentRole,'Unused Return Submitted',no,'Requester submitted unused return');toast('Unused Return',no+' waiting for warehouse verification.')}
+      renderCurrent();
+    }
+    function returnToStock(no){
+      const r=requests.find(x=>x.no===no);
+      if(r){r.status='Returned to Stock';addAudit(currentRole,'Returned to Stock',no,'Unused item verified and returned to available stock');toast('Returned to Stock',no+' returned to available inventory.');renderCurrent()}
+    }
+    function advanceRtv(no){
+      const flow=['RTV Pending','RTV Approved','Pending Return Shipment','Shipped to Vendor','Vendor Received','Replacement Pending','RTV Completed'];
+      const c=rtvCases.find(x=>x.caseNo===no);
+      if(!c)return;
+      const idx=flow.indexOf(c.status);
+      c.status=idx>=0&&idx<flow.length-1?flow[idx+1]:'RTV Completed';
+      addAudit(currentRole,'RTV Status Updated',no,'RTV case moved to '+c.status);
+      renderCurrent();
+      toast('RTV Updated',no+' is now '+c.status);
+    }
+    function createRtvCase(sourceReq,silent){
+      const no='RTV-'+(260529000+Math.floor(Math.random()*900));
+      rtvCases.unshift({caseNo:no,source:'DOA from RMA usage',item:'ZB-BATT-TC52',serial:'N/A',brand:'Zebra',vendor:'Zebra Technologies',status:'RTV Pending',aging:0,rma:sourceReq||'RMA-2026-0528'});
+      addAudit(currentRole,'RTV Created',no,'New RTV case created from DOA/defective item');
+      if(!silent){renderCurrent();toast('RTV Created',no+' created.')}
+    }
+    function submitRequest(){
+      const no='REQ-260528-'+(100+Math.floor(Math.random()*899));
+      requests.unshift({no,dept:val('newDept'),requester:val('newRequester'),rma:val('newRma'),item:val('newPart'),qty:Number(val('newQty')||1),wh:val('newWh'),purpose:val('newPurpose'),date:val('newDate'),priority:val('newPriority'),status:'Submitted',progress:1});
+      addAudit(currentRole,'Request Created',no,'New withdrawal request submitted');
+      closeModal('requestModal');
+      showModule('request');
+      toast('Request Submitted',no+' submitted and routed to approver.');
+    }
+    function submitReceiving(){
+      const id='ITM-'+(2000+Math.floor(Math.random()*7999));
+      const condition=val('rcvCondition');
+      const status=condition==='DOA'?'RTV Pending':condition==='Damaged'?'Damaged':condition==='Pending Inspection'?'On Hold':'Available';
+      const loc=val('rcvLoc').split('-');
+      inventory.unshift({id,brand:val('rcvBrand'),model:val('rcvModel'),part:val('rcvPart'),serial:val('rcvSerial'),type:val('rcvType'),owner:val('rcvOwner'),condition,warranty:'Active',status,wh:val('rcvWh'),rack:loc[1]||'A01',slot:loc[2]||'S001',qty:Number(val('rcvQty')||1),rma:'-'});
+      addAudit(currentRole,'Goods Received',id,'Received and assigned to '+val('rcvLoc'));
+      closeModal('receiveModal');
+      showModule('inventory');
+      toast('Goods Received',id+' received and stock updated.');
+    }
+    function submitProduct(){
+      const id='PM-'+(2000+Math.floor(Math.random()*7999));
+      products.unshift({id,brand:val('pmBrand'),model:val('pmModel'),part:val('pmPart'),sku:'SKU-NEW',type:val('pmType'),serialReq:val('pmSerialReq'),warranty:val('pmWarranty'),description:val('pmDesc')});
+      addAudit(currentRole,'Product Master Created',id,'Created product master '+val('pmPart'));
+      closeModal('productModal');
+      showModule('product');
+      toast('Product Created',id+' saved to product master.');
+    }
+    function renderNotifications(){
+      document.getElementById('notificationList').innerHTML=[
+        ['New withdrawal request submitted','A requester submitted a stock request linked to RMA-2026-0528.','📝'],
+        ['Request pending approval','REQ-260528-001 is waiting for approval validation.','✅'],
+        ['Goods ready for pickup','REQ-260526-003 is ready for requester pickup.','🚚'],
+        ['RTV pending','RTV-260528-001 requires RTV officer review.','↩️'],
+        ['Unused return pending','An unused item is waiting for warehouse condition check.','🔁'],
+        ['Low stock alert','VF-MB-VX520 is below safety stock level.','↓']
+      ].map(x=>alertItem(x[0],x[1],x[2])).join('');
+    }
+    function addAudit(user,action,ref,detail){audit.unshift({time:now(),user,action,ref,detail})}
+    function now(){const d=new Date();return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`}
+    function val(id){return document.getElementById(id).value}
+    function openModal(id){document.getElementById(id).style.display='flex'}
+    function closeModal(id){document.getElementById(id).style.display='none'}
+    function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open')}
+    function toast(title,msg){const t=document.getElementById('toast');t.innerHTML=`<strong>${title}</strong><span>${msg}</span>`;t.style.display='block';clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>t.style.display='none',3200)}
+    window.addEventListener('click',e=>{if(e.target.classList.contains('modal-backdrop'))e.target.style.display='none'});
+    init();
+  </script>
+</body>
+</html>

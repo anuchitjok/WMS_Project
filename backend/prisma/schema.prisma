@@ -1,0 +1,999 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SYSTEM_ADMIN
+  WAREHOUSE_MANAGER
+  WAREHOUSE_SUPERVISOR
+  WAREHOUSE_STAFF
+  REQUESTER
+  DEPT_APPROVER
+  RMA_TEAM
+  RTV_OFFICER
+  FINANCE_VIEWER
+  BRAND_VIEWER
+  MGMT_VIEWER
+  AUDITOR
+}
+
+enum StockStatus {
+  PENDING_RECEIVING
+  PENDING_INSPECTION
+  AVAILABLE
+  RESERVED
+  PICKING
+  PICKED
+  PACKED
+  READY_FOR_PICKUP
+  SHIPPED
+  ISSUED_TO_RMA
+  CONSUMED
+  RETURNED_UNUSED
+  QUARANTINE
+  DAMAGED
+  DOA
+  RTV_PENDING
+  RTV_SHIPPED
+  CLOSED
+  CANCELLED
+}
+
+enum RequestStatus {
+  DRAFT
+  SUBMITTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  PICKING
+  // @deprecated (Phase 5) — execution state now lives on FulfillmentTask; these
+  // are retained for backward compatibility but no longer written. Use the
+  // derived `stage` (see deriveRequestStage) for business-facing status.
+  PICKED
+  PACKED
+  READY_FOR_PICKUP
+  SHIPPED
+  ISSUED_TO_RMA
+  COMPLETED
+  CANCELLED
+}
+
+// Phase 1 (receiving): real receiving lifecycle. Runs as a SHADOW column
+// (`GoodsReceiving.statusEnum`) alongside the legacy free-string `status` for
+// backward compatibility. No legacy value is removed.
+enum ReceivingStatus {
+  DRAFT
+  RECEIVING
+  QC_PENDING
+  QC_HOLD
+  PUTAWAY_PENDING
+  COMPLETED
+  PARTIAL
+  REJECTED
+  CANCELLED
+}
+
+enum RackType {
+  STANDARD
+  DRIVE_IN
+  PUSH_BACK
+  CANTILEVER
+  FLOW
+  MEZZANINE
+  PALLET
+}
+
+enum SlotStatus {
+  EMPTY
+  OCCUPIED
+  RESERVED
+  QUARANTINE
+  RTV
+  BLOCKED
+}
+
+enum SlotType {
+  STANDARD
+  PALLET
+  BULK
+  COLD
+  HAZMAT
+  OVERSIZE
+}
+
+enum RTVStatus {
+  RTV_REQUIRED
+  PENDING_REVIEW
+  APPROVED
+  PENDING_SHIPMENT
+  SHIPPED_TO_VENDOR
+  VENDOR_RECEIVED
+  REPLACEMENT_PENDING
+  CREDIT_NOTE_PENDING
+  COMPLETED
+  REJECTED_BY_VENDOR
+  CANCELLED
+}
+
+enum ScrapStatus {
+  PENDING_REVIEW
+  APPROVED
+  DISPOSED
+  REJECTED
+  CANCELLED
+}
+
+enum OwnershipType {
+  CONSIGNMENT
+  OWN
+  RMA
+  CUSTOMER
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// ─── Core Entities ────────────────────────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(cuid())
+  username            String    @unique
+  fullName            String
+  email               String?   @unique
+  passwordHash        String
+  role                UserRole  @default(REQUESTER) // legacy flat role (backward compat with @Roles guards)
+  roleId              String? // dynamic RBAC role (DB-backed)
+  department          String?
+  phone               String?
+  avatarUrl           String?
+  isActive            Boolean   @default(true)
+  forcePasswordChange Boolean   @default(false)
+  passwordChangedAt   DateTime?
+  lastLoginAt         DateTime?
+  failedLoginCount    Int       @default(0)
+  lockedUntil         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  // Relations
+  rbacRole           Role?                @relation(fields: [roleId], references: [id])
+  roleAssignments    UserRoleAssignment[]
+  warehouses         UserWarehouse[]
+  loginHistory       LoginHistory[]
+  notifications      Notification[]
+  stockItemsCreated  StockItem[]          @relation("CreatedBy")
+  requestsCreated    WithdrawalRequest[]  @relation("Requester")
+  requestsApproved   WithdrawalRequest[]  @relation("Approver")
+  rtvCases           RTVCase[]
+  scrapRequested     ScrapCase[]      @relation("ScrapRequested")
+  scrapApproved      ScrapCase[]      @relation("ScrapApproved")
+  auditLogs          AuditLog[]
+  goodsReceivings    GoodsReceiving[]
+
+  @@index([role])
+  @@index([roleId])
+  @@index([email])
+}
+
+// ─── RBAC (dynamic) ─────────────────────────────────────────────────────────
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique // SUPER_ADMIN, ADMIN, ...
+  name        String
+  description String?
+  isSystem    Boolean          @default(false) // system roles can't be deleted
+  isActive    Boolean          @default(true) // disabled roles grant no permissions
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  users       User[]               // legacy single-role (User.roleId)
+  assignments UserRoleAssignment[] // dynamic multi-role
+  permissions RolePermission[]
+}
+
+// Many-to-many user↔role with optional scope + expiry (temporary roles)
+model UserRoleAssignment {
+  id           String    @id @default(cuid())
+  userId       String
+  roleId       String
+  warehouseId  String? // scope this role to a single warehouse (optional)
+  department   String? // scope to a department (optional)
+  expiresAt    DateTime? // temporary role / expiring permission
+  assignedById String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId, warehouseId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([expiresAt])
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  code        String           @unique // inventory.read, request.approve, ...
+  module      String
+  action      String
+  description String?
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserWarehouse {
+  userId      String
+  warehouseId String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@id([userId, warehouseId])
+}
+
+model LoginHistory {
+  id        String   @id @default(cuid())
+  userId    String
+  success   Boolean
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ─── Barcode Scanning (Phase 1) ─────────────────────────────────────────────
+
+model ScanEvent {
+  id           String   @id @default(cuid())
+  clientScanId String?  @unique // idempotency / offline replay key
+  userId       String?
+  deviceId     String?
+  workflow     String // LOOKUP|RECEIVE|PUTAWAY|PICK|PACK|SHIP|TRANSFER|COUNT|ADJUST|RTV
+  rawValue     String
+  symbology    String? // CODE128|QR|GS1|DATAMATRIX|UNKNOWN
+  entityType   String? // product|stockItem|location|request|shipment|asset
+  entityId     String?
+  warehouseId  String?
+  result       String // SUCCESS|ERROR|DUPLICATE|OUT_OF_SCOPE|NOT_FOUND
+  message      String?
+  createdAt    DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([workflow])
+  @@index([createdAt])
+}
+
+model LabelTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique // product|serial|bin|shipment|picking
+  name      String
+  engine    String   @default("PDF") // PDF|ZPL|HTML
+  content   String? // template body (for ZPL/HTML); null = built-in PDF renderer
+  isActive  Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model Brand {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  contact   String?
+  isActive  Boolean   @default(true)
+  products  Product[]
+  createdAt DateTime  @default(now())
+}
+
+model Vendor {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  contact   String?
+  email     String?
+  isActive  Boolean   @default(true)
+  rtvCases  RTVCase[]
+  createdAt DateTime  @default(now())
+}
+
+model Warehouse {
+  id         String      @id @default(cuid())
+  code       String      @unique
+  name       String
+  location   String?
+  isActive   Boolean     @default(true)
+  racks      Rack[]
+  stockItems StockItem[]
+  userAccess UserWarehouse[]
+  createdAt  DateTime    @default(now())
+}
+
+model Rack {
+  id          String      @id @default(cuid())
+  warehouseId String
+  code        String
+  name        String?
+  zone        String?
+  rackType    RackType    @default(STANDARD)
+  capacity    Int         @default(0)
+  levels      Int         @default(1)
+  columns     Int         @default(1)
+  description String?
+  isActive    Boolean     @default(true)
+  warehouse   Warehouse   @relation(fields: [warehouseId], references: [id])
+  slots       Slot[]
+  stockItems  StockItem[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @default(now()) @updatedAt
+
+  @@unique([warehouseId, code])
+  @@index([warehouseId])
+  @@index([zone])
+}
+
+model Slot {
+  id         String     @id @default(cuid())
+  rackId     String
+  code       String
+  name       String?
+  level      Int        @default(1)
+  column     Int        @default(1)
+  slotType   SlotType   @default(STANDARD)
+  status     SlotStatus @default(EMPTY)
+  capacity   Int        @default(1)
+  maxWeight  Float?
+  isActive   Boolean    @default(true)
+  rack       Rack       @relation(fields: [rackId], references: [id])
+  stockItems StockItem[]
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @default(now()) @updatedAt
+
+  @@unique([rackId, code])
+  @@index([rackId])
+  @@index([status])
+}
+
+enum ProductType {
+  FINISHED_GOODS
+  SPARE_PART
+}
+
+model Product {
+  id               String       @id @default(cuid())
+  code             String       @unique
+  name             String
+  description      String?      @db.Text
+  manufacturer     String?
+  model            String?
+  partNumber       String?      @unique
+  vendorPartNumber String?
+  productType      ProductType  @default(SPARE_PART)
+  brandId          String?
+  category         String?
+  unit             String       @default("unit")
+  unitCost         Float        @default(0)
+  serialControlled Boolean      @default(false) // if true, serial mandatory on receive
+  batchControlled  Boolean      @default(false) // Phase 1 — if true, batch/lot mandatory on receive
+  minStock         Int          @default(0)
+  isActive         Boolean      @default(true)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  brand                  Brand?                @relation(fields: [brandId], references: [id])
+  stockItems             StockItem[]
+  withdrawalRequestItems WithdrawalRequestItem[]
+  goodsReceivingItems    GoodsReceivingItem[]
+  fulfillmentItems       FulfillmentTaskItem[]
+
+  @@index([code])
+  @@index([category])
+  @@index([manufacturer])
+  @@index([partNumber])
+  @@index([productType])
+}
+
+// ─── Inventory ────────────────────────────────────────────────────────────────
+
+model StockItem {
+  id            String        @id @default(cuid())
+  productId     String
+  serialNumber  String?
+  batchNumber   String?
+  quantity      Float         @default(1)
+  status        StockStatus   @default(AVAILABLE)
+  ownershipType OwnershipType @default(OWN)
+  warehouseId   String?
+  rackId        String?
+  slotId        String?
+  receivedDate  DateTime      @default(now())
+  expiryDate    DateTime?
+  notes         String?
+  createdById   String?
+  updatedAt     DateTime      @updatedAt
+
+  product     Product    @relation(fields: [productId], references: [id])
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  rack        Rack?      @relation(fields: [rackId], references: [id])
+  slot        Slot?      @relation(fields: [slotId], references: [id])
+  createdBy   User?      @relation("CreatedBy", fields: [createdById], references: [id])
+
+  withdrawalRequestItems WithdrawalRequestItem[]
+  rtvCases               RTVCase[]               @relation("RTVStockItem")
+  rtvReplacements        RTVCase[]               @relation("RTVReplacement")
+  scrapCases             ScrapCase[]
+  goodsReceivingItems    GoodsReceivingItem[]
+
+  @@index([serialNumber])
+  @@index([status])
+  @@index([productId])
+}
+
+// ─── Goods Receiving ──────────────────────────────────────────────────────────
+
+model GoodsReceiving {
+  id           String               @id @default(cuid())
+  refNumber    String               @unique
+  sourceType   String?
+  sourceRef    String?
+  receivedById String?
+  receivedDate DateTime             @default(now())
+  status       String               @default("pending_inspection") // legacy free-string (kept for backward compat)
+  statusEnum   ReceivingStatus?     // Phase 1 shadow column — authoritative lifecycle
+  poNumber     String?              // Phase 1 — purchase order reference
+  supplierId   String?              // Phase 1 — link to Vendor (id, no FK to stay additive)
+  expectedDate DateTime?            // Phase 1 — expected receipt date
+  awbNumber    String?
+  invoiceNumber String?
+  gswNumber    String?
+  notes        String?
+  createdAt    DateTime             @default(now())
+
+  receivedBy User?                @relation(fields: [receivedById], references: [id])
+  items      GoodsReceivingItem[]
+
+  @@index([createdAt])
+  @@index([statusEnum])
+}
+
+model GoodsReceivingItem {
+  id              String    @id @default(cuid())
+  receivingId     String
+  productId       String
+  serialNumber    String?
+  batchNumber     String?   // Phase 1 — lot/batch captured at receipt
+  expiryDate      DateTime? // Phase 1 — FEFO support
+  manufactureDate DateTime? // Phase 1
+  quantity        Float     @default(1)
+  condition       String    @default("good")
+  stockItemId     String?
+
+  receiving GoodsReceiving @relation(fields: [receivingId], references: [id])
+  product   Product        @relation(fields: [productId], references: [id])
+  stockItem StockItem?     @relation(fields: [stockItemId], references: [id])
+}
+
+// ─── Withdrawal Requests ──────────────────────────────────────────────────────
+
+model WithdrawalRequest {
+  id            String        @id @default(cuid())
+  refNumber     String        @unique
+  requesterId   String
+  department    String
+  rmaCaseNumber String?
+  purpose       String?
+  requiredDate  DateTime?
+  status        RequestStatus @default(DRAFT)
+  priority      Priority      @default(NORMAL)
+  approverId    String?
+  approvedAt    DateTime?
+  rejectReason  String?
+  notes         String?
+  version       Int           @default(0) // optimistic locking (C3) — increment on every state change
+  correlationId String?       // links request ↔ fulfillment task ↔ shipment chain
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  requester User                    @relation("Requester", fields: [requesterId], references: [id])
+  approver  User?                   @relation("Approver", fields: [approverId], references: [id])
+  items     WithdrawalRequestItem[]
+
+  @@index([status])
+  @@index([requesterId])
+}
+
+model WithdrawalRequestItem {
+  id                String  @id @default(cuid())
+  requestId         String
+  productId         String
+  quantityRequested Float
+  quantityApproved  Float?
+  quantityIssued    Float   @default(0)
+  serialNumber      String?
+  stockItemId       String?
+  // Authoritative unit that was actually picked/shipped, denormalized from the
+  // FulfillmentTaskItem at dispatch (C2). `stockItemId` above is only the
+  // approval/allocation-time link and may differ; post-issue flows must prefer this.
+  shippedStockItemId String?
+  usageStatus       String?
+  usageNotes        String?
+
+  request   WithdrawalRequest @relation(fields: [requestId], references: [id])
+  product   Product           @relation(fields: [productId], references: [id])
+  stockItem StockItem?        @relation(fields: [stockItemId], references: [id])
+}
+
+// ─── RTV ──────────────────────────────────────────────────────────────────────
+
+model RTVCase {
+  id                 String    @id @default(cuid())
+  refNumber          String    @unique
+  stockItemId        String
+  reason             String
+  description        String?
+  status             RTVStatus @default(RTV_REQUIRED)
+  vendorId           String?
+  rtvOfficerId       String?
+  shipmentRef        String?
+  shippedDate        DateTime?
+  vendorResponse     String?
+  resolution         String?
+  creditNoteRef      String?
+  replacementStockId String?
+  closedAt           DateTime?
+  notes              String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  stockItem        StockItem  @relation("RTVStockItem", fields: [stockItemId], references: [id])
+  vendor           Vendor?    @relation(fields: [vendorId], references: [id])
+  rtvOfficer       User?      @relation(fields: [rtvOfficerId], references: [id])
+  replacementStock StockItem? @relation("RTVReplacement", fields: [replacementStockId], references: [id])
+
+  @@index([status])
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String?
+  action        String
+  entityType    String?
+  entityId      String?
+  detail        String?
+  correlationId String?  // links related ledger entries across request/task/shipment
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action, createdAt])
+}
+
+// ─── Stock Adjustment ─────────────────────────────────────────────────────────
+
+model StockAdjustment {
+  id             String    @id @default(cuid())
+  refNumber      String    @unique
+  stockItemId    String?
+  productLabel   String // denormalized "CODE — Name"
+  reason         String // cycle_count, found_stock, damage, loss, correction
+  quantityBefore Float
+  quantityAfter  Float
+  status         String    @default("PENDING_APPROVAL") // PENDING_APPROVAL, APPROVED, REJECTED, COMPLETED
+  requestedById  String?
+  approvedById   String?
+  approvedAt     DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status])
+}
+
+// ─── Stock Transfer ───────────────────────────────────────────────────────────
+
+model StockTransfer {
+  id            String    @id @default(cuid())
+  refNumber     String    @unique
+  stockItemId   String?
+  productLabel  String // denormalized "CODE — Name"
+  quantity      Float     @default(1)
+  fromLocation  String // "WH / RACK / SLOT"
+  toLocation    String
+  status        String    @default("PENDING") // PENDING, IN_TRANSIT, COMPLETED, CANCELLED
+  requestedById String?
+  completedAt   DateTime?
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+}
+
+// ─── System Settings ──────────────────────────────────────────────────────────
+
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  value       String
+  category    String   @default("workflow") // workflow, sla, notification, validation, inventory
+  description String?
+  isActive    Boolean  @default(true)
+  updatedAt   DateTime @updatedAt
+}
+
+// ─── Phase 2: Fulfillment (parallel to WithdrawalRequest) ────────────────────
+
+enum FulfillmentStatus {
+  ALLOCATED
+  PICKING
+  PICKED
+  PACKING
+  PACKED
+  READY_TO_SHIP
+  SHIPPED
+  DELIVERED
+  CLOSED
+  SHORT_PICK
+  DAMAGED
+  HOLD
+  CANCELLED
+  RETURNED
+}
+
+model FulfillmentTask {
+  id                String             @id @default(cuid())
+  refNumber         String             @unique
+  requestId         String             // links to WithdrawalRequest (no FK = no breaking change)
+  requestRef        String             // denormalized ref number for display
+  status            FulfillmentStatus  @default(ALLOCATED)
+  allocatedById     String?
+  pickedById        String?
+  packedById        String?
+  pickedAt          DateTime?
+  packedAt          DateTime?
+  progressPct       Int                @default(0) // 0-100
+  pickingNotes      String?
+  partialPick       Boolean            @default(false) // true if not all lines fully picked
+  warehouseId       String?
+  version           Int                @default(0)  // optimistic locking
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  items    FulfillmentTaskItem[]
+  packing  PackingSession?
+  shipment Shipment?
+  timeline FulfillmentTimeline[]
+
+  @@index([status])
+  @@index([requestId])
+  @@index([warehouseId])
+}
+
+model FulfillmentTaskItem {
+  id              String   @id @default(cuid())
+  taskId          String
+  productId       String
+  stockItemId     String?  // the reserved StockItem
+  qtyRequested    Float
+  qtyPicked       Float    @default(0)
+  binLocation     String?  // denormalized "WH|RACK|SLOT"
+  isShortPick     Boolean  @default(false)
+  pickedAt        DateTime?
+  scanEventId     String?  // links to ScanEvent that confirmed the pick
+
+  task    FulfillmentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  product Product         @relation(fields: [productId], references: [id])
+
+  @@index([taskId])
+}
+
+model PackingSession {
+  id            String   @id @default(cuid())
+  taskId        String   @unique
+  packedById    String?
+  cartonCount   Int      @default(1)
+  totalWeight   Float?
+  notes         String?
+  labelPrinted  Boolean  @default(false)
+  labelPrintedAt DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  task    FulfillmentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  cartons Carton[]
+}
+
+model Carton {
+  id           String   @id @default(cuid())
+  sessionId    String
+  cartonNumber Int
+  weight       Float?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  session PackingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, cartonNumber])
+}
+
+model Shipment {
+  id              String    @id @default(cuid())
+  refNumber       String    @unique
+  taskId          String    @unique
+  carrier         String?
+  trackingNumber  String?
+  handoverById    String?
+  dispatchedById  String?   // user who confirmed dispatch (Goods Issue)
+  receiverName    String?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  podReference    String?   // Proof of Delivery document ref
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  task     FulfillmentTask   @relation(fields: [taskId], references: [id])
+  timeline ShipmentTimeline[]
+
+  @@index([trackingNumber])
+}
+
+model ShipmentTimeline {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  status      String
+  description String?
+  actorId     String?
+  createdAt   DateTime @default(now())
+
+  shipment Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId])
+}
+
+model FulfillmentTimeline {
+  id          String   @id @default(cuid())
+  taskId      String
+  fromStatus  String?
+  toStatus    String
+  description String?
+  actorId     String?
+  warehouseId String?
+  deviceId    String?
+  barcode     String?
+  createdAt   DateTime @default(now())
+
+  task FulfillmentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  BOTH
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String    // REQUEST_SUBMITTED | REQUEST_APPROVED | PICKING_TASK | READY_FOR_PICKUP | USAGE_REQUIRED | DOA_DECLARED | RTV_OVERDUE | UNUSED_RETURN | LOW_STOCK | SLA_OVERDUE | GENERAL
+  title      String
+  message    String
+  channel    NotificationChannel @default(IN_APP)
+  isRead     Boolean   @default(false)
+  readAt     DateTime?
+  entityType String?
+  entityId   String?
+  metadata   String?  // JSON string for extra data
+  emailSent  Boolean  @default(false)
+  emailSentAt DateTime?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([type])
+}
+
+model NotificationTemplate {
+  id        String  @id @default(cuid())
+  type      String  @unique
+  title     String
+  body      String  @db.Text  // supports {{variable}} placeholders
+  emailSubject String?
+  emailBody    String? @db.Text
+  isActive  Boolean @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+// ─── JWT Token Blocklist (for revocation) ────────────────────────────────────
+
+model TokenBlocklist {
+  id        String   @id @default(cuid())
+  jti       String   @unique  // JWT ID
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([jti])
+  @@index([expiresAt])
+}
+
+// ─── Cycle Count ──────────────────────────────────────────────────────────────
+
+enum CycleCountStatus {
+  OPEN
+  IN_PROGRESS
+  REVIEW
+  APPROVED
+  CLOSED
+  CANCELLED
+}
+
+model CycleCountSession {
+  id          String            @id @default(cuid())
+  refNumber   String            @unique
+  warehouseId String
+  status      CycleCountStatus  @default(OPEN)
+  type        String            @default("BLIND") // BLIND | DIRECTED | RECOUNT
+  assignedTo  String?           // userId
+  startedById String?
+  closedById  String?
+  notes       String?
+  frozenAt    DateTime?         // when location was frozen
+  closedAt    DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  lines CycleCountLine[]
+
+  @@index([warehouseId])
+  @@index([status])
+}
+
+model CycleCountLine {
+  id           String   @id @default(cuid())
+  sessionId    String
+  productId    String
+  stockItemId  String?
+  locationKey  String?  // WH|RACK|SLOT
+  expectedQty  Float
+  countedQty   Float?
+  variance     Float?   // countedQty - expectedQty
+  isRecounted  Boolean  @default(false)
+  countedById  String?
+  countedAt    DateTime?
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  session CycleCountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([productId])
+}
+
+// ─── Multi-level Approval Chain ───────────────────────────────────────────────
+
+model ApprovalRule {
+  id          String  @id @default(cuid())
+  name        String
+  entityType  String  // WithdrawalRequest | StockAdjustment | CycleCount | ...
+  conditions  String? @db.Text // JSON: amount threshold, priority, dept, etc.
+  isActive    Boolean @default(true)
+  priority    Int     @default(0) // higher = evaluated first
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steps ApprovalStep[]
+}
+
+model ApprovalStep {
+  id          String  @id @default(cuid())
+  ruleId      String
+  stepOrder   Int
+  roleKey     String  // required RBAC role key to approve this step
+  stepName    String
+  isMandatory Boolean @default(true)
+  timeoutHours Int?   // escalate if not approved within N hours
+  rule ApprovalRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@unique([ruleId, stepOrder])
+}
+
+// ─── Scrap Management ─────────────────────────────────────────────────────────
+
+model ScrapCase {
+  id             String      @id @default(cuid())
+  refNumber      String      @unique
+  stockItemId    String
+  reason         String
+  description    String?
+  disposalMethod String?
+  quantity       Int         @default(1)
+  status         ScrapStatus @default(PENDING_REVIEW)
+  requestedById  String?
+  approvedById   String?
+  approvedAt     DateTime?
+  disposedAt     DateTime?
+  notes          String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  stockItem   StockItem @relation(fields: [stockItemId], references: [id])
+  requestedBy User?     @relation("ScrapRequested", fields: [requestedById], references: [id])
+  approvedBy  User?     @relation("ScrapApproved", fields: [approvedById], references: [id])
+
+  @@index([status])
+}
+
+model ApprovalInstance {
+  id           String    @id @default(cuid())
+  ruleId       String?
+  entityType   String
+  entityId     String
+  currentStep  Int       @default(0)
+  totalSteps   Int       @default(1)
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED | ESCALATED | CANCELLED
+  requestedById String?
+  completedById String?
+  completedAt  DateTime?
+  rejectionReason String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  steps ApprovalInstanceStep[]
+
+  @@index([entityType, entityId])
+  @@index([status])
+}
+
+model ApprovalInstanceStep {
+  id           String    @id @default(cuid())
+  instanceId   String
+  stepOrder    Int
+  stepName     String
+  roleKey      String
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED | SKIPPED
+  actorId      String?
+  actorName    String?
+  decidedAt    DateTime?
+  notes        String?
+  dueAt        DateTime?
+  createdAt    DateTime  @default(now())
+
+  instance ApprovalInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@unique([instanceId, stepOrder])
+}

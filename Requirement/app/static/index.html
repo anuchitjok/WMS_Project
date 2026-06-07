@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HSNT WMS — Warehouse Management System</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  [x-cloak]{display:none!important}
+  .sidebar-link{@apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer}
+  .sidebar-link:hover{@apply bg-green-700 text-white}
+  .sidebar-link.active{@apply bg-green-600 text-white shadow}
+  .card{@apply bg-white rounded-xl shadow-sm border border-gray-100 p-5}
+  .btn-primary{@apply bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all}
+  .btn-secondary{@apply bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-all}
+  .btn-danger{@apply bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all}
+  .badge{@apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium}
+  .input{@apply w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-400}
+  .th{@apply px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider}
+  .td{@apply px-4 py-3 text-sm text-gray-700}
+</style>
+</head>
+<body class="bg-gray-50 font-sans" x-data="app()" x-init="init()" x-cloak>
+
+<!-- ─── Login Screen ─────────────────────────────────────────────────── -->
+<div x-show="!token" class="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-800 to-green-600">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8">
+    <div class="text-center mb-8">
+      <div class="text-4xl font-black text-green-700 mb-1">HSNT</div>
+      <div class="text-lg font-bold text-gray-700">Warehouse Management System</div>
+      <div class="text-sm text-gray-400 mt-1">Highpoint Service Network Thailand</div>
+    </div>
+    <form @submit.prevent="login()">
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+        <input x-model="loginForm.username" type="text" class="input" placeholder="Enter username" required>
+      </div>
+      <div class="mb-6">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+        <input x-model="loginForm.password" type="password" class="input" placeholder="Enter password" required>
+      </div>
+      <button type="submit" class="w-full btn-primary py-3 text-base" :disabled="loading">
+        <span x-show="!loading">🔐 เข้าสู่ระบบ</span>
+        <span x-show="loading">กำลังเข้าสู่ระบบ...</span>
+      </button>
+      <div x-show="loginError" class="mt-3 text-center text-red-500 text-sm" x-text="loginError"></div>
+    </form>
+    <div class="mt-6 p-4 bg-gray-50 rounded-lg text-xs text-gray-500">
+      <div class="font-semibold mb-2">Demo Accounts:</div>
+      <div class="grid grid-cols-2 gap-1">
+        <div>admin / admin1234</div><div class="text-gray-400">System Admin</div>
+        <div>wh_manager / manager1234</div><div class="text-gray-400">WH Manager</div>
+        <div>requester1 / req1234</div><div class="text-gray-400">Requester</div>
+        <div>approver1 / appr1234</div><div class="text-gray-400">Approver</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Main App ──────────────────────────────────────────────────────── -->
+<div x-show="token" class="flex h-screen overflow-hidden">
+
+  <!-- Sidebar -->
+  <aside class="w-60 bg-green-900 text-white flex flex-col flex-shrink-0">
+    <div class="p-4 border-b border-green-800">
+      <div class="text-xl font-black text-green-300">HSNT WMS</div>
+      <div class="text-xs text-green-400 mt-0.5" x-text="currentUser?.full_name"></div>
+      <div class="mt-1">
+        <span class="badge bg-green-700 text-green-200 text-xs" x-text="formatRole(currentUser?.role)"></span>
+      </div>
+    </div>
+    <nav class="flex-1 p-3 space-y-1 overflow-y-auto">
+      <div class="text-xs text-green-500 px-4 py-1 uppercase tracking-wider">Main</div>
+      <div @click="page='dashboard'" :class="page==='dashboard'?'active':''" class="sidebar-link text-green-100">
+        <span>📊</span> Dashboard
+      </div>
+      <template x-if="canAccess('warehouse')">
+        <div>
+          <div class="text-xs text-green-500 px-4 py-1 mt-2 uppercase tracking-wider">Warehouse</div>
+          <div @click="page='receiving'" :class="page==='receiving'?'active':''" class="sidebar-link text-green-100">
+            <span>📥</span> Goods Receiving
+          </div>
+          <div @click="page='stock'" :class="page==='stock'?'active':''" class="sidebar-link text-green-100">
+            <span>📦</span> Stock Inventory
+          </div>
+          <div @click="page='picking'" :class="page==='picking'?'active':''" class="sidebar-link text-green-100">
+            <span>🛒</span> Pick / Pack / Ship
+          </div>
+        </div>
+      </template>
+      <div class="text-xs text-green-500 px-4 py-1 mt-2 uppercase tracking-wider">Requests</div>
+      <div @click="page='requests'" :class="page==='requests'?'active':''" class="sidebar-link text-green-100">
+        <span>📋</span> Withdrawal Requests
+      </div>
+      <template x-if="canAccess('approve')">
+        <div @click="page='approvals'" :class="page==='approvals'?'active':''" class="sidebar-link text-green-100">
+          <span>✅</span> Approvals
+        </div>
+      </template>
+      <template x-if="canAccess('rtv')">
+        <div>
+          <div class="text-xs text-green-500 px-4 py-1 mt-2 uppercase tracking-wider">RTV</div>
+          <div @click="page='rtv'" :class="page==='rtv'?'active':''" class="sidebar-link text-green-100">
+            <span>🔄</span> RTV Management
+          </div>
+        </div>
+      </template>
+      <template x-if="canAccess('admin')">
+        <div>
+          <div class="text-xs text-green-500 px-4 py-1 mt-2 uppercase tracking-wider">Admin</div>
+          <div @click="page='products'" :class="page==='products'?'active':''" class="sidebar-link text-green-100">
+            <span>🗂️</span> Products
+          </div>
+          <div @click="page='users'" :class="page==='users'?'active':''" class="sidebar-link text-green-100">
+            <span>👥</span> Users
+          </div>
+          <div @click="page='audit'" :class="page==='audit'?'active':''" class="sidebar-link text-green-100">
+            <span>📜</span> Audit Log
+          </div>
+        </div>
+      </template>
+    </nav>
+    <div class="p-3 border-t border-green-800">
+      <button @click="logout()" class="sidebar-link text-green-300 w-full hover:bg-red-700">
+        <span>🚪</span> ออกจากระบบ
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 overflow-y-auto">
+    <!-- Top Bar -->
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+      <h1 class="text-lg font-bold text-gray-800 capitalize" x-text="pageTitle()"></h1>
+      <div class="flex items-center gap-3">
+        <span class="text-xs text-gray-400" x-text="new Date().toLocaleDateString('th-TH', {year:'numeric',month:'long',day:'numeric'})"></span>
+        <span class="text-sm text-gray-600" x-text="currentUser?.full_name"></span>
+      </div>
+    </header>
+
+    <div class="p-6">
+
+      <!-- ── DASHBOARD ─────────────────────────────────────────────── -->
+      <div x-show="page==='dashboard'">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="card text-center">
+            <div class="text-3xl font-black text-green-600" x-text="dash.stock_overview?.available ?? '—'"></div>
+            <div class="text-xs text-gray-500 mt-1">Available Stock</div>
+          </div>
+          <div class="card text-center">
+            <div class="text-3xl font-black text-yellow-500" x-text="dash.requests?.pending_approval ?? '—'"></div>
+            <div class="text-xs text-gray-500 mt-1">Pending Approval</div>
+          </div>
+          <div class="card text-center">
+            <div class="text-3xl font-black text-red-500" x-text="dash.stock_overview?.doa ?? '—'"></div>
+            <div class="text-xs text-gray-500 mt-1">DOA Items</div>
+          </div>
+          <div class="card text-center">
+            <div class="text-3xl font-black text-orange-500" x-text="dash.rtv_open_cases ?? '—'"></div>
+            <div class="text-xs text-gray-500 mt-1">RTV Open Cases</div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div class="card">
+            <div class="text-sm font-semibold text-gray-700 mb-3">Stock Value (THB)</div>
+            <div class="text-2xl font-black text-green-700" x-text="'฿' + Number(dash.stock_value_thb ?? 0).toLocaleString()"></div>
+          </div>
+          <div class="card">
+            <div class="text-sm font-semibold text-gray-700 mb-3">Requests This Month</div>
+            <div class="text-2xl font-black text-blue-600" x-text="dash.requests?.this_month ?? '—'"></div>
+          </div>
+          <div class="card">
+            <div class="text-sm font-semibold text-gray-700 mb-3">Aging Items (>90d)</div>
+            <div class="text-2xl font-black text-gray-600" x-text="dash.aging_items_90d ?? '—'"></div>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="card">
+            <div class="text-sm font-semibold text-gray-700 mb-3">Stock by Status</div>
+            <div class="space-y-2">
+              <template x-for="[k,v] in Object.entries(dash.stock_overview ?? {})">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm capitalize text-gray-600" x-text="k.replace(/_/g,' ')"></span>
+                  <span class="badge" :class="statusBadge(k)" x-text="v"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div class="card">
+            <div class="text-sm font-semibold text-gray-700 mb-3">Warehouse Distribution</div>
+            <div class="space-y-2">
+              <template x-for="wh in (dash.by_warehouse ?? [])">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm text-gray-600 w-32" x-text="wh.name"></span>
+                  <div class="flex-1 bg-gray-100 rounded-full h-2">
+                    <div class="bg-green-500 h-2 rounded-full" :style="`width:${Math.min(wh.items*10,100)}%`"></div>
+                  </div>
+                  <span class="text-sm font-medium text-gray-700 w-8 text-right" x-text="wh.items"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── STOCK INVENTORY ───────────────────────────────────────── -->
+      <div x-show="page==='stock'">
+        <div class="flex gap-3 mb-4">
+          <input x-model="stockFilter.serial" @input.debounce="loadStock()" placeholder="ค้นหา Serial Number..." class="input max-w-xs">
+          <select x-model="stockFilter.status" @change="loadStock()" class="input max-w-xs">
+            <option value="">ทุกสถานะ</option>
+            <option value="available">Available</option>
+            <option value="reserved">Reserved</option>
+            <option value="quarantine">Quarantine</option>
+            <option value="doa">DOA</option>
+            <option value="rtv_pending">RTV Pending</option>
+          </select>
+          <button @click="loadStock()" class="btn-secondary">🔄 Refresh</button>
+        </div>
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">ID</th>
+                <th class="th">Product</th>
+                <th class="th">Serial No.</th>
+                <th class="th">Qty</th>
+                <th class="th">Status</th>
+                <th class="th">Warehouse</th>
+                <th class="th">Received</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="item in stockItems">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs">#<span x-text="item.id"></span></td>
+                  <td class="td font-medium" x-text="productName(item.product_id)"></td>
+                  <td class="td font-mono text-xs" x-text="item.serial_number || '—'"></td>
+                  <td class="td" x-text="item.quantity"></td>
+                  <td class="td"><span class="badge" :class="statusBadge(item.status)" x-text="item.status.replace(/_/g,' ')"></span></td>
+                  <td class="td" x-text="warehouseName(item.warehouse_id)"></td>
+                  <td class="td text-xs text-gray-500" x-text="item.received_date ? new Date(item.received_date).toLocaleDateString('th-TH') : '—'"></td>
+                </tr>
+              </template>
+              <tr x-show="stockItems.length===0">
+                <td colspan="7" class="td text-center text-gray-400 py-8">ไม่มีข้อมูล</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── RECEIVING ─────────────────────────────────────────────── -->
+      <div x-show="page==='receiving'">
+        <div class="flex justify-between mb-4">
+          <div class="text-sm text-gray-500">รับสินค้าเข้าคลัง</div>
+          <button @click="showReceiveModal=true" class="btn-primary">+ รับสินค้า</button>
+        </div>
+        <div class="card">
+          <div class="text-center text-gray-400 py-10">
+            <div class="text-4xl mb-3">📥</div>
+            <div>คลิก "รับสินค้า" เพื่อบันทึกการรับสินค้าเข้าคลัง</div>
+          </div>
+        </div>
+
+        <!-- Receive Modal -->
+        <div x-show="showReceiveModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 m-4">
+            <div class="flex justify-between mb-4">
+              <h2 class="text-lg font-bold text-gray-800">📥 รับสินค้าเข้าคลัง</h2>
+              <button @click="showReceiveModal=false" class="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form @submit.prevent="submitReceiving()">
+              <div class="grid grid-cols-2 gap-3 mb-4">
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">แหล่งที่มา</label>
+                  <select x-model="receiveForm.source_type" class="input">
+                    <option value="brand">Brand</option>
+                    <option value="vendor">Vendor</option>
+                    <option value="rma">RMA Return</option>
+                    <option value="internal">Internal Transfer</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Ref / DO Number</label>
+                  <input x-model="receiveForm.source_ref" class="input" placeholder="DO-2026-001">
+                </div>
+              </div>
+              <div class="mb-4">
+                <label class="block text-xs font-medium text-gray-600 mb-1">คลังปลายทาง</label>
+                <select x-model="receiveForm.warehouse_id" class="input">
+                  <template x-for="wh in warehouses">
+                    <option :value="wh.id" x-text="wh.name"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="mb-4">
+                <div class="flex justify-between mb-2">
+                  <label class="text-xs font-medium text-gray-600">รายการสินค้า</label>
+                  <button type="button" @click="receiveForm.items.push({product_id:'',serial_number:'',quantity:1,condition:'good'})" class="text-xs text-green-600 hover:underline">+ เพิ่มรายการ</button>
+                </div>
+                <template x-for="(item, i) in receiveForm.items">
+                  <div class="grid grid-cols-12 gap-2 mb-2 items-center">
+                    <div class="col-span-4">
+                      <select x-model="item.product_id" class="input text-xs">
+                        <option value="">เลือกสินค้า</option>
+                        <template x-for="p in products">
+                          <option :value="p.id" x-text="p.code + ' - ' + p.name.substring(0,20)"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="col-span-3">
+                      <input x-model="item.serial_number" class="input text-xs" placeholder="Serial No.">
+                    </div>
+                    <div class="col-span-2">
+                      <input x-model.number="item.quantity" type="number" min="1" class="input text-xs" placeholder="Qty">
+                    </div>
+                    <div class="col-span-2">
+                      <select x-model="item.condition" class="input text-xs">
+                        <option value="good">Good</option>
+                        <option value="damaged">Damaged</option>
+                        <option value="doa">DOA</option>
+                      </select>
+                    </div>
+                    <div class="col-span-1 text-center">
+                      <button type="button" @click="receiveForm.items.splice(i,1)" class="text-red-400 hover:text-red-600 text-xs">✕</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div class="flex justify-end gap-3">
+                <button type="button" @click="showReceiveModal=false" class="btn-secondary">ยกเลิก</button>
+                <button type="submit" class="btn-primary">บันทึกการรับสินค้า</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── REQUESTS ───────────────────────────────────────────────── -->
+      <div x-show="page==='requests'">
+        <div class="flex justify-between mb-4">
+          <select x-model="reqFilter" @change="loadRequests()" class="input max-w-xs">
+            <option value="">ทุกสถานะ</option>
+            <option value="draft">Draft</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved</option>
+            <option value="picking">Picking</option>
+            <option value="completed">Completed</option>
+            <option value="rejected">Rejected</option>
+          </select>
+          <button @click="showRequestModal=true; newRequest={department:'',rma_case_number:'',purpose:'',priority:'normal',notes:'',items:[{product_id:'',quantity_requested:1}]}" class="btn-primary">+ สร้าง Request</button>
+        </div>
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">Ref No.</th>
+                <th class="th">Department</th>
+                <th class="th">RMA Case</th>
+                <th class="th">Status</th>
+                <th class="th">Priority</th>
+                <th class="th">Date</th>
+                <th class="th">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="req in requests">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs font-bold text-green-700" x-text="req.ref_number"></td>
+                  <td class="td" x-text="req.department"></td>
+                  <td class="td text-xs" x-text="req.rma_case_number || '—'"></td>
+                  <td class="td"><span class="badge" :class="reqStatusBadge(req.status)" x-text="req.status.replace(/_/g,' ')"></span></td>
+                  <td class="td"><span class="badge" :class="priorityBadge(req.priority)" x-text="req.priority"></span></td>
+                  <td class="td text-xs text-gray-500" x-text="req.created_at ? new Date(req.created_at).toLocaleDateString('th-TH') : '—'"></td>
+                  <td class="td">
+                    <div class="flex gap-1">
+                      <template x-if="req.status==='approved' && canAccess('warehouse')">
+                        <button @click="doAction('/api/requests/'+req.id+'/pick','POST')" class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200">Pick</button>
+                      </template>
+                      <template x-if="req.status==='picking' && canAccess('warehouse')">
+                        <button @click="doAction('/api/requests/'+req.id+'/pack','POST')" class="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded hover:bg-purple-200">Pack</button>
+                      </template>
+                      <template x-if="req.status==='packed' && canAccess('warehouse')">
+                        <button @click="doAction('/api/requests/'+req.id+'/ship','POST')" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200">Ship</button>
+                      </template>
+                      <template x-if="['submitted','approved','picking','packed'].includes(req.status)">
+                        <button @click="doAction('/api/requests/'+req.id+'/cancel','POST')" class="text-xs bg-red-100 text-red-600 px-2 py-1 rounded hover:bg-red-200">Cancel</button>
+                      </template>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="requests.length===0">
+                <td colspan="7" class="td text-center text-gray-400 py-8">ไม่มีคำขอ</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- New Request Modal -->
+        <div x-show="showRequestModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 m-4 max-h-screen overflow-y-auto">
+            <div class="flex justify-between mb-4">
+              <h2 class="text-lg font-bold text-gray-800">📋 สร้าง Withdrawal Request</h2>
+              <button @click="showRequestModal=false" class="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form @submit.prevent="submitRequest()">
+              <div class="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Department *</label>
+                  <input x-model="newRequest.department" class="input" placeholder="Operations" required>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-gray-600 mb-1">Priority</label>
+                  <select x-model="newRequest.priority" class="input">
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+              </div>
+              <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-600 mb-1">RMA Case Number</label>
+                <input x-model="newRequest.rma_case_number" class="input" placeholder="RMA-2026-001">
+              </div>
+              <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-600 mb-1">วัตถุประสงค์</label>
+                <textarea x-model="newRequest.purpose" class="input" rows="2" placeholder="ระบุเหตุผลการขอเบิก"></textarea>
+              </div>
+              <div class="mb-4">
+                <div class="flex justify-between mb-2">
+                  <label class="text-xs font-medium text-gray-600">รายการสินค้า *</label>
+                  <button type="button" @click="newRequest.items.push({product_id:'',quantity_requested:1})" class="text-xs text-green-600 hover:underline">+ เพิ่ม</button>
+                </div>
+                <template x-for="(item,i) in newRequest.items">
+                  <div class="grid grid-cols-12 gap-2 mb-2 items-center">
+                    <div class="col-span-8">
+                      <select x-model="item.product_id" class="input text-xs" required>
+                        <option value="">เลือกสินค้า</option>
+                        <template x-for="p in products">
+                          <option :value="p.id" x-text="p.code + ' - ' + p.name.substring(0,25)"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="col-span-3">
+                      <input x-model.number="item.quantity_requested" type="number" min="1" class="input text-xs" placeholder="Qty">
+                    </div>
+                    <div class="col-span-1 text-center">
+                      <button type="button" @click="newRequest.items.splice(i,1)" class="text-red-400 text-xs">✕</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div class="flex justify-end gap-3">
+                <button type="button" @click="showRequestModal=false" class="btn-secondary">ยกเลิก</button>
+                <button type="submit" class="btn-primary">ส่งคำขอ</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── APPROVALS ─────────────────────────────────────────────── -->
+      <div x-show="page==='approvals'">
+        <div class="mb-4 text-sm text-gray-500">คำขอที่รออนุมัติ — คลิกเพื่ออนุมัติหรือปฏิเสธ</div>
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">Ref No.</th>
+                <th class="th">Requester</th>
+                <th class="th">Department</th>
+                <th class="th">RMA Case</th>
+                <th class="th">Priority</th>
+                <th class="th">Date</th>
+                <th class="th">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="req in pendingRequests">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs font-bold text-green-700" x-text="req.ref_number"></td>
+                  <td class="td text-sm" x-text="'User #' + req.requester_id"></td>
+                  <td class="td" x-text="req.department"></td>
+                  <td class="td text-xs" x-text="req.rma_case_number || '—'"></td>
+                  <td class="td"><span class="badge" :class="priorityBadge(req.priority)" x-text="req.priority"></span></td>
+                  <td class="td text-xs text-gray-500" x-text="req.created_at ? new Date(req.created_at).toLocaleDateString('th-TH') : '—'"></td>
+                  <td class="td">
+                    <div class="flex gap-2">
+                      <button @click="approveRequest(req.id,'approve')" class="text-xs bg-green-100 text-green-700 px-3 py-1 rounded font-medium hover:bg-green-200">✓ Approve</button>
+                      <button @click="approveRequest(req.id,'reject')" class="text-xs bg-red-100 text-red-600 px-3 py-1 rounded font-medium hover:bg-red-200">✕ Reject</button>
+                    </div>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="pendingRequests.length===0">
+                <td colspan="7" class="td text-center text-gray-400 py-8">ไม่มีคำขอรออนุมัติ</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── PICK/PACK/SHIP ─────────────────────────────────────────── -->
+      <div x-show="page==='picking'">
+        <div class="grid grid-cols-3 gap-4">
+          <div class="card">
+            <div class="text-sm font-semibold text-blue-700 mb-3 flex items-center gap-2">
+              <span class="w-6 h-6 bg-blue-100 rounded-full flex items-center justify-center text-xs">1</span> To Pick
+            </div>
+            <template x-for="req in approvedRequests">
+              <div class="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">
+                <div class="font-mono text-xs font-bold text-green-700" x-text="req.ref_number"></div>
+                <div class="text-xs text-gray-500 mt-1" x-text="req.department"></div>
+                <button @click="doAction('/api/requests/'+req.id+'/pick','POST')" class="mt-2 w-full text-xs bg-blue-500 text-white py-1 rounded hover:bg-blue-600">Start Pick</button>
+              </div>
+            </template>
+            <div x-show="approvedRequests.length===0" class="text-xs text-gray-400 text-center py-4">ไม่มีงาน</div>
+          </div>
+          <div class="card">
+            <div class="text-sm font-semibold text-purple-700 mb-3 flex items-center gap-2">
+              <span class="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center text-xs">2</span> Picking
+            </div>
+            <template x-for="req in pickingRequests">
+              <div class="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">
+                <div class="font-mono text-xs font-bold text-green-700" x-text="req.ref_number"></div>
+                <div class="text-xs text-gray-500 mt-1" x-text="req.department"></div>
+                <button @click="doAction('/api/requests/'+req.id+'/pack','POST')" class="mt-2 w-full text-xs bg-purple-500 text-white py-1 rounded hover:bg-purple-600">Pack</button>
+              </div>
+            </template>
+            <div x-show="pickingRequests.length===0" class="text-xs text-gray-400 text-center py-4">ไม่มีงาน</div>
+          </div>
+          <div class="card">
+            <div class="text-sm font-semibold text-green-700 mb-3 flex items-center gap-2">
+              <span class="w-6 h-6 bg-green-100 rounded-full flex items-center justify-center text-xs">3</span> Ready to Ship
+            </div>
+            <template x-for="req in packedRequests">
+              <div class="border border-gray-200 rounded-lg p-3 mb-2 bg-gray-50">
+                <div class="font-mono text-xs font-bold text-green-700" x-text="req.ref_number"></div>
+                <div class="text-xs text-gray-500 mt-1" x-text="req.department"></div>
+                <button @click="doAction('/api/requests/'+req.id+'/ship','POST')" class="mt-2 w-full text-xs bg-green-600 text-white py-1 rounded hover:bg-green-700">Ship / Issue</button>
+              </div>
+            </template>
+            <div x-show="packedRequests.length===0" class="text-xs text-gray-400 text-center py-4">ไม่มีงาน</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── RTV ───────────────────────────────────────────────────── -->
+      <div x-show="page==='rtv'">
+        <div class="flex justify-between mb-4">
+          <select x-model="rtvFilter" @change="loadRTV()" class="input max-w-xs">
+            <option value="">ทุกสถานะ</option>
+            <option value="rtv_required">RTV Required</option>
+            <option value="pending_review">Pending Review</option>
+            <option value="approved">Approved</option>
+            <option value="shipped_to_vendor">Shipped to Vendor</option>
+            <option value="completed">Completed</option>
+          </select>
+          <button @click="showRTVModal=true" class="btn-primary">+ สร้าง RTV Case</button>
+        </div>
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">Ref No.</th>
+                <th class="th">Stock Item</th>
+                <th class="th">Reason</th>
+                <th class="th">Status</th>
+                <th class="th">Shipment Ref</th>
+                <th class="th">Created</th>
+                <th class="th">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="rtv in rtvCases">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs font-bold text-orange-600" x-text="rtv.ref_number"></td>
+                  <td class="td text-xs">#<span x-text="rtv.stock_item_id"></span></td>
+                  <td class="td"><span class="badge bg-red-100 text-red-700" x-text="rtv.reason"></span></td>
+                  <td class="td"><span class="badge" :class="rtvStatusBadge(rtv.status)" x-text="rtv.status.replace(/_/g,' ')"></span></td>
+                  <td class="td text-xs" x-text="rtv.shipment_ref || '—'"></td>
+                  <td class="td text-xs text-gray-500" x-text="rtv.created_at ? new Date(rtv.created_at).toLocaleDateString('th-TH') : '—'"></td>
+                  <td class="td">
+                    <template x-if="rtv.status==='pending_review'">
+                      <button @click="updateRTV(rtv.id,'approved')" class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200">Approve</button>
+                    </template>
+                    <template x-if="rtv.status==='approved'">
+                      <button @click="updateRTV(rtv.id,'shipped_to_vendor')" class="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200">Ship</button>
+                    </template>
+                    <template x-if="rtv.status==='shipped_to_vendor'">
+                      <button @click="updateRTV(rtv.id,'completed')" class="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded hover:bg-gray-200">Close</button>
+                    </template>
+                  </td>
+                </tr>
+              </template>
+              <tr x-show="rtvCases.length===0">
+                <td colspan="7" class="td text-center text-gray-400 py-8">ไม่มีเคส RTV</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- RTV Modal -->
+        <div x-show="showRTVModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 m-4">
+            <div class="flex justify-between mb-4">
+              <h2 class="text-lg font-bold text-gray-800">🔄 สร้าง RTV Case</h2>
+              <button @click="showRTVModal=false" class="text-gray-400">✕</button>
+            </div>
+            <form @submit.prevent="submitRTV()">
+              <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-600 mb-1">Stock Item ID *</label>
+                <input x-model.number="rtvForm.stock_item_id" type="number" class="input" placeholder="กรอก Stock Item ID" required>
+              </div>
+              <div class="mb-3">
+                <label class="block text-xs font-medium text-gray-600 mb-1">เหตุผล *</label>
+                <select x-model="rtvForm.reason" class="input" required>
+                  <option value="doa">DOA (Dead on Arrival)</option>
+                  <option value="defective">Defective</option>
+                  <option value="vendor_return">Vendor Return</option>
+                </select>
+              </div>
+              <div class="mb-4">
+                <label class="block text-xs font-medium text-gray-600 mb-1">รายละเอียด</label>
+                <textarea x-model="rtvForm.description" class="input" rows="3" placeholder="อธิบายสภาพสินค้าและเหตุผล"></textarea>
+              </div>
+              <div class="flex justify-end gap-3">
+                <button type="button" @click="showRTVModal=false" class="btn-secondary">ยกเลิก</button>
+                <button type="submit" class="btn-primary">สร้าง RTV Case</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── PRODUCTS ───────────────────────────────────────────────── -->
+      <div x-show="page==='products'">
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">Code</th>
+                <th class="th">Name</th>
+                <th class="th">Category</th>
+                <th class="th">Unit Cost</th>
+                <th class="th">Serial</th>
+                <th class="th">Min Stock</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="p in products">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs font-bold text-green-700" x-text="p.code"></td>
+                  <td class="td" x-text="p.name"></td>
+                  <td class="td text-xs text-gray-500" x-text="p.category || '—'"></td>
+                  <td class="td" x-text="'฿' + Number(p.unit_cost).toLocaleString()"></td>
+                  <td class="td"><span :class="p.serial_controlled ? 'badge bg-blue-100 text-blue-700' : 'badge bg-gray-100 text-gray-500'" x-text="p.serial_controlled ? 'Serial' : 'Non-serial'"></span></td>
+                  <td class="td" x-text="p.min_stock"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── USERS ──────────────────────────────────────────────────── -->
+      <div x-show="page==='users'">
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">ID</th>
+                <th class="th">Username</th>
+                <th class="th">Full Name</th>
+                <th class="th">Role</th>
+                <th class="th">Department</th>
+                <th class="th">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="u in userList">
+                <tr class="hover:bg-gray-50">
+                  <td class="td font-mono text-xs">#<span x-text="u.id"></span></td>
+                  <td class="td font-medium" x-text="u.username"></td>
+                  <td class="td" x-text="u.full_name"></td>
+                  <td class="td"><span class="badge bg-green-100 text-green-800" x-text="formatRole(u.role)"></span></td>
+                  <td class="td text-sm" x-text="u.department || '—'"></td>
+                  <td class="td"><span :class="u.is_active ? 'badge bg-green-100 text-green-700' : 'badge bg-red-100 text-red-600'" x-text="u.is_active ? 'Active' : 'Inactive'"></span></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── AUDIT LOG ──────────────────────────────────────────────── -->
+      <div x-show="page==='audit'">
+        <div class="card p-0 overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th class="th">Time</th>
+                <th class="th">User</th>
+                <th class="th">Action</th>
+                <th class="th">Entity</th>
+                <th class="th">Detail</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template x-for="log in auditLogs">
+                <tr class="hover:bg-gray-50">
+                  <td class="td text-xs text-gray-500" x-text="log.created_at ? new Date(log.created_at).toLocaleString('th-TH') : '—'"></td>
+                  <td class="td text-xs">#<span x-text="log.user_id"></span></td>
+                  <td class="td"><span class="badge bg-gray-100 text-gray-700 font-mono text-xs" x-text="log.action"></span></td>
+                  <td class="td text-xs" x-text="(log.entity_type || '') + ' #' + (log.entity_id || '')"></td>
+                  <td class="td text-xs text-gray-500" x-text="log.detail"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- Toast -->
+<div x-show="toast.show" x-transition class="fixed bottom-6 right-6 z-50">
+  <div :class="toast.type==='error' ? 'bg-red-500' : 'bg-green-600'" class="text-white px-5 py-3 rounded-xl shadow-xl text-sm font-medium" x-text="toast.message"></div>
+</div>
+
+<script>
+const API = '';
+
+function app() {
+  return {
+    token: localStorage.getItem('wms_token') || '',
+    currentUser: null,
+    page: 'dashboard',
+    loading: false,
+    loginForm: { username: '', password: '' },
+    loginError: '',
+    toast: { show: false, message: '', type: 'success' },
+
+    // Data
+    dash: {},
+    stockItems: [],
+    requests: [],
+    pendingRequests: [],
+    approvedRequests: [],
+    pickingRequests: [],
+    packedRequests: [],
+    rtvCases: [],
+    products: [],
+    warehouses: [],
+    userList: [],
+    auditLogs: [],
+
+    // Filters
+    stockFilter: { serial: '', status: '' },
+    reqFilter: '',
+    rtvFilter: '',
+
+    // Modals
+    showReceiveModal: false,
+    showRequestModal: false,
+    showRTVModal: false,
+    receiveForm: { source_type: 'brand', source_ref: '', warehouse_id: '', items: [{ product_id: '', serial_number: '', quantity: 1, condition: 'good' }] },
+    newRequest: { department: '', rma_case_number: '', purpose: '', priority: 'normal', notes: '', items: [{ product_id: '', quantity_requested: 1 }] },
+    rtvForm: { stock_item_id: '', reason: 'doa', description: '' },
+
+    async init() {
+      if (this.token) {
+        await this.loadCurrentUser();
+        await this.loadMasterData();
+        await this.loadPageData();
+      }
+      this.$watch('page', () => this.loadPageData());
+    },
+
+    async api(method, url, body = null) {
+      const opts = {
+        method,
+        headers: { 'Authorization': `Bearer ${this.token}`, 'Content-Type': 'application/json' }
+      };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(API + url, opts);
+      if (res.status === 401) { this.logout(); return null; }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Error');
+      return data;
+    },
+
+    async login() {
+      this.loading = true; this.loginError = '';
+      try {
+        const form = new URLSearchParams();
+        form.append('username', this.loginForm.username);
+        form.append('password', this.loginForm.password);
+        const res = await fetch(API + '/api/auth/login', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Login failed');
+        this.token = data.access_token;
+        this.currentUser = data.user;
+        localStorage.setItem('wms_token', this.token);
+        await this.loadMasterData();
+        await this.loadPageData();
+      } catch (e) { this.loginError = e.message; }
+      this.loading = false;
+    },
+
+    logout() {
+      this.token = ''; this.currentUser = null;
+      localStorage.removeItem('wms_token');
+    },
+
+    async loadCurrentUser() {
+      try { this.currentUser = await this.api('GET', '/api/auth/me'); } catch {}
+    },
+
+    async loadMasterData() {
+      try {
+        [this.products, this.warehouses] = await Promise.all([
+          this.api('GET', '/api/master/products'),
+          this.api('GET', '/api/master/warehouses'),
+        ]);
+        if (this.receiveForm) this.receiveForm.warehouse_id = this.warehouses[0]?.id || '';
+      } catch {}
+    },
+
+    async loadPageData() {
+      const p = this.page;
+      if (p === 'dashboard') await this.loadDashboard();
+      else if (p === 'stock') await this.loadStock();
+      else if (p === 'requests') await this.loadRequests();
+      else if (p === 'approvals') await this.loadApprovals();
+      else if (p === 'picking') await this.loadPickingBoard();
+      else if (p === 'rtv') await this.loadRTV();
+      else if (p === 'users') await this.loadUsers();
+      else if (p === 'audit') await this.loadAudit();
+    },
+
+    async loadDashboard() {
+      try { this.dash = await this.api('GET', '/api/dashboard/executive'); } catch {}
+    },
+
+    async loadStock() {
+      try {
+        let url = '/api/stock/items?limit=100';
+        if (this.stockFilter.status) url += `&status=${this.stockFilter.status}`;
+        if (this.stockFilter.serial) url += `&serial=${this.stockFilter.serial}`;
+        this.stockItems = await this.api('GET', url) || [];
+      } catch {}
+    },
+
+    async loadRequests() {
+      try {
+        let url = '/api/requests/';
+        if (this.reqFilter) url += `?status=${this.reqFilter}`;
+        this.requests = await this.api('GET', url) || [];
+      } catch {}
+    },
+
+    async loadApprovals() {
+      try {
+        this.pendingRequests = await this.api('GET', '/api/requests/?status=submitted') || [];
+      } catch {}
+    },
+
+    async loadPickingBoard() {
+      try {
+        const [approved, picking, packed] = await Promise.all([
+          this.api('GET', '/api/requests/?status=approved'),
+          this.api('GET', '/api/requests/?status=picking'),
+          this.api('GET', '/api/requests/?status=packed'),
+        ]);
+        this.approvedRequests = approved || [];
+        this.pickingRequests = picking || [];
+        this.packedRequests = packed || [];
+      } catch {}
+    },
+
+    async loadRTV() {
+      try {
+        let url = '/api/rtv/';
+        if (this.rtvFilter) url += `?status=${this.rtvFilter}`;
+        this.rtvCases = await this.api('GET', url) || [];
+      } catch {}
+    },
+
+    async loadUsers() {
+      try { this.userList = await this.api('GET', '/api/users/') || []; } catch {}
+    },
+
+    async loadAudit() {
+      try { this.auditLogs = await this.api('GET', '/api/dashboard/audit-log') || []; } catch {}
+    },
+
+    async submitReceiving() {
+      try {
+        const payload = { ...this.receiveForm, warehouse_id: parseInt(this.receiveForm.warehouse_id) };
+        payload.items = payload.items.map(i => ({ ...i, product_id: parseInt(i.product_id), quantity: parseFloat(i.quantity) }));
+        const res = await this.api('POST', '/api/stock/receive', payload);
+        this.showSuccess(`รับสินค้าสำเร็จ! Ref: ${res.ref_number}`);
+        this.showReceiveModal = false;
+        this.receiveForm = { source_type: 'brand', source_ref: '', warehouse_id: this.warehouses[0]?.id || '', items: [{ product_id: '', serial_number: '', quantity: 1, condition: 'good' }] };
+        await this.loadDashboard();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    async submitRequest() {
+      try {
+        const payload = { ...this.newRequest };
+        payload.items = payload.items.map(i => ({ product_id: parseInt(i.product_id), quantity_requested: parseFloat(i.quantity_requested) }));
+        const res = await this.api('POST', '/api/requests/', payload);
+        this.showSuccess(`สร้าง Request สำเร็จ! Ref: ${res.ref_number}`);
+        this.showRequestModal = false;
+        await this.loadRequests();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    async submitRTV() {
+      try {
+        const res = await this.api('POST', '/api/rtv/', this.rtvForm);
+        this.showSuccess(`สร้าง RTV Case สำเร็จ! Ref: ${res.ref_number}`);
+        this.showRTVModal = false;
+        this.rtvForm = { stock_item_id: '', reason: 'doa', description: '' };
+        await this.loadRTV();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    async doAction(url, method) {
+      try {
+        await this.api(method, url);
+        this.showSuccess('ดำเนินการสำเร็จ');
+        await this.loadPageData();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    async approveRequest(reqId, action) {
+      try {
+        await this.api('POST', `/api/requests/${reqId}/approve`, { action });
+        this.showSuccess(action === 'approve' ? 'อนุมัติแล้ว' : 'ปฏิเสธแล้ว');
+        await this.loadApprovals();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    async updateRTV(rtvId, status) {
+      try {
+        await this.api('PATCH', `/api/rtv/${rtvId}`, { status });
+        this.showSuccess('อัพเดท RTV สำเร็จ');
+        await this.loadRTV();
+      } catch (e) { this.showError(e.message); }
+    },
+
+    canAccess(area) {
+      const role = this.currentUser?.role || '';
+      const adminRoles = ['system_admin', 'warehouse_manager'];
+      if (area === 'admin') return adminRoles.includes(role) || role === 'auditor';
+      if (area === 'warehouse') return [...adminRoles, 'warehouse_supervisor', 'warehouse_staff'].includes(role);
+      if (area === 'approve') return [...adminRoles, 'dept_approver'].includes(role);
+      if (area === 'rtv') return [...adminRoles, 'rtv_officer'].includes(role);
+      return true;
+    },
+
+    productName(id) { return this.products.find(p => p.id === id)?.code || `#${id}`; },
+    warehouseName(id) { return this.warehouses.find(w => w.id === id)?.name || (id ? `WH#${id}` : '—'); },
+
+    formatRole(role) {
+      const map = {
+        system_admin: 'Admin', warehouse_manager: 'WH Manager',
+        warehouse_supervisor: 'WH Supervisor', warehouse_staff: 'WH Staff',
+        requester: 'Requester', dept_approver: 'Approver',
+        rma_team: 'RMA Team', rtv_officer: 'RTV Officer',
+        finance_viewer: 'Finance', brand_viewer: 'Brand Viewer',
+        mgmt_viewer: 'Management', auditor: 'Auditor',
+      };
+      return map[role] || role;
+    },
+
+    pageTitle() {
+      const map = { dashboard: '📊 Dashboard', stock: '📦 Stock Inventory', receiving: '📥 Goods Receiving', requests: '📋 Withdrawal Requests', approvals: '✅ Approvals', picking: '🛒 Pick / Pack / Ship', rtv: '🔄 RTV Management', products: '🗂️ Products', users: '👥 Users', audit: '📜 Audit Log' };
+      return map[this.page] || this.page;
+    },
+
+    statusBadge(s) {
+      const map = {
+        available: 'bg-green-100 text-green-800',
+        reserved: 'bg-blue-100 text-blue-800',
+        picking: 'bg-yellow-100 text-yellow-800',
+        packed: 'bg-purple-100 text-purple-800',
+        shipped: 'bg-indigo-100 text-indigo-800',
+        issued_to_rma: 'bg-cyan-100 text-cyan-800',
+        consumed: 'bg-gray-100 text-gray-600',
+        quarantine: 'bg-orange-100 text-orange-700',
+        doa: 'bg-red-100 text-red-700',
+        rtv_pending: 'bg-red-100 text-red-700',
+        rtv_shipped: 'bg-orange-100 text-orange-700',
+        closed: 'bg-gray-100 text-gray-500',
+      };
+      return map[s] || 'bg-gray-100 text-gray-600';
+    },
+
+    reqStatusBadge(s) {
+      const map = {
+        draft: 'bg-gray-100 text-gray-600', submitted: 'bg-yellow-100 text-yellow-700',
+        pending_approval: 'bg-yellow-100 text-yellow-700', approved: 'bg-green-100 text-green-700',
+        rejected: 'bg-red-100 text-red-600', picking: 'bg-blue-100 text-blue-700',
+        packed: 'bg-purple-100 text-purple-700', shipped: 'bg-indigo-100 text-indigo-700',
+        completed: 'bg-green-200 text-green-800', cancelled: 'bg-gray-100 text-gray-500',
+      };
+      return map[s] || 'bg-gray-100 text-gray-600';
+    },
+
+    rtvStatusBadge(s) {
+      const map = {
+        rtv_required: 'bg-red-100 text-red-700',
+        pending_review: 'bg-yellow-100 text-yellow-700',
+        approved: 'bg-green-100 text-green-700',
+        shipped_to_vendor: 'bg-blue-100 text-blue-700',
+        completed: 'bg-gray-100 text-gray-600',
+      };
+      return map[s] || 'bg-gray-100 text-gray-600';
+    },
+
+    priorityBadge(p) {
+      return { urgent: 'bg-red-100 text-red-700', high: 'bg-orange-100 text-orange-700', normal: 'bg-blue-100 text-blue-600', low: 'bg-gray-100 text-gray-500' }[p] || 'bg-gray-100 text-gray-600';
+    },
+
+    showSuccess(msg) { this.toast = { show: true, message: msg, type: 'success' }; setTimeout(() => this.toast.show = false, 3500); },
+    showError(msg) { this.toast = { show: true, message: '❌ ' + msg, type: 'error' }; setTimeout(() => this.toast.show = false, 4500); },
+  };
+}
+</script>
+</body>
+</html>

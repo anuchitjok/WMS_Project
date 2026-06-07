@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "HSNT WMS",
+    "slug": "hsnt-wms",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#081120"
+    },
+    "scheme": "hsnt-wms",
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow HSNT WMS to access camera for barcode scanning."
+        }
+      ],
+      "expo-sqlite",
+      "expo-image"
+    ],
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#081120"
+      },
+      "package": "com.hsnt.wms"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.hsnt.wms"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
