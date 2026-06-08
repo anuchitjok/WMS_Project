@@ -23,6 +23,8 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
+    "seed:demo": "ts-node -r tsconfig-paths/register prisma/seed-demo.ts",
+    "seed:demo:reset": "ts-node -r tsconfig-paths/register prisma/seed-demo-reset.ts",
     "db:studio": "prisma studio"
   },
   "prisma": {

@@ -98,8 +98,40 @@ export const inventoryApi = {
 };
 
 // Dashboard
+export interface DashboardKpis {
+  todayReceiving: number;
+  pendingPutaway: number;
+  pendingApproval: number;
+  activeFulfillment: number;
+  shipmentToday: number;
+  openReturns: number;
+  lowStockAlerts: number;
+  inventoryAccuracy: number | null; // null = not available (no cycle-count source)
+}
+export interface InventoryHealth {
+  available: number;
+  reserved: number;
+  picked: number;
+  qcHold: number;
+  rtvPending: number;
+}
+export interface ActivityEvent {
+  id: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  detail: string | null;
+  createdAt: string;
+  user?: { fullName: string } | null;
+}
 export const dashboardApi = {
   stats: () => request<DashboardStats>('/dashboard/stats'),
+  // Dashboard V2 (now the live dashboard)
+  kpis: (warehouseId?: string) =>
+    request<DashboardKpis>(`/dashboard/kpis${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
+  inventoryHealth: (warehouseId?: string) =>
+    request<InventoryHealth>(`/dashboard/inventory-health${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
+  activity: (limit = 15) => request<ActivityEvent[]>(`/dashboard/activity?limit=${limit}`),
 };
 
 // Requests

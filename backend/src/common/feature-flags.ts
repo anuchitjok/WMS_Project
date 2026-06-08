@@ -20,3 +20,13 @@ export function isUnifiedReservationEnabled(): boolean {
 export function isApprovalEngineEnabled(): boolean {
   return process.env.ENABLE_APPROVAL_ENGINE === 'true';
 }
+
+/**
+ * When true, the redesigned executive Dashboard V2 is active on the frontend.
+ * Phase 1 ships the additive APIs only; the UI cutover happens in Phase 2.
+ * Default OFF. Toggle via env: ENABLE_DASHBOARD_V2=true (frontend reads
+ * NEXT_PUBLIC_ENABLE_DASHBOARD_V2).
+ */
+export function isDashboardV2Enabled(): boolean {
+  return process.env.ENABLE_DASHBOARD_V2 === 'true';
+}

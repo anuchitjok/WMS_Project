@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StockStatus, RequestStatus, RTVStatus } from '@prisma/client';
+import { getLowStockProducts } from '../common/inventory-metrics';
 
 @Injectable()
 export class ReportsService {
@@ -13,7 +14,7 @@ export class ReportsService {
       doaCount,
       totalStockItems,
       openRtv,
-      lowStock,
+      lowStockItems,
       stockByOwnership,
       stockByWarehouse,
     ] = await Promise.all([
@@ -22,17 +23,14 @@ export class ReportsService {
       this.prisma.stockItem.count({ where: { status: { in: [StockStatus.DOA, StockStatus.DAMAGED] } } }),
       this.prisma.stockItem.count(),
       this.prisma.rTVCase.count({ where: { status: { not: RTVStatus.COMPLETED } } }),
-      this.prisma.product.findMany({
-        where: { minStock: { gt: 0 } },
-        include: { _count: { select: { stockItems: true } } },
-      }),
+      // Single shared low-stock metric (available-based) — consistent with dashboard.
+      getLowStockProducts(this.prisma),
       this.prisma.stockItem.groupBy({ by: ['ownershipType'], _count: { _all: true }, _sum: { quantity: true } }),
       this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true } }),
     ]);
 
     const slaRate = totalRequests > 0 ? Math.round((completedRequests / totalRequests) * 100) : 0;
     const doaRate = totalStockItems > 0 ? ((doaCount / totalStockItems) * 100).toFixed(1) : '0.0';
-    const lowStockItems = lowStock.filter((p) => p._count.stockItems <= p.minStock);
 
     return {
       kpis: {
@@ -46,7 +44,7 @@ export class ReportsService {
       },
       stockByOwnership,
       stockByWarehouse,
-      lowStockItems: lowStockItems.map((p) => ({ code: p.code, name: p.name, onHand: p._count.stockItems, minStock: p.minStock })),
+      lowStockItems: lowStockItems.map((p) => ({ code: p.code, name: p.name, onHand: p.available, minStock: p.minStock })),
     };
   }
 }

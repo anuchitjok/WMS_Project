@@ -1,25 +1,37 @@
 'use client';
 
+// Executive Operations Dashboard.
+// Live (no feature flag). Uses existing production APIs: /dashboard/kpis,
+// /dashboard/inventory-health, /dashboard/activity. No schema/business changes.
+
 import { useEffect, useState, useCallback } from 'react';
-import { Package, ClipboardList, BarChart3, Boxes } from 'lucide-react';
-import { dashboardApi } from '@/lib/api';
-import type { DashboardStats } from '@/types';
-import { StatCard } from '@/components/dashboard/stat-card';
-import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
-import { formatDate } from '@/lib/utils';
-import { STOCK_STATUS_COLORS } from '@/lib/utils';
+import {
+  PackagePlus, MapPin, ShieldCheck, Truck, Send, AlertTriangle, RefreshCw,
+} from 'lucide-react';
+import { dashboardApi, type DashboardKpis, type InventoryHealth, type ActivityEvent } from '@/lib/api';
+import { KpiCard, type KpiTone } from '@/components/dashboard/kpi-card';
+import { InventoryHealthChart } from '@/components/dashboard/inventory-health-chart';
+import { AlertsPanel } from '@/components/dashboard/alerts-panel';
+import { ActivityFeed } from '@/components/dashboard/activity-feed';
+import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/store/auth.store';
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
+  const [health, setHealth] = useState<InventoryHealth | null>(null);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const data = await dashboardApi.stats();
-      setStats(data);
+      const [k, h, a] = await Promise.all([
+        dashboardApi.kpis(),
+        dashboardApi.inventoryHealth(),
+        dashboardApi.activity(15),
+      ]);
+      setKpis(k); setHealth(h); setActivity(a);
     } catch {
       // handled by api client
     } finally {
@@ -29,78 +41,51 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const cards: { label: string; value: number | null; icon: any; tone: KpiTone; href: string }[] = [
+    { label: 'Receiving Today',   value: kpis?.todayReceiving   ?? null, icon: PackagePlus,   tone: 'blue',   href: '/receiving' },
+    { label: 'Pending Putaway',   value: kpis?.pendingPutaway   ?? null, icon: MapPin,        tone: 'violet', href: '/putaway' },
+    { label: 'Pending Approval',  value: kpis?.pendingApproval  ?? null, icon: ShieldCheck,   tone: 'amber',  href: '/approvals' },
+    { label: 'Active Fulfillment',value: kpis?.activeFulfillment?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment' },
+    { label: 'Shipment Today',    value: kpis?.shipmentToday    ?? null, icon: Send,          tone: 'green',  href: '/outbound/fulfillment' },
+    { label: 'Low Stock Alerts',  value: kpis?.lowStockAlerts   ?? null, icon: AlertTriangle, tone: 'red',    href: '/inventory' },
+  ];
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-5 sm:p-6 space-y-5 bg-slate-50 min-h-full">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Welcome back, {user?.fullName} · {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600">Hightpoint Service Network</p>
+          <h1 className="text-2xl font-bold text-slate-900 mt-0.5">Operations Dashboard</h1>
+          <p className="text-slate-500 text-sm mt-1">
+            Welcome back, {user?.fullName} · {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+          </p>
+        </div>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
+          <RefreshCw className={loading ? 'w-4 h-4 animate-spin' : 'w-4 h-4'} /> Refresh
+        </Button>
       </div>
 
-      {/* KPI Cards */}
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-          <StatCard title="Total Stock Items" value={stats?.totals.totalStock ?? 0} icon={Boxes} color="blue" />
-          <StatCard title="Available Stock" value={stats?.totals.availableStock ?? 0} icon={Package} color="green" />
-          <StatCard title="Pending Requests" value={stats?.totals.pendingRequests ?? 0} icon={ClipboardList} color="yellow" />
-          <StatCard title="Active Products" value={stats?.totals.totalProducts ?? 0} icon={BarChart3} color="blue" />
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Stock by Status */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-          <h2 className="text-base font-semibold text-slate-900 mb-4">Stock by Status</h2>
-          {loading ? (
-            <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-6" />)}</div>
-          ) : (
-            <div className="space-y-2">
-              {stats?.stockByStatus.map((s) => (
-                <div key={s.status} className="flex items-center justify-between">
-                  <Badge className={STOCK_STATUS_COLORS[s.status]} variant="outline">
-                    {s.status.replace(/_/g, ' ')}
-                  </Badge>
-                  <span className="text-sm font-semibold text-slate-700">{s._count._all}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Recent Activity */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
-          <h2 className="text-base font-semibold text-slate-900 mb-4">Recent Activity</h2>
-          {loading ? (
-            <div className="space-y-3">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
-          ) : (
-            <div className="space-y-3 divide-y divide-slate-100">
-              {stats?.recentAuditLogs.slice(0, 8).map((log) => (
-                <div key={log.id} className="pt-3 first:pt-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-medium text-slate-800">
-                        {log.action.replace(/_/g, ' ')}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        {log.user?.fullName ?? 'System'} · {log.entityType}
-                      </p>
-                    </div>
-                    <p className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0">
-                      {formatDate(log.createdAt)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Executive KPI row — desktop 6 / tablet 3 / mobile 2 */}
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
+        {cards.map((c) => (
+          <KpiCard key={c.label} label={c.label} value={c.value} icon={c.icon} tone={c.tone} href={c.href} loading={loading} />
+        ))}
       </div>
+
+      {/* Inventory Health + Alerts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 items-stretch">
+        <div className="lg:col-span-2">
+          <InventoryHealthChart data={health ?? undefined} loading={loading} />
+        </div>
+        <AlertsPanel
+          data={kpis ? { lowStock: kpis.lowStockAlerts, pendingApproval: kpis.pendingApproval, pendingPutaway: kpis.pendingPutaway } : undefined}
+          loading={loading}
+        />
+      </div>
+
+      {/* Operational Activity */}
+      <ActivityFeed events={activity} loading={loading} />
     </div>
   );
 }
