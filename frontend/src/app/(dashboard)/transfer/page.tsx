@@ -38,7 +38,7 @@ export default function TransferPage() {
       <PageHeader title="Stock Transfer" subtitle="Move stock between warehouses and locations" icon={ArrowLeftRight}
         action={
           <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white" />}>+ Transfer Request</DialogTrigger>
+            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>+ Transfer Request</DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>Create Stock Transfer</DialogTitle></DialogHeader>
               <div className="space-y-3">
@@ -47,7 +47,7 @@ export default function TransferPage() {
                 <div className="space-y-1"><Label>From Location</Label><Input value={form.fromLocation} onChange={(e) => setForm((f) => ({ ...f, fromLocation: e.target.value }))} placeholder="WH-MAIN / R-01 / S-A1" /></div>
                 <div className="space-y-1"><Label>To Location</Label><Input value={form.toLocation} onChange={(e) => setForm((f) => ({ ...f, toLocation: e.target.value }))} placeholder="WH-MAIN / R-02 / S-B1" /></div>
               </div>
-              <DialogFooter><Button onClick={submit} className="bg-blue-600 hover:bg-blue-700 text-white">Create</Button></DialogFooter>
+              <DialogFooter><Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }
@@ -67,12 +67,12 @@ export default function TransferPage() {
               : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No transfers</td></tr>
               : rows.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-700">{t.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{t.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{t.productLabel}</td>
                   <td className="px-4 py-3 text-xs text-slate-600">{t.fromLocation} → {t.toLocation}</td>
                   <td className="px-4 py-3 font-medium">{t.quantity}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className={t.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}>{t.status}</Badge></td>
-                  <td className="px-4 py-3">{t.status !== 'COMPLETED' && <Button size="sm" className="h-7 bg-blue-600 hover:bg-blue-700 text-white" onClick={() => complete(t.id)}>Confirm</Button>}</td>
+                  <td className="px-4 py-3">{t.status !== 'COMPLETED' && <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => complete(t.id)}>Confirm</Button>}</td>
                 </tr>
               ))}
           </tbody>

@@ -6,7 +6,8 @@ import {
   Package, Layers, BarChart3, AlertTriangle, RefreshCw,
   FileText, Printer, Pencil, Clock, Shield, TrendingDown,
   Building2, Box, CheckCircle2, Filter, Eye, History,
-  ArrowUpDown, MoreHorizontal, Info,
+  ArrowUpDown, MoreHorizontal, Info, PauseCircle, PlayCircle, Ban,
+  CircleDot, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { productsApi, warehouseApi, labelsApi } from '@/lib/api';
@@ -24,8 +25,10 @@ import { cn } from '@/lib/utils';
 
 const PRODUCT_TYPES = ['SPARE_PART', 'FINISHED_GOODS'];
 const STOCK_STATUSES = ['AVAILABLE','RESERVED','PICKING','QUARANTINE','DAMAGED','DOA','RTV_PENDING','SHIPPED'];
+const PRODUCT_STATUSES = ['ACTIVE','INACTIVE','DISCONTINUED'];
+
 const TYPE_BADGE: Record<string, string> = {
-  SPARE_PART:     'bg-blue-100 text-blue-700 border-blue-200',
+  SPARE_PART:     'bg-teal-100 text-teal-700 border-teal-200',
   FINISHED_GOODS: 'bg-emerald-100 text-emerald-700 border-emerald-200',
 };
 const STATUS_BADGE: Record<string, string> = {
@@ -37,23 +40,49 @@ const STATUS_BADGE: Record<string, string> = {
   DAMAGED:     'bg-rose-100 text-rose-700',
   PICKING:     'bg-cyan-100 text-cyan-700',
 };
-const BLANK = { code:'', name:'', description:'', manufacturer:'', model:'', partNumber:'', vendorPartNumber:'', productType:'SPARE_PART', category:'', unit:'unit', unitCost:0, minStock:0, serialControlled:false, brandId:'' };
+const PRODUCT_STATUS_CFG: Record<string, { label: string; bg: string; text: string; dot: string }> = {
+  ACTIVE:       { label: 'Active',       bg: 'bg-green-100',  text: 'text-green-800',  dot: 'bg-green-500'  },
+  INACTIVE:     { label: 'Inactive',     bg: 'bg-slate-100',  text: 'text-slate-600',  dot: 'bg-slate-400'  },
+  DISCONTINUED: { label: 'Discontinued', bg: 'bg-red-100',    text: 'text-red-700',    dot: 'bg-red-400'    },
+};
+
+const BLANK = {
+  code:'', name:'', description:'', manufacturer:'', model:'',
+  partNumber:'', vendorPartNumber:'', productType:'SPARE_PART',
+  category:'', unit:'unit', unitCost:0, minStock:0,
+  serialControlled:false, batchControlled:false,
+  productStatus:'ACTIVE', brandId:'',
+};
+
+function ProductStatusBadge({ status }: { status?: string }) {
+  const cfg = PRODUCT_STATUS_CFG[status ?? ''] ?? { label: status || '—', bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
+  return (
+    <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap', cfg.bg, cfg.text)}>
+      <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', cfg.dot)} />
+      {cfg.label}
+    </span>
+  );
+}
 
 // ─── KPI Bar ──────────────────────────────────────────────────────────────────
 
 function KpiBar({ kpi, loading }: { kpi: any; loading: boolean }) {
   const cards = [
-    { label: 'Total SKU',       value: kpi?.totalSku,        icon: Tag,          color: 'text-blue-700',   bg: 'bg-blue-50',    border: 'border-blue-200' },
-    { label: 'Serialized',      value: kpi?.serializedItems,  icon: Shield,       color: 'text-indigo-700', bg: 'bg-indigo-50',  border: 'border-indigo-200' },
-    { label: 'Low Stock',       value: kpi?.lowStock,         icon: TrendingDown, color: kpi?.lowStock > 0 ? 'text-amber-700' : 'text-slate-400', bg: kpi?.lowStock > 0 ? 'bg-amber-50' : 'bg-slate-50', border: kpi?.lowStock > 0 ? 'border-amber-200' : 'border-slate-200' },
-    { label: 'Quarantine',      value: kpi?.quarantineCount,  icon: AlertTriangle,color: kpi?.quarantineCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.quarantineCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.quarantineCount > 0 ? 'border-red-200' : 'border-slate-200' },
-    { label: 'RTV Pending',     value: kpi?.rtvPendingCount,  icon: RefreshCw,    color: kpi?.rtvPendingCount > 0 ? 'text-orange-700' : 'text-slate-400', bg: kpi?.rtvPendingCount > 0 ? 'bg-orange-50' : 'bg-slate-50', border: kpi?.rtvPendingCount > 0 ? 'border-orange-200' : 'border-slate-200' },
-    { label: 'DOA Items',       value: kpi?.doaCount,         icon: X,            color: kpi?.doaCount > 0 ? 'text-red-900' : 'text-slate-400', bg: kpi?.doaCount > 0 ? 'bg-red-100' : 'bg-slate-50', border: kpi?.doaCount > 0 ? 'border-red-300' : 'border-slate-200' },
-    { label: 'Warehouses',      value: kpi?.totalWarehouses,  icon: Building2,    color: 'text-purple-700', bg: 'bg-purple-50',  border: 'border-purple-200' },
-    { label: 'Total Qty',       value: kpi?.totalQty?.toLocaleString(), icon: Box, color: 'text-teal-700',bg: 'bg-teal-50',    border: 'border-teal-200' },
+    { label: 'Total SKU',       value: kpi?.totalSku,              icon: Tag,          color: 'text-green-700',   bg: 'bg-green-50',    border: 'border-green-200' },
+    { label: 'Active',          value: kpi?.activeCount,           icon: CircleDot,    color: 'text-green-700',   bg: 'bg-green-50',    border: 'border-green-200' },
+    { label: 'Inactive',        value: kpi?.inactiveCount,         icon: PauseCircle,  color: kpi?.inactiveCount > 0 ? 'text-slate-600' : 'text-slate-400', bg: 'bg-slate-50', border: 'border-slate-200' },
+    { label: 'Discontinued',    value: kpi?.discontinuedCount,     icon: Ban,          color: kpi?.discontinuedCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.discontinuedCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.discontinuedCount > 0 ? 'border-red-200' : 'border-slate-200' },
+    { label: 'Serial Ctrl',     value: kpi?.serializedItems,       icon: Shield,       color: 'text-indigo-700',  bg: 'bg-indigo-50',   border: 'border-indigo-200' },
+    { label: 'Batch Ctrl',      value: kpi?.batchControlledCount,  icon: Zap,          color: 'text-violet-700',  bg: 'bg-violet-50',   border: 'border-violet-200' },
+    { label: 'Low Stock',       value: kpi?.lowStock,              icon: TrendingDown, color: kpi?.lowStock > 0 ? 'text-amber-700' : 'text-slate-400', bg: kpi?.lowStock > 0 ? 'bg-amber-50' : 'bg-slate-50', border: kpi?.lowStock > 0 ? 'border-amber-200' : 'border-slate-200' },
+    { label: 'On Hold',         value: kpi?.quarantineCount,       icon: AlertTriangle,color: kpi?.quarantineCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.quarantineCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.quarantineCount > 0 ? 'border-red-200' : 'border-slate-200' },
+    { label: 'RTV Pending',     value: kpi?.rtvPendingCount,       icon: RefreshCw,    color: kpi?.rtvPendingCount > 0 ? 'text-orange-700' : 'text-slate-400', bg: kpi?.rtvPendingCount > 0 ? 'bg-orange-50' : 'bg-slate-50', border: kpi?.rtvPendingCount > 0 ? 'border-orange-200' : 'border-slate-200' },
+    { label: 'DOA Items',       value: kpi?.doaCount,              icon: X,            color: kpi?.doaCount > 0 ? 'text-red-900' : 'text-slate-400', bg: kpi?.doaCount > 0 ? 'bg-red-100' : 'bg-slate-50', border: kpi?.doaCount > 0 ? 'border-red-300' : 'border-slate-200' },
+    { label: 'Warehouses',      value: kpi?.totalWarehouses,       icon: Building2,    color: 'text-purple-700',  bg: 'bg-purple-50',   border: 'border-purple-200' },
+    { label: 'Total Qty',       value: kpi?.totalQty?.toLocaleString(), icon: Box,     color: 'text-teal-700',   bg: 'bg-teal-50',    border: 'border-teal-200' },
   ];
   return (
-    <div className="grid grid-cols-4 lg:grid-cols-8 gap-2">
+    <div className="grid grid-cols-4 lg:grid-cols-6 xl:grid-cols-12 gap-2">
       {cards.map(({ label, value, icon: Icon, color, bg, border }) => (
         <div key={label} className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm', bg, border)}>
           <Icon className={cn('w-4 h-4 flex-shrink-0', color)} />
@@ -97,7 +126,7 @@ function DrilldownModal({ product, onClose }: { product: any; onClose: () => voi
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4 text-blue-600" /> Inventory Drilldown — {product.code}
+            <BarChart3 className="w-4 h-4 text-green-600" /> Inventory Drilldown — {product.code}
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
@@ -123,7 +152,7 @@ function DrilldownModal({ product, onClose }: { product: any; onClose: () => voi
               <p className="text-xs text-slate-500 mb-1">Ownership Types</p>
               <div className="flex gap-1 flex-wrap">
                 {product.ownershipTypes.map((o: string) => (
-                  <span key={o} className="text-xs bg-blue-100 text-blue-700 rounded px-2 py-0.5 font-medium">{o}</span>
+                  <span key={o} className="text-xs bg-green-100 text-green-700 rounded px-2 py-0.5 font-medium">{o}</span>
                 ))}
               </div>
             </div>
@@ -139,7 +168,7 @@ function DrilldownModal({ product, onClose }: { product: any; onClose: () => voi
 
 // ─── Product Detail Drawer ────────────────────────────────────────────────────
 
-function ProductDetailDrawer({ productId, onClose }: { productId: string; onClose: () => void }) {
+function ProductDetailDrawer({ productId, onClose, onEdit }: { productId: string; onClose: () => void; onEdit: (data: any) => void }) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeSection, setActiveSection] = useState('info');
@@ -166,8 +195,11 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
       {/* Header */}
       <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-800">
         <div>
-          <p className="font-bold text-white">{loading ? '…' : data?.name}</p>
-          <p className="text-slate-400 text-xs mt-0.5 font-mono">{loading ? '' : data?.code}</p>
+          <div className="flex items-center gap-2 mb-0.5">
+            <p className="font-bold text-white">{loading ? '…' : data?.name}</p>
+            {data?.productStatus && <ProductStatusBadge status={data.productStatus} />}
+          </div>
+          <p className="text-slate-400 text-xs font-mono">{loading ? '' : data?.code}</p>
         </div>
         <button onClick={onClose} className="text-slate-400 hover:text-white mt-0.5"><X className="w-5 h-5" /></button>
       </div>
@@ -177,7 +209,7 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
         {sections.map(({ id, label, icon: Icon }) => (
           <button key={id} onClick={() => setActiveSection(id)}
             className={cn('flex items-center gap-1 px-3 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors',
-              activeSection === id ? 'border-blue-600 text-blue-700 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700')}>
+              activeSection === id ? 'border-green-600 text-green-700 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700')}>
             <Icon className="w-3.5 h-3.5" />{label}
           </button>
         ))}
@@ -207,7 +239,9 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
                     { label: 'Unit', value: data.unit || '—' },
                     { label: 'Unit Cost', value: data.unitCost ? `฿${data.unitCost.toLocaleString()}` : '—' },
                     { label: 'Min Stock', value: String(data.minStock) },
-                    { label: 'Serial Required', value: data.serialControlled ? 'Yes' : 'No' },
+                    { label: 'Serial Controlled', value: data.serialControlled ? 'Yes' : 'No' },
+                    { label: 'Batch Controlled', value: data.batchControlled ? 'Yes' : 'No' },
+                    { label: 'Product Status', value: PRODUCT_STATUS_CFG[data.productStatus]?.label ?? data.productStatus ?? '—' },
                   ].map(({ label, value, mono }) => (
                     <div key={label} className="bg-slate-50 rounded-lg p-2">
                       <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">{label}</p>
@@ -228,9 +262,9 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
             {activeSection === 'inventory' && (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-center">
-                    <p className="text-2xl font-bold text-blue-700">{data._count?.stockItems ?? 0}</p>
-                    <p className="text-xs text-blue-500">Total Stock Items</p>
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                    <p className="text-2xl font-bold text-green-700">{data._count?.stockItems ?? 0}</p>
+                    <p className="text-xs text-green-500">Total Stock Items</p>
                   </div>
                   <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
                     <p className="text-2xl font-bold text-green-700">{data.stockItems?.filter((i: any) => i.status === 'AVAILABLE').length ?? 0}</p>
@@ -273,7 +307,7 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
                   : data.stockItems?.filter((i: any) => i.serialNumber).map((si: any) => (
                     <div key={si.id} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
                       <div>
-                        <p className="font-mono text-xs font-bold text-blue-700">{si.serialNumber}</p>
+                        <p className="font-mono text-xs font-bold text-green-700">{si.serialNumber}</p>
                         <p className="text-[10px] text-slate-400">{[si.warehouse?.code, si.rack?.code, si.slot?.code].filter(Boolean).join(' › ')}</p>
                       </div>
                       <span className={cn('text-[10px] rounded px-1.5 py-0.5 font-medium', STATUS_BADGE[si.status] ?? 'bg-slate-100 text-slate-600')}>{si.status}</span>
@@ -339,7 +373,7 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
       {/* Footer actions */}
       {data && (
         <div className="border-t border-slate-100 p-3 flex gap-2 flex-shrink-0 bg-slate-50">
-          <Button size="sm" variant="outline" className="flex-1 gap-1.5 text-xs">
+          <Button size="sm" variant="outline" className="flex-1 gap-1.5 text-xs" onClick={() => data && onEdit(data)}>
             <Pencil className="w-3.5 h-3.5" /> Edit
           </Button>
           <Button size="sm" variant="outline" className="gap-1.5 text-xs"
@@ -357,10 +391,12 @@ function ProductDetailDrawer({ productId, onClose }: { productId: string; onClos
 
 // ─── Enterprise Table Row ─────────────────────────────────────────────────────
 
-function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
+function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatusChange }: {
   row: any; isSelected: boolean;
   onSelect: () => void;
   onDrilldown: () => void;
+  onEdit: () => void;
+  onStatusChange: (newStatus: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const fmt = (d: any) => d ? new Date(d).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
@@ -369,7 +405,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
     <>
       <tr
         className={cn('border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer text-xs',
-          isSelected ? 'bg-blue-50/60 ring-1 ring-inset ring-blue-300' : '',
+          isSelected ? 'bg-green-50/60 ring-1 ring-inset ring-green-300' : '',
           row.hasDoa ? 'border-l-2 border-l-red-500' :
           row.hasRtv ? 'border-l-2 border-l-orange-400' :
           row.hasQuarantine ? 'border-l-2 border-l-amber-400' :
@@ -387,19 +423,36 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
 
         {/* IDENTITY */}
         <td className="px-3 py-2.5 min-w-[140px]">
-          <p className="font-mono font-bold text-blue-700 text-xs leading-none">{row.code}</p>
+          <p className="font-mono font-bold text-green-700 text-xs leading-none">{row.code}</p>
           {row.partNumber && <p className="text-[10px] text-slate-400 font-mono mt-0.5">{row.partNumber}</p>}
           {row.vendorPartNumber && <p className="text-[10px] text-slate-300 font-mono">{row.vendorPartNumber}</p>}
         </td>
         <td className="px-3 py-2.5 whitespace-nowrap">{row.brandName || '—'}</td>
         <td className="px-3 py-2.5 whitespace-nowrap">
-          <p className="font-medium text-slate-700">{row.name}</p>
+          <p className={cn('font-medium text-slate-700', row.productStatus === 'DISCONTINUED' && 'line-through text-slate-400')}>{row.name}</p>
           {row.model && <p className="text-[10px] text-slate-400">{row.manufacturer ? `${row.manufacturer} · ` : ''}{row.model}</p>}
         </td>
         <td className="px-3 py-2.5">
           <Badge variant="outline" className={cn('text-[10px] whitespace-nowrap', TYPE_BADGE[row.productType])}>{row.productType?.replace('_',' ')}</Badge>
         </td>
         <td className="px-3 py-2.5 max-w-[160px]"><p className="truncate text-slate-500">{row.description || '—'}</p></td>
+
+        {/* STATUS */}
+        <td className="px-3 py-2.5 whitespace-nowrap"><ProductStatusBadge status={row.productStatus} /></td>
+
+        {/* UOM */}
+        <td className="px-3 py-2.5 whitespace-nowrap text-xs font-medium text-slate-600">{row.unit || '—'}</td>
+
+        {/* CATEGORY */}
+        <td className="px-3 py-2.5 max-w-[100px]"><p className="truncate text-xs text-slate-500">{row.category || '—'}</p></td>
+
+        {/* CONTROLS (S/B badges) */}
+        <td className="px-3 py-2.5">
+          <div className="flex gap-1">
+            <span className={cn('text-[9px] px-1 py-0.5 rounded font-bold border', row.serialControlled ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>S</span>
+            <span className={cn('text-[9px] px-1 py-0.5 rounded font-bold border', row.batchControlled ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>B</span>
+          </div>
+        </td>
 
         {/* INVENTORY */}
         <td className="px-3 py-2.5 whitespace-nowrap font-medium">{row.primaryWarehouse || '—'}</td>
@@ -408,7 +461,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
         </td>
         <td className="px-3 py-2.5 text-center">
           <button onClick={(e) => { e.stopPropagation(); onDrilldown(); }}
-            className="font-bold text-slate-800 hover:text-blue-700 hover:underline tabular-nums">{row.totalQty}</button>
+            className="font-bold text-slate-800 hover:text-green-700 hover:underline tabular-nums">{row.totalQty}</button>
           {row.isLowStock && <p className="text-[9px] text-amber-600 font-medium mt-0.5">LOW</p>}
         </td>
         <td className="px-3 py-2.5"><StatusDots statusCounts={row.statusCounts} /></td>
@@ -432,12 +485,31 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
         <td className="px-3 py-2.5">
           <div className="flex items-center gap-1">
             <button onClick={(e) => { e.stopPropagation(); onSelect(); }}
-              className="p-1 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600" title="View detail">
+              className="p-1 rounded hover:bg-green-100 text-slate-400 hover:text-green-600" title="View detail">
               <Eye className="w-3.5 h-3.5" />
             </button>
-            <button className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600">
-              <MoreHorizontal className="w-3.5 h-3.5" />
+            <button onClick={(e) => { e.stopPropagation(); onEdit(); }}
+              className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600" title="Edit product">
+              <Pencil className="w-3.5 h-3.5" />
             </button>
+            {row.productStatus === 'ACTIVE' && (
+              <button onClick={(e) => { e.stopPropagation(); onStatusChange('INACTIVE'); }}
+                className="p-1 rounded hover:bg-amber-100 text-slate-300 hover:text-amber-600" title="Deactivate">
+                <PauseCircle className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {row.productStatus === 'INACTIVE' && (
+              <button onClick={(e) => { e.stopPropagation(); onStatusChange('ACTIVE'); }}
+                className="p-1 rounded hover:bg-green-100 text-slate-300 hover:text-green-600" title="Reactivate">
+                <PlayCircle className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {row.productStatus === 'DISCONTINUED' && (
+              <button onClick={(e) => { e.stopPropagation(); onStatusChange('ACTIVE'); }}
+                className="p-1 rounded hover:bg-green-100 text-slate-300 hover:text-green-600" title="Restore to Active">
+                <PlayCircle className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -445,7 +517,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
       {/* Expanded row */}
       {expanded && (
         <tr className="bg-slate-50 border-b border-slate-200">
-          <td colSpan={18} className="px-6 py-3">
+          <td colSpan={22} className="px-6 py-3">
             <div className="grid grid-cols-3 gap-4 text-xs">
               <div>
                 <p className="font-semibold text-slate-600 mb-1.5 flex items-center gap-1"><Box className="w-3 h-3" /> Inventory by Status</p>
@@ -471,7 +543,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown }: {
                 <div className="space-y-1">
                   <div className="flex justify-between"><span className="text-slate-400">AWB</span><span className="font-mono">{row.awbNumber || '—'}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">Invoice</span><span className="font-mono">{row.invoiceNumber || '—'}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-400">GSW</span><span className="font-mono">{row.gswNumber || '—'}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Customer Case</span><span className="font-mono">{row.gswNumber || '—'}</span></div>
                   <div className="flex justify-between"><span className="text-slate-400">RMA Ref</span><span className="font-mono">{row.rmaRef || '—'}</span></div>
                 </div>
               </div>
@@ -500,6 +572,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   const [brandFilter, setBrandFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [productStatusFilter, setProductStatusFilter] = useState('ACTIVE');
+  const [categoryFilter, setCategoryFilter] = useState('');
   const [serialOnly, setSerialOnly] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
@@ -524,15 +598,53 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await productsApi.enterpriseList({ search, warehouseId: whFilter, brandId: brandFilter, productType: typeFilter, stockStatus: statusFilter, serialOnly, page, limit: LIMIT });
+      const res = await productsApi.enterpriseList({
+        search, warehouseId: whFilter, brandId: brandFilter,
+        productType: typeFilter, stockStatus: statusFilter,
+        productStatus: productStatusFilter || undefined,
+        category: categoryFilter || undefined,
+        serialOnly, page, limit: LIMIT,
+      });
       setRows(res.data ?? []);
       setTotal(res.total ?? 0);
     } finally { setLoading(false); }
-  }, [search, whFilter, brandFilter, typeFilter, statusFilter, serialOnly, page]);
+  }, [search, whFilter, brandFilter, typeFilter, statusFilter, productStatusFilter, categoryFilter, serialOnly, page]);
 
   useEffect(() => { loadKpi(); }, [loadKpi]);
-  useEffect(() => { setPage(1); }, [search, whFilter, brandFilter, typeFilter, statusFilter, serialOnly]);
+  useEffect(() => { setPage(1); }, [search, whFilter, brandFilter, typeFilter, statusFilter, productStatusFilter, categoryFilter, serialOnly]);
   useEffect(() => { load(); }, [load]);
+
+  async function handleStatusChange(productId: string, newStatus: string) {
+    try {
+      await productsApi.changeStatus(productId, newStatus);
+      toast.success(`Product ${newStatus === 'ACTIVE' ? 'activated' : newStatus === 'INACTIVE' ? 'deactivated' : 'discontinued'}`);
+      load(); loadKpi();
+    } catch (e: any) { toast.error(e.message); }
+  }
+
+  function openEdit(product: any) {
+    setEditId(product.id);
+    setForm({
+      code: product.code ?? '',
+      name: product.name ?? '',
+      description: product.description ?? '',
+      manufacturer: product.manufacturer ?? '',
+      model: product.model ?? '',
+      partNumber: product.partNumber ?? '',
+      vendorPartNumber: product.vendorPartNumber ?? '',
+      productType: product.productType ?? 'SPARE_PART',
+      category: product.category ?? '',
+      unit: product.unit ?? 'unit',
+      unitCost: product.unitCost ?? 0,
+      minStock: product.minStock ?? 0,
+      serialControlled: product.serialControlled ?? false,
+      batchControlled: product.batchControlled ?? false,
+      productStatus: product.productStatus ?? 'ACTIVE',
+      brandId: product.brandId ?? product.brand?.id ?? '',
+    });
+    setSelectedId(null); // close drawer first
+    setOpen(true);
+  }
 
   async function submit() {
     setBusy(true);
@@ -552,8 +664,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   const F = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm((f: any) => ({ ...f, [k]: e.target.value }));
 
   const COL_GROUPS = [
-    { label: 'Product Identity', cols: 5, bg: 'bg-slate-700' },
-    { label: 'Inventory Context', cols: 5, bg: 'bg-blue-800' },
+    { label: 'Product Identity', cols: 9, bg: 'bg-slate-700' },
+    { label: 'Inventory Context', cols: 5, bg: 'bg-green-800' },
     { label: 'Traceability', cols: 4, bg: 'bg-teal-800' },
     { label: 'Operational Audit', cols: 2, bg: 'bg-indigo-800' },
     { label: '', cols: 1, bg: 'bg-slate-700' },
@@ -570,11 +682,11 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <Input placeholder="Search SKU, Part#, Serial, AWB, Invoice, Model, Description…" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-8 text-sm" />
         </div>
-        <Button variant="outline" size="sm" className={cn('h-8 gap-1.5 text-xs', showFilters && 'bg-blue-50 border-blue-300 text-blue-700')} onClick={() => setShowFilters((v) => !v)}>
+        <Button variant="outline" size="sm" className={cn('h-8 gap-1.5 text-xs', showFilters && 'bg-green-50 border-green-300 text-green-700')} onClick={() => setShowFilters((v) => !v)}>
           <Filter className="w-3.5 h-3.5" /> Filters {showFilters ? '▲' : '▼'}
         </Button>
         <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-          <input type="checkbox" checked={serialOnly} onChange={(e) => setSerialOnly(e.target.checked)} className="accent-blue-600" />
+          <input type="checkbox" checked={serialOnly} onChange={(e) => setSerialOnly(e.target.checked)} className="accent-green-600" />
           Serialized Only
         </label>
         <div className="ml-auto flex items-center gap-2">
@@ -585,7 +697,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => { const token = localStorage.getItem('wms_token'); fetch(productsApi.exportUrl('xlsx'), { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then((r) => r.blob()).then((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'products.xlsx'; a.click(); }); }}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
-          <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700 text-white gap-1.5 text-xs" onClick={() => { setEditId(null); setForm(BLANK); setOpen(true); }}>
+          <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => { setEditId(null); setForm(BLANK); setOpen(true); }}>
             <Plus className="w-3.5 h-3.5" /> New Product
           </Button>
         </div>
@@ -593,41 +705,58 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
 
       {/* Filter bar */}
       {showFilters && (
-        <div className="flex flex-wrap gap-2 bg-blue-50 border border-blue-200 rounded-xl p-3">
-          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={whFilter} onChange={(e) => setWhFilter(e.target.value)}>
-            <option value="">All Warehouses</option>
-            {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
-          </select>
-          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)}>
-            <option value="">All Brands</option>
-            {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-            <option value="">All Types</option>
-            {PRODUCT_TYPES.map((t) => <option key={t} value={t}>{t.replace('_',' ')}</option>)}
-          </select>
-          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-            <option value="">All Status</option>
-            {STOCK_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}
-          </select>
-          <div className="flex gap-1 ml-auto flex-wrap">
+        <div className="flex flex-wrap gap-2 bg-green-50 border border-green-200 rounded-xl p-3">
+          {/* Row 1: Product-level filters */}
+          <div className="flex flex-wrap gap-2 w-full">
+            <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white font-medium" value={productStatusFilter} onChange={(e) => setProductStatusFilter(e.target.value)}>
+              <option value="">All Product Status</option>
+              {PRODUCT_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <input
+              className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white min-w-[140px]"
+              placeholder="Filter by Category…"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+            />
+            <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="">All Types</option>
+              {PRODUCT_TYPES.map((t) => <option key={t} value={t}>{t.replace('_',' ')}</option>)}
+            </select>
+            <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)}>
+              <option value="">All Brands</option>
+              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+            <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={whFilter} onChange={(e) => setWhFilter(e.target.value)}>
+              <option value="">All Warehouses</option>
+              {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
+            </select>
+            <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All Stock Status</option>
+              {STOCK_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}
+            </select>
+          </div>
+          {/* Row 2: Quick filters */}
+          <div className="flex gap-1 flex-wrap">
+            <span className="text-[10px] text-slate-400 self-center mr-1">Quick:</span>
             {[
-              { label: '⚠ Low Stock', action: () => { setStatusFilter(''); setKpi((k: any) => k); } },
-              { label: '🔴 Quarantine', action: () => setStatusFilter('QUARANTINE') },
-              { label: '🔶 RTV Pending', action: () => setStatusFilter('RTV_PENDING') },
-              { label: '💀 DOA', action: () => setStatusFilter('DOA') },
+              { label: 'Active',       action: () => { setProductStatusFilter('ACTIVE'); setStatusFilter(''); } },
+              { label: 'Inactive',     action: () => { setProductStatusFilter('INACTIVE'); setStatusFilter(''); } },
+              { label: 'Discontinued', action: () => { setProductStatusFilter('DISCONTINUED'); setStatusFilter(''); } },
+              { label: 'On Hold',      action: () => setStatusFilter('QUARANTINE') },
+              { label: 'RTV Pending',  action: () => setStatusFilter('RTV_PENDING') },
+              { label: 'DOA',          action: () => setStatusFilter('DOA') },
             ].map(({ label, action }) => (
               <button key={label} onClick={action}
                 className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 hover:bg-slate-50 text-slate-600 font-medium">{label}</button>
             ))}
-            <button onClick={() => { setWhFilter(''); setBrandFilter(''); setTypeFilter(''); setStatusFilter(''); setSerialOnly(false); }}
-              className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear all</button>
+            <button onClick={() => { setWhFilter(''); setBrandFilter(''); setTypeFilter(''); setStatusFilter(''); setProductStatusFilter('ACTIVE'); setCategoryFilter(''); setSerialOnly(false); }}
+              className="text-xs text-slate-400 hover:text-slate-600 px-2 ml-2">Clear all</button>
           </div>
         </div>
       )}
 
       {/* Import result */}
-      {importing && <div className="text-center text-sm text-blue-600 animate-pulse py-2">Importing…</div>}
+      {importing && <div className="text-center text-sm text-green-600 animate-pulse py-2">Importing…</div>}
       {importResult && (
         <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 flex items-center gap-3 text-sm">
           <CheckCircle2 className="w-4 h-4 text-green-600" />
@@ -640,7 +769,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
       {/* Enterprise Table */}
       <div className="flex-1 min-h-0 bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="overflow-auto flex-1">
-          <table className="w-full text-xs min-w-[1400px]">
+          <table className="w-full text-xs min-w-[1800px]">
             <thead className="sticky top-0 z-10">
               {/* Group headers */}
               <tr>
@@ -655,12 +784,12 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
               <tr className="bg-slate-700 text-white">
                 <th className="w-8 bg-slate-700" />
                 {/* Identity */}
-                {['SKU / Part #','Brand','Product / Model','Type','Description'].map((h) => (
+                {['SKU / Part #','Brand','Product / Model','Type','Description','Status','UOM','Category','Ctrl'].map((h) => (
                   <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap border-r border-slate-600/30">{h}</th>
                 ))}
                 {/* Inventory */}
                 {['Warehouse','Bin / Rack','Qty','Condition','Source'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-blue-800 border-r border-blue-700/30">{h}</th>
+                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-green-800 border-r border-green-700/30">{h}</th>
                 ))}
                 {/* Traceability */}
                 {['Serial','AWB','Invoice No.','RMA Ref'].map((h) => (
@@ -677,11 +806,11 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
               {loading
                 ? [...Array(8)].map((_, i) => (
                     <tr key={i} className="border-b border-slate-100">
-                      {[...Array(18)].map((_, j) => <td key={j} className="px-3 py-2.5"><Skeleton className="h-3.5" /></td>)}
+                      {[...Array(22)].map((_, j) => <td key={j} className="px-3 py-2.5"><Skeleton className="h-3.5" /></td>)}
                     </tr>
                   ))
                 : rows.length === 0
-                ? <tr><td colSpan={18} className="px-4 py-12 text-center text-slate-400">No products found</td></tr>
+                ? <tr><td colSpan={22} className="px-4 py-12 text-center text-slate-400">No products found</td></tr>
                 : rows.map((row) => (
                     <EnterpriseRow
                       key={row.id}
@@ -689,6 +818,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                       isSelected={selectedId === row.id}
                       onSelect={() => setSelectedId(selectedId === row.id ? null : row.id)}
                       onDrilldown={() => setDrilldownRow(row)}
+                      onEdit={() => openEdit(row)}
+                      onStatusChange={(s) => handleStatusChange(row.id, s)}
                     />
                   ))}
             </tbody>
@@ -735,14 +866,37 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
             </div>
             <div className="space-y-1"><Label>Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} /></div>
             <div className="space-y-1"><Label>Min Stock</Label><Input type="number" value={form.minStock} onChange={F('minStock')} /></div>
-            <div className="space-y-1"><Label>Serial Required</Label>
+            <div className="space-y-1"><Label>Serial Controlled</Label>
               <div className="flex items-center gap-2 pt-1">
                 <button type="button" onClick={() => setForm((f: any) => ({ ...f, serialControlled: !f.serialControlled }))}
-                  className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.serialControlled ? 'bg-blue-600' : 'bg-slate-300')}>
+                  className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.serialControlled ? 'bg-indigo-600' : 'bg-slate-300')}>
                   <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.serialControlled ? 'translate-x-6' : 'translate-x-1')} />
                 </button>
                 <span className="text-sm text-slate-600">{form.serialControlled ? 'Required' : 'Not required'}</span>
               </div>
+            </div>
+            <div className="space-y-1"><Label>Batch Controlled</Label>
+              <div className="flex items-center gap-2 pt-1">
+                <button type="button" onClick={() => setForm((f: any) => ({ ...f, batchControlled: !f.batchControlled }))}
+                  className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.batchControlled ? 'bg-violet-600' : 'bg-slate-300')}>
+                  <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.batchControlled ? 'translate-x-6' : 'translate-x-1')} />
+                </button>
+                <span className="text-sm text-slate-600">{form.batchControlled ? 'Required' : 'Not required'}</span>
+              </div>
+            </div>
+            <div className="space-y-1"><Label>Product Status</Label>
+              <Select value={form.productStatus} onValueChange={(v) => setForm((f: any) => ({ ...f, productStatus: v ?? 'ACTIVE' }))}>
+                <SelectTrigger>
+                  <span className={cn('flex flex-1 text-left text-sm', !form.productStatus && 'text-muted-foreground')}>
+                    {form.productStatus ? PRODUCT_STATUS_CFG[form.productStatus]?.label ?? form.productStatus : 'Select status'}
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ACTIVE">Active — orderable &amp; receivable</SelectItem>
+                  <SelectItem value="INACTIVE">Inactive — hidden from receiving</SelectItem>
+                  {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life</SelectItem>}
+                </SelectContent>
+              </Select>
             </div>
             <div className="col-span-2 space-y-1"><Label>Description</Label>
               <Textarea value={form.description} onChange={F('description')} rows={3} className="resize-y" />
@@ -750,7 +904,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-            <Button onClick={submit} className="bg-blue-600 hover:bg-blue-700 text-white" disabled={busy}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
+            <Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -759,7 +913,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
       {selectedId && (
         <>
           <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelectedId(null)} />
-          <ProductDetailDrawer productId={selectedId} onClose={() => setSelectedId(null)} />
+          <ProductDetailDrawer productId={selectedId} onClose={() => setSelectedId(null)} onEdit={openEdit} />
         </>
       )}
     </div>
@@ -811,7 +965,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
     { key: 'brand',            label: 'Brand',       render: (r: any) => r.brand || '—' },
     { key: 'awbNumber',        label: 'AWB',         render: (r: any) => <span className="font-mono text-xs">{r.awbNumber || '—'}</span> },
     { key: 'invoiceNumber',    label: 'Invoice No.', render: (r: any) => <span className="font-mono text-xs">{r.invoiceNumber || '—'}</span> },
-    { key: 'gswNumber',        label: 'GSW No.',     render: (r: any) => <span className="font-mono text-xs">{r.gswNumber || '—'}</span> },
+    { key: 'gswNumber',        label: 'Customer Case',     render: (r: any) => <span className="font-mono text-xs">{r.gswNumber || '—'}</span> },
     { key: 'productType',      label: 'Type',        render: (r: any) => <Badge variant="outline" className={cn('text-[10px]', TYPE_BADGE[r.productType])}>{r.productType?.replace('_',' ')}</Badge> },
     { key: 'productName',      label: 'Product',     render: (r: any) => <span className="font-medium">{r.productName}</span> },
     { key: 'model',            label: 'Model',       render: (r: any) => r.model || '—' },
@@ -849,7 +1003,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2 shadow-sm">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><BarChart3 className="w-3 h-3" /> Summary</p>
-          {[{ label: 'Total Items', value: stats.total, icon: Box, color: 'text-blue-600' }, { label: 'Available', value: stats.available, icon: CheckCircle2, color: 'text-green-600' }, { label: 'Warehouses', value: stats.warehouses, icon: Building2, color: 'text-purple-600' }, { label: 'Products', value: stats.products, icon: Package, color: 'text-amber-600' }].map(({ label, value, icon: Icon, color }) => (
+          {[{ label: 'Total Items', value: stats.total, icon: Box, color: 'text-green-600' }, { label: 'Available', value: stats.available, icon: CheckCircle2, color: 'text-green-600' }, { label: 'Warehouses', value: stats.warehouses, icon: Building2, color: 'text-purple-600' }, { label: 'Products', value: stats.products, icon: Package, color: 'text-amber-600' }].map(({ label, value, icon: Icon, color }) => (
             <div key={label} className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs text-slate-500"><Icon className={cn('w-3.5 h-3.5', color)} />{label}</div>
               <span className="text-xs font-bold">{loading ? '…' : value}</span>
@@ -860,7 +1014,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Import / Export</p>
           {[
             { label: 'Download Template', icon: FileText, color: 'text-green-600', action: () => { const token = localStorage.getItem('wms_token'); fetch(productsApi.templateUrl(), { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then((r) => r.blob()).then((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'template.xlsx'; a.click(); }); } },
-            { label: 'Import xlsx / csv', icon: Upload, color: 'text-blue-600', action: () => fileRef.current?.click() },
+            { label: 'Import xlsx / csv', icon: Upload, color: 'text-green-600', action: () => fileRef.current?.click() },
             { label: 'Export .xlsx', icon: Download, color: 'text-indigo-600', action: () => handleExport('xlsx') },
             { label: 'Export .csv', icon: Download, color: 'text-slate-500', action: () => handleExport('csv') },
           ].map(({ label, icon: Icon, color, action }) => (
@@ -890,7 +1044,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
                 : rows.length === 0 ? <tr><td colSpan={COLS.length} className="px-4 py-12 text-center text-slate-400">No stock items found</td></tr>
                 : rows.map((r, i) => (
                   <tr key={r.id} onClick={() => setSelected(r)}
-                    className={cn('cursor-pointer transition-colors', i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white', selected?.id === r.id ? 'bg-blue-50 ring-1 ring-inset ring-blue-400' : 'hover:bg-blue-50/40')}>
+                    className={cn('cursor-pointer transition-colors', i % 2 === 1 ? 'bg-slate-50/60' : 'bg-white', selected?.id === r.id ? 'bg-green-50 ring-1 ring-inset ring-green-400' : 'hover:bg-green-50/40')}>
                     {COLS.map((c) => <td key={c.key} className="px-3 py-2 whitespace-nowrap">{c.render(r)}</td>)}
                   </tr>
                 ))}
@@ -915,7 +1069,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
                 <Badge variant="outline" className={cn('text-xs', TYPE_BADGE[selected.productType])}>{selected.productType?.replace('_',' ')}</Badge>
                 <Badge variant="outline" className={cn('text-xs', STATUS_BADGE[selected.status] ?? 'bg-slate-100 text-slate-600')}>{selected.status}</Badge>
               </div>
-              {[{ label: 'Receiving', rows: [{ l: 'Date', v: selected.receiveDate ? new Date(selected.receiveDate).toLocaleDateString('th-TH') : '—' }, { l: 'AWB', v: selected.awbNumber || '—', m: true }, { l: 'Invoice', v: selected.invoiceNumber || '—', m: true }, { l: 'GSW No.', v: selected.gswNumber || '—', m: true }] },
+              {[{ label: 'Receiving', rows: [{ l: 'Date', v: selected.receiveDate ? new Date(selected.receiveDate).toLocaleDateString('th-TH') : '—' }, { l: 'AWB', v: selected.awbNumber || '—', m: true }, { l: 'Invoice', v: selected.invoiceNumber || '—', m: true }, { l: 'Customer Case', v: selected.gswNumber || '—', m: true }] },
                 { label: 'Product', rows: [{ l: 'Brand', v: selected.brand || '—' }, { l: 'Model', v: selected.model || '—' }, { l: 'Vendor P/N', v: selected.vendorPartNumber || '—', m: true }, { l: 'Part #', v: selected.partNumber || '—', m: true }, { l: 'Serial', v: selected.serialNumber || '—', m: true }] },
                 { label: 'Location', rows: [{ l: 'WH', v: selected.warehouse || '—' }, { l: 'Rack', v: selected.rack || '—' }, { l: 'Slot', v: selected.slot || '—' }, { l: 'Qty', v: String(selected.qty) }] },
               ].map(({ label, rows: rs }) => (
@@ -941,7 +1095,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
         )}
       </div>
 
-      {importing && <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center"><div className="bg-white rounded-xl p-6 text-sm font-medium text-blue-700 animate-pulse">Importing…</div></div>}
+      {importing && <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center"><div className="bg-white rounded-xl p-6 text-sm font-medium text-green-700 animate-pulse">Importing…</div></div>}
     </div>
   );
 }
@@ -980,7 +1134,7 @@ export default function ProductsPage() {
     <div className="p-5 flex flex-col gap-4 h-full overflow-hidden">
       <div className="flex items-center justify-between flex-wrap gap-3 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
+          <div className="w-9 h-9 bg-green-600 rounded-xl flex items-center justify-center">
             <Tag className="w-4.5 h-4.5 text-white" />
           </div>
           <div>

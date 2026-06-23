@@ -2,18 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "HSNT WMS",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
-      "cwd": "D:\\WMS_Project\\app",
-      "port": 8000
-    },
-    {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "cwd": "D:\\WMS_Project\\frontend",
-      "port": 3000
+      "cwd": "frontend",
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

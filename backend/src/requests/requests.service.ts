@@ -116,17 +116,25 @@ export class RequestsService {
   }
 
   async create(
-    data: { department: string; purpose?: string; requiredDate?: string; rmaCaseNumber?: string; items: { productId: string; quantity: number }[] },
+    data: { department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string; remark?: string; items: { productId: string; quantity: number }[] },
     requesterId: string,
   ) {
+    // Auto-fill department from the requester's profile when not supplied.
+    let department = data.department?.trim();
+    if (!department) {
+      const user = await this.prisma.user.findUnique({ where: { id: requesterId }, select: { department: true } });
+      department = user?.department ?? 'N/A';
+    }
+
     const request = await this.prisma.withdrawalRequest.create({
       data: {
         refNumber: this.genRef(),
         requesterId,
-        department: data.department,
+        department,
         purpose: data.purpose,
         requiredDate: data.requiredDate ? new Date(data.requiredDate) : undefined,
         rmaCaseNumber: data.rmaCaseNumber,
+        notes: data.remark,
         status: RequestStatus.DRAFT,
         items: {
           create: data.items.map((i) => ({
@@ -138,6 +146,46 @@ export class RequestsService {
       include: { items: { include: { product: true } } },
     });
     return request;
+  }
+
+  /** Open RTV cases for the RMA Case Number dropdown. */
+  async getOpenRtvCases() {
+    const closed = ['COMPLETED', 'REJECTED_BY_VENDOR'];
+    return this.prisma.rTVCase.findMany({
+      where: { status: { notIn: closed as any[] } },
+      select: {
+        id: true,
+        refNumber: true,
+        status: true,
+        description: true,
+        stockItem: { select: { product: { select: { name: true, code: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  }
+
+  /** Active products with a count of AVAILABLE stock units (optionally filtered by brand). */
+  async getProductsWithAvailableQty(brandId?: string) {
+    const where: any = { productStatus: 'ACTIVE' };
+    if (brandId) where.brandId = brandId;
+
+    const products = await this.prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        brand: { select: { id: true, name: true } },
+        stockItems: { where: { status: 'AVAILABLE' }, select: { id: true } },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    return products.map(({ stockItems, ...p }) => ({
+      ...p,
+      availableQty: stockItems.length,
+    }));
   }
 
   async submit(id: string, userId: string) {

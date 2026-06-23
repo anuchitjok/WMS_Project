@@ -107,6 +107,7 @@ export interface WithdrawalRequest {
   rmaCaseNumber?: string;
   approvedAt?: string;
   rejectReason?: string;
+  notes?: string;
   createdAt: string;
   updatedAt: string;
   requester: Pick<User, 'id' | 'fullName' | 'department'>;

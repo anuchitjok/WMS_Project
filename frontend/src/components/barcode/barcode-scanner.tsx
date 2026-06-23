@@ -55,7 +55,7 @@ export function BarcodeScanner({ onScan, className }: BarcodeScannerProps) {
         id={elementId}
         className={cn(
           'w-full rounded-xl overflow-hidden border-2 transition-all',
-          active ? 'border-blue-500 min-h-64' : 'border-dashed border-slate-300 min-h-48 flex items-center justify-center',
+          active ? 'border-green-500 min-h-64' : 'border-dashed border-slate-300 min-h-48 flex items-center justify-center',
         )}
       >
         {!active && (
@@ -72,7 +72,7 @@ export function BarcodeScanner({ onScan, className }: BarcodeScannerProps) {
 
       <Button
         onClick={active ? stopScanner : startScanner}
-        className={cn('w-full', active ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700')}
+        className={cn('w-full', active ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700')}
       >
         {active ? (
           <><CameraOff className="h-4 w-4 mr-2" />Stop Scanner</>

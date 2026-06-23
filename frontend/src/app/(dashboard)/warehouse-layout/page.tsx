@@ -1,18 +1,23 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+// Warehouse Operations Control Center.
+// Occupancy / utilization / status / heatmaps are computed CLIENT-SIDE from actual
+// stock placement (slot._count.stockItems via StockItem.slotId) — never slot.status.
+// Reuses existing production APIs only (warehouseApi). No backend/schema/logic changes.
+
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  Search, Plus, Filter, ChevronRight, ChevronDown,
-  MoreHorizontal, MoreVertical, Warehouse, Layers,
-  RefreshCw, Download, MapPin, List, SlidersHorizontal,
-  Pencil, ArrowRightLeft, Ban, Zap, X, Package,
+  Plus, ChevronRight, Warehouse, Layers, RefreshCw, MapPin, X, Package,
+  Pencil, ArrowRightLeft, Ban, Move, ScanLine, History, Printer, Boxes,
+  CheckCircle2, AlertTriangle, Activity, Grid3x3,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { warehouseApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,12 +26,11 @@ type SlotStatus = 'EMPTY' | 'OCCUPIED' | 'RESERVED' | 'QUARANTINE' | 'RTV' | 'BL
 interface SlotData {
   id: string; code: string; name?: string; level: number; column: number;
   status: SlotStatus; slotType: string; capacity: number;
-  _count?: { stockItems: number };
-  updatedAt?: string;
+  _count?: { stockItems: number }; updatedAt?: string;
 }
 interface RackData {
   id: string; code: string; name?: string; zone?: string; rackType: string;
-  levels: number; columns: number; isActive: boolean;
+  levels: number; columns: number; isActive: boolean; updatedAt?: string;
   slots: SlotData[];
   _count?: { slots: number; stockItems: number };
 }
@@ -35,589 +39,309 @@ interface WarehouseData {
   racks: RackData[];
   _count?: { racks: number; stockItems: number };
 }
-interface Stats {
-  totalRacks: number; totalSlots: number;
-  empty: number; occupied: number; reserved: number;
-  quarantine: number; rtv: number; blocked: number; utilizationPct: number;
+
+// ─── Placement-based derivations (source of truth = stock items in slot) ────────
+
+const slotItems = (s: SlotData) => s._count?.stockItems ?? 0;
+const isOccupied = (s: SlotData) => slotItems(s) > 0;
+const isBlocked = (s: SlotData) => s.status === 'BLOCKED';
+const slotUtil = (s: SlotData) => (s.capacity > 0 ? Math.min(100, Math.round((slotItems(s) / s.capacity) * 100)) : (isOccupied(s) ? 100 : 0));
+
+interface Metrics { total: number; occupied: number; available: number; blocked: number; items: number; utilPct: number; }
+function rackMetrics(r: RackData): Metrics {
+  const slots = r.slots ?? [];
+  const total = slots.length;
+  const occupied = slots.filter(isOccupied).length;
+  const blocked = slots.filter(isBlocked).length;
+  const items = r._count?.stockItems ?? slots.reduce((a, s) => a + slotItems(s), 0);
+  return { total, occupied, blocked, available: Math.max(0, total - occupied - blocked), items, utilPct: total ? Math.round((occupied / total) * 100) : 0 };
 }
+function whMetrics(w: WarehouseData): Metrics {
+  return (w.racks ?? []).reduce((acc, r) => {
+    const m = rackMetrics(r);
+    return { total: acc.total + m.total, occupied: acc.occupied + m.occupied, blocked: acc.blocked + m.blocked,
+      available: acc.available + m.available, items: acc.items + m.items, utilPct: 0 };
+  }, { total: 0, occupied: 0, blocked: 0, available: 0, items: 0, utilPct: 0 } as Metrics);
+}
+const withRate = (m: Metrics): Metrics => ({ ...m, utilPct: m.total ? Math.round((m.occupied / m.total) * 100) : 0 });
 
-// ─── Slot style map ───────────────────────────────────────────────────────────
-
-const SLOT_CFG: Record<SlotStatus, { label: string; labelColor: string; border: string; bg: string; dot: string }> = {
-  EMPTY:      { label: 'Available',  labelColor: 'text-green-600',  border: 'border-slate-200',   bg: 'bg-white',          dot: 'bg-green-500' },
-  OCCUPIED:   { label: 'Occupied',   labelColor: 'text-amber-600',  border: 'border-amber-200',   bg: 'bg-amber-50/40',    dot: 'bg-amber-500' },
-  RESERVED:   { label: 'Reserved',   labelColor: 'text-yellow-700', border: 'border-yellow-200',  bg: 'bg-yellow-50/40',   dot: 'bg-yellow-500' },
-  QUARANTINE: { label: 'Quarantine', labelColor: 'text-purple-700', border: 'border-purple-200',  bg: 'bg-purple-50/40',   dot: 'bg-purple-500' },
-  RTV:        { label: 'RTV',        labelColor: 'text-orange-700', border: 'border-orange-200',  bg: 'bg-orange-50/40',   dot: 'bg-orange-500' },
-  BLOCKED:    { label: 'Blocked',    labelColor: 'text-red-600',    border: 'border-red-200',     bg: 'bg-red-50/30',      dot: 'bg-red-500' },
+type StatusLevel = 'normal' | 'warning' | 'critical';
+function levelOf(util: number, blocked: number, total: number): StatusLevel {
+  const blockShare = total ? blocked / total : 0;
+  if (util >= 90 || blockShare >= 0.2) return 'critical';
+  if (util >= 70 || blockShare >= 0.1) return 'warning';
+  return 'normal';
+}
+const LEVEL_CFG: Record<StatusLevel, { label: string; pill: string; dot: string; bar: string }> = {
+  normal:   { label: 'Normal',   pill: 'bg-emerald-100 text-emerald-700', dot: 'bg-emerald-500', bar: 'bg-emerald-500' },
+  warning:  { label: 'Warning',  pill: 'bg-amber-100 text-amber-700',     dot: 'bg-amber-500',   bar: 'bg-amber-500' },
+  critical: { label: 'Critical', pill: 'bg-red-100 text-red-700',         dot: 'bg-red-500',     bar: 'bg-red-500' },
 };
 
-// ─── Circular progress gauge ──────────────────────────────────────────────────
+// Heatmap color scale (Green=Available, Yellow=Medium, Orange=High, Red=Critical).
+function heatCell(util: number, occupied: boolean) {
+  if (!occupied) return 'bg-emerald-100 border-emerald-200 text-emerald-700';
+  if (util >= 90) return 'bg-red-500 border-red-600 text-white';
+  if (util >= 60) return 'bg-orange-500 border-orange-600 text-white';
+  if (util >= 30) return 'bg-yellow-400 border-yellow-500 text-yellow-900';
+  return 'bg-emerald-500 border-emerald-600 text-white';
+}
 
-function CircularGauge({ pct, size = 84 }: { pct: number; size?: number }) {
-  const r = (size - 10) / 2;
-  const circ = 2 * Math.PI * r;
-  const dash = (pct / 100) * circ;
-  const color = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e';
+const SLOT_CFG: Record<SlotStatus, { label: string; pill: string }> = {
+  EMPTY:      { label: 'Available',  pill: 'bg-emerald-100 text-emerald-700' },
+  OCCUPIED:   { label: 'Occupied',   pill: 'bg-amber-100 text-amber-700' },
+  RESERVED:   { label: 'Reserved',   pill: 'bg-yellow-100 text-yellow-700' },
+  QUARANTINE: { label: 'On Hold',    pill: 'bg-purple-100 text-purple-700' },
+  RTV:        { label: 'RTV',        pill: 'bg-orange-100 text-orange-700' },
+  BLOCKED:    { label: 'Blocked',    pill: 'bg-red-100 text-red-700' },
+};
+
+// ─── Capacity Dashboard (Row 1) ─────────────────────────────────────────────────
+
+function CapacityDashboard({ kpis, loading }: { kpis: { warehouses: number; total: number; occupied: number; available: number; blocked: number; rate: number }; loading?: boolean }) {
+  const cards = [
+    { label: 'Total Warehouses', value: kpis.warehouses, icon: Warehouse, tile: 'bg-green-50 text-green-600' },
+    { label: 'Total Locations',  value: kpis.total,      icon: Grid3x3,   tile: 'bg-slate-100 text-slate-600' },
+    { label: 'Occupied',         value: kpis.occupied,   icon: Boxes,     tile: 'bg-amber-50 text-amber-600' },
+    { label: 'Available',        value: kpis.available,  icon: CheckCircle2, tile: 'bg-emerald-50 text-emerald-600' },
+    { label: 'Blocked',          value: kpis.blocked,    icon: Ban,       tile: 'bg-red-50 text-red-600' },
+    { label: 'Occupancy Rate',   value: `${kpis.rate}%`, icon: Activity,  tile: 'bg-teal-50 text-teal-600' },
+  ];
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="rotate-[-90deg]">
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={8} />
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth={8}
-        strokeDasharray={`${dash} ${circ}`} strokeLinecap="round" />
-      <text x={size/2} y={size/2 + 1} textAnchor="middle" dominantBaseline="middle"
-        className="fill-slate-800 font-bold" fontSize={size * 0.18}
-        style={{ transform: `rotate(90deg)`, transformOrigin: `${size/2}px ${size/2}px`, fontFamily: 'Segoe UI' }}>
-        {pct}%
-      </text>
-    </svg>
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      {cards.map((c) => {
+        const Icon = c.icon;
+        return (
+          <div key={c.label} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <span className={cn('h-10 w-10 rounded-xl grid place-items-center', c.tile)}><Icon className="h-5 w-5" /></span>
+            {loading ? <Skeleton className="h-8 w-14 mt-3" /> : (
+              <p className="mt-3 text-2xl font-bold text-slate-900 tabular-nums leading-none">{typeof c.value === 'number' ? c.value.toLocaleString() : c.value}</p>
+            )}
+            <p className="mt-1.5 text-[13px] font-medium text-slate-500">{c.label}</p>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
-// ─── Left Panel: Warehouse Filter ─────────────────────────────────────────────
+// ─── Storage Utilization by warehouse (Row 2) — also the warehouse selector ─────
 
-function WarehouseFilterPanel({
-  warehouses, stats, selectedWhId, onSelectWh, search, onSearch,
-}: {
-  warehouses: WarehouseData[]; stats: Stats | null;
-  selectedWhId: string; onSelectWh: (id: string) => void;
-  search: string; onSearch: (v: string) => void;
+function WarehouseUtilization({ warehouses, selectedId, onSelect, loading }: {
+  warehouses: WarehouseData[]; selectedId: string; onSelect: (id: string) => void; loading?: boolean;
 }) {
-  const totalSlots = (warehouses.reduce((a, w) => a + (w._count?.stockItems ?? 0), 0));
-
   return (
-    <div className="w-56 flex-shrink-0 flex flex-col gap-3 overflow-y-auto">
-      {/* Warehouse Filter header */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2.5 border-b border-slate-100">
-          <span className="text-xs font-bold text-slate-700 uppercase tracking-widest">Warehouse Filter</span>
-          <Filter className="w-3.5 h-3.5 text-slate-400" />
-        </div>
-        {/* Search */}
-        <div className="px-3 py-2 border-b border-slate-100">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-            <input
-              value={search} onChange={(e) => onSearch(e.target.value)}
-              placeholder="Search warehouse..."
-              className="w-full pl-7 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg outline-none focus:ring-1 focus:ring-blue-400 bg-slate-50"
-            />
-          </div>
-        </div>
-        {/* All Warehouses */}
-        <button
-          onClick={() => onSelectWh('')}
-          className={cn('w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors border-b border-slate-50',
-            selectedWhId === '' ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-slate-50')}
-        >
-          <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0', selectedWhId === '' ? 'bg-blue-100' : 'bg-slate-100')}>
-            <Warehouse className={cn('w-4 h-4', selectedWhId === '' ? 'text-blue-600' : 'text-slate-500')} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-slate-800">All Warehouses</p>
-            <p className="text-[10px] text-slate-400">{warehouses.length} warehouses</p>
-          </div>
-        </button>
-        {/* WH list */}
-        {warehouses
-          .filter((w) => !search || w.name.toLowerCase().includes(search.toLowerCase()) || w.code.toLowerCase().includes(search.toLowerCase()))
-          .map((wh) => {
-            const slotCount = wh.racks.reduce((a, r) => a + (r._count?.slots ?? r.slots.length), 0);
+    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-4">Storage Utilization by Warehouse</h2>
+      {loading ? (
+        <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
+          {warehouses.map((w) => {
+            const m = withRate(whMetrics(w));
+            const lvl = levelOf(m.utilPct, m.blocked, m.total);
+            const cfg = LEVEL_CFG[lvl];
+            const active = selectedId === w.id;
             return (
-              <button
-                key={wh.id}
-                onClick={() => onSelectWh(wh.id)}
-                className={cn('w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors border-b border-slate-50 last:border-0',
-                  selectedWhId === wh.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-slate-50')}
-              >
-                <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0', selectedWhId === wh.id ? 'bg-blue-100' : 'bg-slate-100')}>
-                  <Layers className={cn('w-4 h-4', selectedWhId === wh.id ? 'text-blue-600' : 'text-slate-500')} />
+              <button key={w.id} onClick={() => onSelect(w.id)}
+                className={cn('text-left rounded-xl border p-3.5 transition-all', active ? 'border-green-400 ring-1 ring-green-200 bg-green-50/30' : 'border-slate-200 hover:bg-slate-50')}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={cn('h-2.5 w-2.5 rounded-full flex-shrink-0', cfg.dot)} />
+                    <span className="font-semibold text-slate-800 text-sm truncate">{w.name}</span>
+                  </div>
+                  <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold flex-shrink-0', cfg.pill)}>{cfg.label}</span>
                 </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-slate-800 truncate">{wh.name}</p>
-                  <p className="text-[10px] text-slate-400 truncate">{wh.location ?? wh.code}</p>
+                <div className="mt-2.5 h-2 w-full rounded-full bg-slate-100 overflow-hidden">
+                  <div className={cn('h-full rounded-full', cfg.bar)} style={{ width: `${m.utilPct}%` }} />
                 </div>
-                <span className="text-[10px] bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5 font-bold flex-shrink-0">{slotCount}</span>
+                <div className="mt-2 flex items-center justify-between text-xs text-slate-500 tabular-nums">
+                  <span className="font-bold text-slate-700">{m.utilPct}%</span>
+                  <span>{m.occupied}/{m.total} slots · {m.items} items</span>
+                </div>
               </button>
             );
           })}
-      </div>
-
-      {/* Location Summary */}
-      {stats && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-3">
-          <p className="text-xs font-bold text-slate-700 uppercase tracking-widest mb-3">Location Summary</p>
-          <div className="flex items-center gap-3 mb-3">
-            <div>
-              <p className="text-2xl font-bold text-slate-900 leading-none">{stats.totalSlots}</p>
-              <p className="text-[10px] text-slate-400 mt-0.5">Active locations</p>
-            </div>
-            <div className="ml-auto">
-              <CircularGauge pct={stats.utilizationPct} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mb-2">
-            <div className="bg-blue-50 rounded-lg p-2">
-              <p className="text-[10px] text-blue-500 font-medium">AVL</p>
-              <p className="text-base font-bold text-blue-700">{stats.empty}</p>
-            </div>
-            <div className="bg-green-50 rounded-lg p-2">
-              <p className="text-[10px] text-green-500 font-medium">OCC</p>
-              <p className="text-base font-bold text-green-700">{stats.occupied}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <p className="text-[10px] text-slate-400">Empty</p>
-              <p className="text-sm font-semibold text-slate-700">{stats.empty}</p>
-            </div>
-            <div>
-              <p className="text-[10px] text-red-400 flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block mr-0.5" />Blocked</p>
-              <p className="text-sm font-semibold text-red-600">{stats.blocked}</p>
-            </div>
-          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ─── Center Panel: Location Structure Tree ────────────────────────────────────
+// ─── Rack heatmap card + slot heatmap (Center) ──────────────────────────────────
 
-function LocationTree({
-  warehouses, selectedWhId, selectedRackId, onSelectRack,
-}: {
-  warehouses: WarehouseData[]; selectedWhId: string; selectedRackId: string;
-  onSelectRack: (rack: RackData, wh: WarehouseData) => void;
+function RackCard({ rack, expanded, onToggle, onSelectSlot, selectedSlotId }: {
+  rack: RackData; expanded: boolean; onToggle: () => void;
+  onSelectSlot: (s: SlotData) => void; selectedSlotId: string;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const m = rackMetrics(rack);
+  const lvl = levelOf(m.utilPct, m.blocked, m.total);
+  const cfg = LEVEL_CFG[lvl];
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+      <button onClick={onToggle} className="w-full flex items-center gap-3 p-3.5 hover:bg-slate-50 transition-colors text-left">
+        <span className={cn('h-9 w-9 rounded-lg grid place-items-center flex-shrink-0', lvl === 'critical' ? 'bg-red-50 text-red-600' : lvl === 'warning' ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600')}>
+          <Layers className="h-4 w-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="font-bold text-slate-800 text-sm truncate">{rack.code}</p>
+            {rack.zone && <span className="text-[10px] text-slate-400 uppercase">{rack.zone}</span>}
+            <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold', cfg.pill)}>{cfg.label}</span>
+          </div>
+          <p className="text-xs text-slate-400">{rack.name ?? rack.rackType.replace(/_/g, ' ')}</p>
+        </div>
+        {/* Enhanced rack metrics */}
+        <div className="hidden sm:flex items-center gap-4 text-center flex-shrink-0">
+          <Metric value={m.items} label="Items" />
+          <Metric value={`${m.utilPct}%`} label="Util" />
+          <Metric value={`${m.occupied}/${m.total}`} label="Slots" />
+          <div className="text-center">
+            <p className="text-[11px] text-slate-400 leading-tight">Last move</p>
+            <p className="text-[11px] font-medium text-slate-600">{rack.updatedAt ? formatDate(rack.updatedAt) : '—'}</p>
+          </div>
+        </div>
+        <ChevronRight className={cn('h-4 w-4 text-slate-300 flex-shrink-0 transition-transform', expanded && 'rotate-90')} />
+      </button>
 
-  // Auto-expand first warehouse or selected
-  useEffect(() => {
-    const first = warehouses[0];
-    if (first && expanded.size === 0) setExpanded(new Set([first.id]));
-  }, [warehouses]);
+      {expanded && (
+        <div className="border-t border-slate-100 p-3.5 bg-slate-50/50">
+          {rack.slots.length === 0 ? (
+            <p className="text-xs text-slate-400 text-center py-4">No slots in this rack</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {rack.slots.map((s) => {
+                  const blocked = isBlocked(s);
+                  const occ = isOccupied(s);
+                  const util = slotUtil(s);
+                  return (
+                    <button key={s.id} onClick={() => onSelectSlot(s)} title={`${s.code} · ${SLOT_CFG[s.status].label} · ${slotItems(s)} items`}
+                      className={cn('h-9 min-w-9 px-1.5 rounded-md border text-[10px] font-bold grid place-items-center transition-all',
+                        blocked ? 'bg-red-100 border-red-300 text-red-600' : heatCell(util, occ),
+                        selectedSlotId === s.id && 'ring-2 ring-offset-1 ring-slate-900')}>
+                      {blocked ? <Ban className="h-3.5 w-3.5" /> : slotItems(s) || ''}
+                    </button>
+                  );
+                })}
+              </div>
+              <HeatLegend />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+function Metric({ value, label }: { value: React.ReactNode; label: string }) {
+  return <div className="text-center"><p className="text-sm font-bold text-slate-800 tabular-nums leading-tight">{value}</p><p className="text-[11px] text-slate-400 leading-tight">{label}</p></div>;
+}
+function HeatLegend() {
+  const items = [['bg-emerald-100 border-emerald-200', 'Available'], ['bg-emerald-500', 'Low'], ['bg-yellow-400', 'Medium'], ['bg-orange-500', 'High'], ['bg-red-500', 'Critical'], ['bg-red-100 border-red-300', 'Blocked']];
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-3 pt-3 border-t border-slate-200">
+      {items.map(([c, l]) => <span key={l} className="flex items-center gap-1 text-[10px] text-slate-500"><span className={cn('h-2.5 w-2.5 rounded-sm border', c)} />{l}</span>)}
+    </div>
+  );
+}
 
-  useEffect(() => {
-    if (selectedWhId) setExpanded((prev) => new Set([...prev, selectedWhId]));
-  }, [selectedWhId]);
+// ─── Location Profile + Quick Actions (Right, fixed) ────────────────────────────
 
-  const display = selectedWhId ? warehouses.filter((w) => w.id === selectedWhId) : warehouses;
+function LocationProfile({ wh, rack, slot, detail, loadingDetail }: {
+  wh?: WarehouseData | null; rack?: RackData | null; slot?: SlotData | null; detail: any; loadingDetail: boolean;
+}) {
+  const items = detail?.stockItems ?? [];
+  const qty = items.reduce((a: number, it: any) => a + (it.quantity ?? 0), 0);
+  const skuCount = new Set(items.map((it: any) => it.product?.code)).size;
+  const util = slot ? slotUtil(slot) : 0;
+  const lastMove = items[0]?.updatedAt ?? slot?.updatedAt;
+
+  if (!slot) return (
+    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm text-center">
+      <MapPin className="h-8 w-8 mx-auto text-slate-300" />
+      <p className="mt-2 text-sm font-medium text-slate-600">Location Profile</p>
+      <p className="text-xs text-slate-400">Select a slot from the heatmap to inspect it</p>
+    </div>
+  );
+
+  const rows: [string, React.ReactNode][] = [
+    ['Warehouse', wh?.name ?? '—'],
+    ['Rack', rack?.code ?? '—'],
+    ['Slot', slot.code],
+    ['Status', <span key="s" className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold', SLOT_CFG[slot.status].pill)}>{SLOT_CFG[slot.status].label}</span>],
+    ['Stock Quantity', loadingDetail ? '…' : qty.toLocaleString()],
+    ['SKU Count', loadingDetail ? '…' : skuCount],
+    ['Capacity Utilization', `${util}% (${slotItems(slot)}/${slot.capacity})`],
+    ['Last Movement', lastMove ? formatDate(lastMove) : '—'],
+  ];
 
   return (
-    <div className="w-64 flex-shrink-0 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-        <Layers className="w-4 h-4 text-blue-600" />
-        <div>
-          <p className="text-xs font-bold text-slate-800">Location Structure</p>
-          <p className="text-[10px] text-slate-400">Click to expand/collapse structure</p>
+    <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">Location Profile</h2>
+      <dl className="space-y-2">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-center justify-between gap-3 text-sm">
+            <dt className="text-slate-500">{k}</dt>
+            <dd className="font-semibold text-slate-800 text-right tabular-nums">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {!loadingDetail && items.length > 0 && (
+        <div className="mt-4 pt-3 border-t border-slate-100">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Stock in location</p>
+          <ul className="space-y-1.5 max-h-40 overflow-y-auto">
+            {items.map((it: any) => (
+              <li key={it.id} className="flex items-center gap-2 text-xs">
+                <Package className="h-3.5 w-3.5 text-slate-300 flex-shrink-0" />
+                <span className="font-mono font-semibold text-slate-700">{it.product?.code}</span>
+                <span className="text-slate-400 truncate flex-1">{it.product?.name}</span>
+                <span className="tabular-nums text-slate-600">{it.quantity}</span>
+              </li>
+            ))}
+          </ul>
         </div>
-      </div>
-      {/* Tree */}
-      <div className="flex-1 overflow-y-auto">
-        {display.map((wh) => {
-          const isExpanded = expanded.has(wh.id);
-          const slotCount = wh.racks.reduce((a, r) => a + (r._count?.slots ?? r.slots.length), 0);
+      )}
+    </div>
+  );
+}
+
+function QuickActions({ slot, onAction }: { slot: SlotData | null; onAction: (a: string) => void }) {
+  const ACTIONS = [
+    { id: 'edit',     label: 'Edit Location',  icon: Pencil,        needsSlot: true },
+    { id: 'move',     label: 'Move Stock',     icon: Move,          needsSlot: false },
+    { id: 'transfer', label: 'Transfer Stock', icon: ArrowRightLeft, needsSlot: false },
+    { id: 'block',    label: slot?.status === 'BLOCKED' ? 'Unblock Location' : 'Block Location', icon: Ban, needsSlot: true },
+    { id: 'cycle',    label: 'Cycle Count',    icon: ScanLine,      needsSlot: false },
+    { id: 'history',  label: 'View History',   icon: History,       needsSlot: false },
+    { id: 'print',    label: 'Print Label',    icon: Printer,       needsSlot: true },
+    { id: 'create',   label: 'Create Location',icon: Plus,          needsSlot: false },
+  ];
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">Quick Actions</h2>
+      <div className="grid grid-cols-2 gap-2">
+        {ACTIONS.map((a) => {
+          const Icon = a.icon;
+          const disabled = a.needsSlot && !slot;
+          const danger = a.id === 'block' && slot?.status !== 'BLOCKED';
           return (
-            <div key={wh.id}>
-              {/* Warehouse row */}
-              <button
-                onClick={() => setExpanded((prev) => { const s = new Set(prev); s.has(wh.id) ? s.delete(wh.id) : s.add(wh.id); return s; })}
-                className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-slate-50 transition-colors border-b border-slate-50"
-              >
-                {isExpanded ? <ChevronDown className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />}
-                <Warehouse className="w-4 h-4 text-blue-600 flex-shrink-0" />
-                <span className="text-xs font-semibold text-slate-800 flex-1 text-left truncate">{wh.name}</span>
-                <span className="text-[10px] bg-slate-100 text-slate-600 rounded-full px-1.5 py-0.5 font-bold">{slotCount}</span>
-                <MoreVertical className="w-3.5 h-3.5 text-slate-300 hover:text-slate-500" />
-              </button>
-              {/* Rack rows */}
-              {isExpanded && wh.racks.map((rack) => {
-                const rSlotCount = rack._count?.slots ?? rack.slots.length;
-                const isSelected = rack.id === selectedRackId;
-                return (
-                  <button
-                    key={rack.id}
-                    onClick={() => onSelectRack(rack, wh)}
-                    className={cn('w-full flex items-center gap-2 pl-8 pr-3 py-2 text-left border-b border-slate-50 transition-colors',
-                      isSelected ? 'bg-blue-50 border-l-2 border-l-blue-500' : 'hover:bg-slate-50')}
-                  >
-                    <div className="w-4 h-4 rounded border border-slate-300 bg-white flex-shrink-0" />
-                    <span className={cn('text-xs flex-1 truncate', isSelected ? 'font-semibold text-blue-700' : 'text-slate-700')}>{rack.code}{rack.name ? ` — ${rack.name}` : ''}</span>
-                    <span className="text-[10px] text-slate-500 bg-slate-100 rounded px-1.5 font-medium">{rSlotCount}</span>
-                    <MoreVertical className="w-3 h-3 text-slate-300 hover:text-slate-500 flex-shrink-0" />
-                  </button>
-                );
-              })}
-              {isExpanded && wh.racks.length === 0 && (
-                <p className="pl-8 py-3 text-xs text-slate-400 border-b border-slate-50">No racks</p>
-              )}
-            </div>
+            <button key={a.id} disabled={disabled} onClick={() => onAction(a.id)}
+              className={cn('flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center transition-colors',
+                disabled ? 'border-slate-100 text-slate-300 cursor-not-allowed'
+                  : danger ? 'border-slate-200 text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-600'
+                  : 'border-slate-200 text-slate-600 hover:border-green-300 hover:bg-green-50 hover:text-green-700')}>
+              <Icon className="h-4 w-4" />
+              <span className="text-[11px] font-medium leading-tight">{a.label}</span>
+            </button>
           );
         })}
       </div>
+      {!slot && <p className="mt-2 text-[10px] text-slate-400 text-center">Select a slot to enable location actions</p>}
     </div>
   );
 }
 
-// ─── Slot Card ────────────────────────────────────────────────────────────────
-
-function SlotCard({ slot, isSelected, onClick }: { slot: SlotData; isSelected: boolean; onClick: () => void }) {
-  const cfg = SLOT_CFG[slot.status] ?? SLOT_CFG.EMPTY;
-  const stockCount = slot._count?.stockItems ?? 0;
-  const timeStr = slot.updatedAt ? (() => {
-    const diff = Date.now() - new Date(slot.updatedAt).getTime();
-    const h = Math.floor(diff / 3600000);
-    if (h < 1) return 'Just now';
-    if (h < 24) return `${h < 10 ? '0' : ''}${h}:${String(Math.floor((diff % 3600000) / 60000)).padStart(2, '0')} AM`;
-    const d = Math.floor(h / 24);
-    return `${d} day${d > 1 ? 's' : ''} ago`;
-  })() : '';
-
-  return (
-    <button
-      onClick={onClick}
-      className={cn('text-left border rounded-xl p-3 transition-all hover:shadow-md',
-        cfg.bg, cfg.border,
-        isSelected ? 'ring-2 ring-blue-400 shadow-md' : '',
-      )}
-    >
-      <div className="flex items-start justify-between mb-1.5">
-        <span className="font-bold text-slate-800 text-xs">{slot.code}</span>
-        <MoreHorizontal className="w-3.5 h-3.5 text-slate-300 hover:text-slate-500" />
-      </div>
-      <p className={cn('text-xs font-semibold mb-0.5', cfg.labelColor)}>{cfg.label}</p>
-      <p className="text-[10px] text-slate-400 mb-1">{slot.slotType === 'STANDARD' ? 'Normal' : slot.slotType}</p>
-      {stockCount > 0 && (
-        <div className="mb-1">
-          <p className="text-[10px] text-amber-600 font-medium">Qty: {stockCount}</p>
-        </div>
-      )}
-      {timeStr && (
-        <div className="flex items-center justify-between mt-1">
-          <p className="text-[10px] text-slate-400">Updated</p>
-          <p className="text-[10px] text-slate-400">{timeStr}</p>
-        </div>
-      )}
-    </button>
-  );
-}
-
-// ─── Slot Detail Bottom Panel ──────────────────────────────────────────────────
-
-function SlotDetailPanel({ slotDetail, onClose, onStatusChange }: {
-  slotDetail: any; onClose: () => void;
-  onStatusChange: (id: string, status: string) => void;
-}) {
-  if (!slotDetail) return null;
-  const cfg = SLOT_CFG[slotDetail.status as SlotStatus] ?? SLOT_CFG.EMPTY;
-  const first = slotDetail.stockItems?.[0];
-  const wh = slotDetail.rack?.warehouse;
-
-  return (
-    <div className="border-t border-slate-200 bg-white p-4 flex items-start gap-4 flex-shrink-0">
-      {/* Icon box */}
-      <div className={cn('w-16 h-16 rounded-xl flex flex-col items-center justify-center flex-shrink-0 border-2', cfg.bg, cfg.border)}>
-        <Package className={cn('w-5 h-5 mb-0.5', cfg.labelColor)} />
-        <span className="text-[10px] font-bold text-slate-700 text-center leading-tight px-1">{slotDetail.code}</span>
-      </div>
-
-      {/* Slot info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-0.5">
-          <span className="font-bold text-slate-900 text-sm">{slotDetail.code}</span>
-          <span className={cn('text-xs font-semibold px-2 py-0.5 rounded-full border', cfg.labelColor, cfg.bg, cfg.border)}>{cfg.label}</span>
-        </div>
-        {first && <p className="text-xs text-slate-500">{first.product?.code} | {first.product?.name}</p>}
-        <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-0.5">
-          <MapPin className="w-3 h-3" />
-          {[wh?.name, slotDetail.rack?.code, slotDetail.code].filter(Boolean).join(' > ')}
-        </div>
-      </div>
-
-      {/* Details grid */}
-      <div className="grid grid-cols-3 gap-x-8 gap-y-1 flex-shrink-0">
-        {[
-          { label: 'Quantity', value: first ? `${first.quantity} ${first.product?.unit ?? 'pcs'}` : '—' },
-          { label: 'UOM',      value: first?.product?.unit ?? '—' },
-          { label: 'Status',   value: cfg.label },
-          { label: 'Lot/Batch', value: first?.batchNumber ?? '—' },
-          { label: 'Expire',   value: first?.expiryDate ? new Date(first.expiryDate).toLocaleDateString('th-TH') : '—' },
-          { label: 'Type',     value: slotDetail.slotType ?? '—' },
-        ].map(({ label, value }) => (
-          <div key={label}>
-            <p className="text-[10px] text-slate-400">{label}</p>
-            <p className="text-xs font-semibold text-slate-800">{value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Actions */}
-      <div className="flex flex-col gap-1.5 flex-shrink-0">
-        <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 justify-start border-green-300 text-green-700 hover:bg-green-50">
-          <Pencil className="w-3 h-3" /> Edit Location
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 justify-start border-blue-300 text-blue-700 hover:bg-blue-50">
-          <ArrowRightLeft className="w-3 h-3" /> Move Stock
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 justify-start border-red-300 text-red-700 hover:bg-red-50"
-          onClick={() => onStatusChange(slotDetail.id, slotDetail.status === 'BLOCKED' ? 'EMPTY' : 'BLOCKED')}>
-          <Ban className="w-3 h-3" /> {slotDetail.status === 'BLOCKED' ? 'Unblock' : 'Block Location'}
-        </Button>
-        <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 justify-start">
-          <MoreHorizontal className="w-3 h-3" /> More Actions
-        </Button>
-      </div>
-
-      <button onClick={onClose} className="text-slate-300 hover:text-slate-500 flex-shrink-0 mt-0.5"><X className="w-4 h-4" /></button>
-    </div>
-  );
-}
-
-// ─── Right Panel: Rack & Slot Details ─────────────────────────────────────────
-
-function RackSlotDetails({
-  rack, wh, onAddSlot, onBulkGenerate,
-}: {
-  rack: RackData | null; wh: WarehouseData | null;
-  onAddSlot: (rackId: string) => void;
-  onBulkGenerate: (rack: RackData) => void;
-}) {
-  const [selectedSlot, setSelectedSlot] = useState<SlotData | null>(null);
-  const [slotDetail, setSlotDetail] = useState<any>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-
-  useEffect(() => { setSelectedSlot(null); setSlotDetail(null); }, [rack?.id]);
-
-  async function handleSelectSlot(slot: SlotData) {
-    setSelectedSlot(slot);
-    setLoadingDetail(true);
-    try { setSlotDetail(await warehouseApi.getSlotDetail(slot.id)); }
-    catch { setSlotDetail(null); }
-    finally { setLoadingDetail(false); }
-  }
-
-  async function handleStatusChange(slotId: string, status: string) {
-    try { await warehouseApi.updateSlot(slotId, { status }); toast.success(`Slot → ${status}`); setSlotDetail(null); setSelectedSlot(null); }
-    catch (e: any) { toast.error(e.message); }
-  }
-
-  if (!rack) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-white border border-slate-200 rounded-xl shadow-sm text-slate-400">
-        <div className="text-center">
-          <Layers className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">Select a rack from the tree</p>
-          <p className="text-sm mt-1">Click any rack in the Location Structure</p>
-        </div>
-      </div>
-    );
-  }
-
-  const slots = rack.slots;
-  const avail = slots.filter((s) => s.status === 'EMPTY').length;
-  const occ   = slots.filter((s) => s.status === 'OCCUPIED').length;
-  const blk   = slots.filter((s) => s.status === 'BLOCKED').length;
-  const qrn   = slots.filter((s) => s.status === 'QUARANTINE').length;
-
-  return (
-    <div className="flex-1 min-w-0 flex flex-col bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="px-5 py-3 border-b border-slate-100 flex items-start justify-between flex-shrink-0">
-        <div>
-          <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-0.5">
-            <span>{wh?.name}</span>
-            <ChevronRight className="w-3 h-3" />
-            <span className="font-medium text-slate-600">{rack.code}</span>
-          </div>
-          <h2 className="font-bold text-slate-900 text-base">Rack & Slot Details</h2>
-          <div className="flex items-center gap-1 mt-0.5">
-            {[
-              { dot: 'bg-green-500',  label: 'Available' },
-              { dot: 'bg-amber-500',  label: 'Occupied' },
-              { dot: 'bg-red-500',    label: 'Blocked' },
-              { dot: 'bg-purple-500', label: 'Quarantine' },
-            ].map(({ dot, label }) => (
-              <div key={label} className="flex items-center gap-1 mr-3">
-                <span className={`w-2 h-2 rounded-full ${dot}`} />
-                <span className="text-[10px] text-slate-500">{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Rack sub-header */}
-      <div className="px-5 py-2.5 border-b border-slate-100 flex items-center gap-4 bg-slate-50/50 flex-shrink-0">
-        <div>
-          <span className="font-bold text-slate-900">{rack.code}</span>
-          {rack.name && <span className="text-slate-500 text-xs ml-2">{rack.name}</span>}
-          {rack.zone && <span className="ml-2 text-xs bg-slate-200 text-slate-600 rounded px-1.5 py-0.5">{rack.zone}</span>}
-        </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500">
-          <span>{slots.length} Slots</span>
-          {avail > 0 && <span className="text-green-600">{avail} Available</span>}
-          {occ > 0   && <span className="text-amber-600">{occ} Occupied</span>}
-          {blk > 0   && <span className="text-red-600">{blk} Blocked</span>}
-          {qrn > 0   && <span className="text-purple-600">{qrn} Quarantine</span>}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => onAddSlot(rack.id)}>
-            <Plus className="w-3.5 h-3.5" /> Add Slot
-          </Button>
-          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => onBulkGenerate(rack)}>
-            <Zap className="w-3.5 h-3.5 text-amber-500" /> Bulk Generate
-          </Button>
-          <button className="w-7 h-7 flex items-center justify-center rounded-lg border border-slate-200 hover:bg-slate-100">
-            <MoreVertical className="w-4 h-4 text-slate-400" />
-          </button>
-        </div>
-      </div>
-
-      {/* Slot Grid */}
-      <div className="flex-1 overflow-y-auto p-4">
-        {slots.length === 0 ? (
-          <div className="text-center py-12 text-slate-400">
-            <div className="w-12 h-12 rounded-xl border-2 border-dashed border-slate-300 mx-auto mb-3 flex items-center justify-center">
-              <Plus className="w-5 h-5" />
-            </div>
-            <p className="font-medium">No slots in this rack</p>
-            <p className="text-sm mt-1">Use Bulk Generate to create slots quickly</p>
-            <Button className="mt-3 bg-blue-600 hover:bg-blue-700 text-white gap-1.5 text-xs" size="sm" onClick={() => onBulkGenerate(rack)}>
-              <Zap className="w-3.5 h-3.5" /> Bulk Generate
-            </Button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 2xl:grid-cols-6 gap-3">
-            {slots.map((slot) => (
-              <SlotCard
-                key={slot.id}
-                slot={slot}
-                isSelected={selectedSlot?.id === slot.id}
-                onClick={() => handleSelectSlot(slot)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Slot detail panel */}
-      {loadingDetail && (
-        <div className="border-t border-slate-200 p-4 flex items-center gap-3 flex-shrink-0">
-          <Skeleton className="w-16 h-16 rounded-xl" />
-          <div className="flex-1 space-y-2"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-56" /></div>
-        </div>
-      )}
-      {!loadingDetail && slotDetail && (
-        <SlotDetailPanel
-          slotDetail={slotDetail}
-          onClose={() => { setSelectedSlot(null); setSlotDetail(null); }}
-          onStatusChange={handleStatusChange}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Modals (Create Rack / Slot / Bulk) ───────────────────────────────────────
-
-function CreateRackModal({ whId, onClose, onDone }: { whId: string; onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ code: '', name: '', zone: '', rackType: 'STANDARD', levels: 5, columns: 10 });
-  const [busy, setBusy] = useState(false);
-  const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.code) { toast.error('Rack code required'); return; }
-    setBusy(true);
-    try { await warehouseApi.createRack({ ...form, warehouseId: whId, levels: +form.levels, columns: +form.columns }); toast.success(`Rack ${form.code} created`); onDone(); }
-    catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
-  }
-  return (
-    <ModalWrap title="Create Rack" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Fld label="Rack Code *"><Input placeholder="R-01" value={form.code} onChange={F('code')} /></Fld>
-          <Fld label="Name"><Input placeholder="Rack A1" value={form.name} onChange={F('name')} /></Fld>
-          <Fld label="Zone"><Input placeholder="ZONE-A" value={form.zone} onChange={F('zone')} /></Fld>
-          <Fld label="Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.rackType} onChange={F('rackType')}>
-            {['STANDARD','DRIVE_IN','PUSH_BACK','CANTILEVER','FLOW','MEZZANINE','PALLET'].map((t) => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
-          </select></Fld>
-          <Fld label="Levels"><Input type="number" min={1} value={form.levels} onChange={F('levels')} /></Fld>
-          <Fld label="Columns"><Input type="number" min={1} value={form.columns} onChange={F('columns')} /></Fld>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white" disabled={busy}>{busy ? 'Creating…' : 'Create Rack'}</Button>
-        </div>
-      </form>
-    </ModalWrap>
-  );
-}
-
-function BulkGenerateModal({ rack, onClose, onDone }: { rack: RackData; onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ levels: rack.levels, columns: rack.columns, slotType: 'STANDARD', capacity: 1, prefix: rack.code });
-  const [busy, setBusy] = useState(false);
-  const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
-  const preview = +form.levels * +form.columns;
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try { const r = await warehouseApi.bulkGenerateSlots(rack.id, { ...form, levels: +form.levels, columns: +form.columns, capacity: +form.capacity }); toast.success(`Created ${r.created} slots`); onDone(); }
-    catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
-  }
-  return (
-    <ModalWrap title={`Bulk Generate — ${rack.code}`} onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">Will generate <strong>{preview}</strong> slots ({form.levels}L × {form.columns}C). Existing skipped.</div>
-        <div className="grid grid-cols-2 gap-3">
-          <Fld label="Levels"><Input type="number" min={1} value={form.levels} onChange={F('levels')} /></Fld>
-          <Fld label="Columns"><Input type="number" min={1} value={form.columns} onChange={F('columns')} /></Fld>
-          <Fld label="Prefix"><Input value={form.prefix} onChange={F('prefix')} /></Fld>
-          <Fld label="Slot Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.slotType} onChange={F('slotType')}>
-            {['STANDARD','PALLET','BULK','COLD','HAZMAT','OVERSIZE'].map((t) => <option key={t} value={t}>{t}</option>)}
-          </select></Fld>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button type="submit" className="flex-1 bg-amber-500 hover:bg-amber-600 text-white" disabled={busy}>{busy ? 'Generating…' : `Generate ${preview} Slots`}</Button>
-        </div>
-      </form>
-    </ModalWrap>
-  );
-}
-
-function AddSlotModal({ rackId, onClose, onDone }: { rackId: string; onClose: () => void; onDone: () => void }) {
-  const [form, setForm] = useState({ code: '', level: 1, column: 1, slotType: 'STANDARD', capacity: 1 });
-  const [busy, setBusy] = useState(false);
-  const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.code) { toast.error('Slot code required'); return; }
-    setBusy(true);
-    try { await warehouseApi.createSlot(rackId, { ...form, level: +form.level, column: +form.column, capacity: +form.capacity }); toast.success('Slot created'); onDone(); }
-    catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
-  }
-  return (
-    <ModalWrap title="Add Slot" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          <Fld label="Slot Code *"><Input placeholder="A01-001" value={form.code} onChange={F('code')} /></Fld>
-          <Fld label="Slot Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.slotType} onChange={F('slotType')}>
-            {['STANDARD','PALLET','BULK','COLD','HAZMAT','OVERSIZE'].map((t) => <option key={t} value={t}>{t}</option>)}
-          </select></Fld>
-          <Fld label="Level"><Input type="number" min={1} value={form.level} onChange={F('level')} /></Fld>
-          <Fld label="Column"><Input type="number" min={1} value={form.column} onChange={F('column')} /></Fld>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white" disabled={busy}>{busy ? 'Creating…' : 'Add Slot'}</Button>
-        </div>
-      </form>
-    </ModalWrap>
-  );
-}
-
-// ─── Modal helpers ────────────────────────────────────────────────────────────
+// ─── Modals (reused) ────────────────────────────────────────────────────────────
 
 function ModalWrap({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
@@ -636,152 +360,231 @@ function Fld({ label, children }: { label: string; children: React.ReactNode }) 
   return <div><label className="text-xs font-medium text-slate-600 block mb-1">{label}</label>{children}</div>;
 }
 
-// ─── Tab bar ──────────────────────────────────────────────────────────────────
+function CreateRackModal({ whId, onClose, onDone }: { whId: string; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ code: '', name: '', zone: '', rackType: 'STANDARD', levels: 5, columns: 10 });
+  const [busy, setBusy] = useState(false);
+  const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!form.code) { toast.error('Rack code required'); return; }
+    setBusy(true);
+    try { await warehouseApi.createRack({ ...form, warehouseId: whId, levels: +form.levels, columns: +form.columns }); toast.success(`Rack ${form.code} created`); onDone(); }
+    catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <ModalWrap title="Create Location (Rack)" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Fld label="Rack Code *"><Input placeholder="R-01" value={form.code} onChange={F('code')} /></Fld>
+          <Fld label="Name"><Input placeholder="Rack A1" value={form.name} onChange={F('name')} /></Fld>
+          <Fld label="Zone"><Input placeholder="ZONE-A" value={form.zone} onChange={F('zone')} /></Fld>
+          <Fld label="Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.rackType} onChange={F('rackType')}>
+            {['STANDARD','DRIVE_IN','PUSH_BACK','CANTILEVER','FLOW','MEZZANINE','PALLET'].map((t) => <option key={t} value={t}>{t.replace(/_/g,' ')}</option>)}
+          </select></Fld>
+          <Fld label="Levels"><Input type="number" min={1} value={form.levels} onChange={F('levels')} /></Fld>
+          <Fld label="Columns"><Input type="number" min={1} value={form.columns} onChange={F('columns')} /></Fld>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+          <Button type="submit" className="flex-1 bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Creating…' : 'Create Rack'}</Button>
+        </div>
+      </form>
+    </ModalWrap>
+  );
+}
 
-const TABS = [
-  { id: 'structure', label: 'Location Structure', icon: Layers },
-  { id: 'map',       label: 'Location Map',       icon: MapPin },
-  { id: 'list',      label: 'Location List',      icon: List },
-  { id: 'adjust',    label: 'Adjust Location',    icon: SlidersHorizontal },
-];
+function EditSlotModal({ slot, onClose, onDone }: { slot: SlotData; onClose: () => void; onDone: () => void }) {
+  const [form, setForm] = useState({ name: slot.name ?? '', slotType: slot.slotType, capacity: slot.capacity, status: slot.status });
+  const [busy, setBusy] = useState(false);
+  const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try { await warehouseApi.updateSlot(slot.id, { ...form, capacity: +form.capacity }); toast.success(`Slot ${slot.code} updated`); onDone(); }
+    catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <ModalWrap title={`Edit Location — ${slot.code}`} onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Fld label="Name"><Input value={form.name} onChange={F('name')} /></Fld>
+          <Fld label="Capacity"><Input type="number" min={1} value={form.capacity} onChange={F('capacity')} /></Fld>
+          <Fld label="Slot Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.slotType} onChange={F('slotType')}>
+            {['STANDARD','PALLET','BULK','COLD','HAZMAT','OVERSIZE'].map((t) => <option key={t} value={t}>{t}</option>)}
+          </select></Fld>
+          <Fld label="Status"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.status} onChange={F('status')}>
+            {(['EMPTY','OCCUPIED','RESERVED','QUARANTINE','RTV','BLOCKED'] as SlotStatus[]).map((t) => <option key={t} value={t}>{SLOT_CFG[t].label}</option>)}
+          </select></Fld>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+          <Button type="submit" className="flex-1 bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
+        </div>
+      </form>
+    </ModalWrap>
+  );
+}
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
+// ─── Print label (client-side, no API) ──────────────────────────────────────────
 
-export default function WarehouseLayoutPage() {
+function printLabel(wh: WarehouseData | null, rack: RackData | null, slot: SlotData) {
+  const w = window.open('', '_blank', 'width=420,height=300');
+  if (!w) { toast.error('Pop-up blocked'); return; }
+  w.document.write(`<html><head><title>Label ${slot.code}</title><style>
+    body{font-family:Segoe UI,sans-serif;margin:0;padding:24px}
+    .lbl{border:2px solid #111;border-radius:10px;padding:18px;width:320px}
+    .code{font-size:30px;font-weight:800;letter-spacing:1px}
+    .row{font-size:13px;color:#333;margin-top:4px}
+    .muted{color:#666;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+  </style></head><body onload="window.print()">
+    <div class="lbl">
+      <div class="muted">Hightpoint WMS · Location</div>
+      <div class="code">${slot.code}</div>
+      <div class="row">${wh?.name ?? ''} · ${rack?.code ?? ''}</div>
+      <div class="row muted">${slot.slotType} · cap ${slot.capacity}</div>
+    </div>
+  </body></html>`);
+  w.document.close();
+}
+
+// ─── Main Page ──────────────────────────────────────────────────────────────────
+
+export default function WarehouseControlCenter() {
+  const router = useRouter();
   const [warehouses, setWarehouses] = useState<WarehouseData[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('structure');
   const [selectedWhId, setSelectedWhId] = useState('');
-  const [selectedRack, setSelectedRack] = useState<RackData | null>(null);
-  const [selectedWh, setSelectedWh] = useState<WarehouseData | null>(null);
-  const [whSearch, setWhSearch] = useState('');
-
-  // Modals
-  type ModalState =
-    | { type: 'createRack'; whId: string }
-    | { type: 'bulkGenerate'; rack: RackData }
-    | { type: 'addSlot'; rackId: string }
-    | null;
+  const [expandedRackId, setExpandedRackId] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState<SlotData | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [search, setSearch] = useState('');
+  type ModalState = { type: 'createRack'; whId: string } | { type: 'editSlot'; slot: SlotData } | null;
   const [modal, setModal] = useState<ModalState>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [whs, s] = await Promise.all([warehouseApi.list(), warehouseApi.stats()]);
+      const whs = await warehouseApi.list();
       setWarehouses(whs);
-      setStats(s);
-    } catch { toast.error('Failed to load'); }
+      setSelectedWhId((cur) => cur || whs[0]?.id || '');
+    } catch { toast.error('Failed to load warehouses'); }
     finally { setLoading(false); }
   }, []);
-
   useEffect(() => { load(); }, [load]);
 
-  function handleSelectWh(id: string) {
-    setSelectedWhId(id);
-    setSelectedRack(null);
-    setSelectedWh(warehouses.find((w) => w.id === id) ?? null);
+  const selectedWh = warehouses.find((w) => w.id === selectedWhId) ?? null;
+  const selectedRack = selectedWh?.racks.find((r) => r.id === expandedRackId) ?? null;
+  const rackOfSelectedSlot = selectedWh?.racks.find((r) => r.slots.some((s) => s.id === selectedSlot?.id)) ?? selectedRack;
+
+  // Global capacity KPIs (placement-based)
+  const kpis = useMemo(() => {
+    const agg = warehouses.reduce((acc, w) => {
+      const m = whMetrics(w);
+      return { total: acc.total + m.total, occupied: acc.occupied + m.occupied, available: acc.available + m.available, blocked: acc.blocked + m.blocked };
+    }, { total: 0, occupied: 0, available: 0, blocked: 0 });
+    return { warehouses: warehouses.length, ...agg, rate: agg.total ? Math.round((agg.occupied / agg.total) * 100) : 0 };
+  }, [warehouses]);
+
+  async function selectSlot(s: SlotData) {
+    setSelectedSlot(s);
+    setLoadingDetail(true);
+    try { setDetail(await warehouseApi.getSlotDetail(s.id)); }
+    catch { setDetail(null); }
+    finally { setLoadingDetail(false); }
   }
 
-  function handleSelectRack(rack: RackData, wh: WarehouseData) {
-    setSelectedRack(rack);
-    setSelectedWh(wh);
-    setSelectedWhId(wh.id);
+  async function handleAction(a: string) {
+    const slot = selectedSlot;
+    switch (a) {
+      case 'edit': if (slot) setModal({ type: 'editSlot', slot }); break;
+      case 'create': setModal({ type: 'createRack', whId: selectedWhId }); break;
+      case 'move':
+      case 'transfer': router.push('/transfer'); break;
+      case 'cycle': router.push('/cycle-count'); break;
+      case 'history': router.push('/audit'); break;
+      case 'print': if (slot) printLabel(selectedWh, rackOfSelectedSlot, slot); break;
+      case 'block':
+        if (!slot) break;
+        try {
+          const next = slot.status === 'BLOCKED' ? 'EMPTY' : 'BLOCKED';
+          await warehouseApi.updateSlot(slot.id, { status: next });
+          toast.success(`Slot ${slot.code} → ${SLOT_CFG[next as SlotStatus].label}`);
+          await load(); await selectSlot({ ...slot, status: next as SlotStatus });
+        } catch (e: any) { toast.error(e.message); }
+        break;
+    }
   }
 
-  const currentWh = warehouses.find((w) => w.id === selectedWhId) ?? null;
-  const createWhId = currentWh?.id ?? warehouses[0]?.id ?? '';
+  const filteredRacks = (selectedWh?.racks ?? []).filter((r) =>
+    !search || r.code.toLowerCase().includes(search.toLowerCase()) || (r.name ?? '').toLowerCase().includes(search.toLowerCase()));
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-slate-100">
-
-      {/* ── Page Header ───────────────────────────────────────────────── */}
-      <div className="bg-white border-b border-slate-200 px-6 py-3 flex-shrink-0">
-        <div className="flex items-start justify-between mb-1">
-          <div>
-            <h1 className="text-xl font-bold text-slate-900">Warehouse / Rack / Slot</h1>
-            <nav className="flex items-center gap-1 text-xs text-slate-400 mt-0.5">
-              <span>Home</span><ChevronRight className="w-3 h-3" />
-              <span>Warehouse</span><ChevronRight className="w-3 h-3" />
-              <span className="text-slate-600 font-medium">Location Structure</span>
-            </nav>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={load} disabled={loading}>
-              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
-            </Button>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-              <Download className="w-3.5 h-3.5" /> Import Locations
-            </Button>
-            <Button size="sm" className="h-8 bg-teal-600 hover:bg-teal-700 text-white gap-1.5 text-xs"
-              onClick={() => setModal({ type: 'createRack', whId: createWhId })}>
-              <Plus className="w-3.5 h-3.5" /> Create Location
-            </Button>
-          </div>
+    <div className="p-4 sm:p-5 space-y-4 bg-slate-50 min-h-full">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600">Hightpoint Service Network</p>
+          <h1 className="text-2xl font-bold text-slate-900 mt-0.5">Warehouse Operations Control Center</h1>
+          <p className="text-slate-500 text-sm mt-0.5">Live occupancy from actual stock placement</p>
         </div>
-        {/* Tab bar */}
-        <div className="flex gap-1 mt-2">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={cn('flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-all',
-                tab === id ? 'bg-teal-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100')}
-            >
-              <Icon className="w-3.5 h-3.5" /> {label}
-            </button>
-          ))}
+        <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
+          <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /> Refresh
+        </Button>
+      </div>
+
+      {/* Row 1 — Capacity Dashboard */}
+      <CapacityDashboard kpis={kpis} loading={loading} />
+
+      {/* Row 2 — Storage Utilization + warehouse selector */}
+      <WarehouseUtilization warehouses={warehouses} selectedId={selectedWhId} onSelect={(id) => { setSelectedWhId(id); setExpandedRackId(''); setSelectedSlot(null); setDetail(null); }} loading={loading} />
+
+      {/* Row 3 — Working area: heatmap (center) + profile & quick actions (right, fixed) */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+        {/* Center: racks + slot heatmap */}
+        <div className="xl:col-span-2 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">{selectedWh ? `${selectedWh.name} · Racks & Slots` : 'Racks & Slots'}</h2>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search rack…" className="h-8 w-40 text-xs" />
+              </div>
+              <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => setModal({ type: 'createRack', whId: selectedWhId })} disabled={!selectedWhId}>
+                <Plus className="w-3.5 h-3.5" /> Create Location
+              </Button>
+            </div>
+          </div>
+          {loading ? (
+            <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>
+          ) : filteredRacks.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-10 text-center shadow-sm">
+              <Layers className="h-10 w-10 mx-auto text-slate-300" />
+              <p className="mt-2 text-sm font-medium text-slate-600">{selectedWh ? 'No racks in this warehouse yet' : 'Select a warehouse'}</p>
+              {selectedWh && <p className="text-xs text-slate-400 mt-0.5">Use “Create Location” to add racks &amp; slots</p>}
+            </div>
+          ) : (
+            filteredRacks.map((rack) => (
+              <RackCard key={rack.id} rack={rack}
+                expanded={expandedRackId === rack.id}
+                onToggle={() => setExpandedRackId((cur) => cur === rack.id ? '' : rack.id)}
+                onSelectSlot={selectSlot} selectedSlotId={selectedSlot?.id ?? ''} />
+            ))
+          )}
+        </div>
+
+        {/* Right: fixed quick actions + location profile */}
+        <div className="space-y-4 xl:sticky xl:top-4">
+          <QuickActions slot={selectedSlot} onAction={handleAction} />
+          <LocationProfile wh={selectedWh} rack={rackOfSelectedSlot} slot={selectedSlot} detail={detail} loadingDetail={loadingDetail} />
         </div>
       </div>
 
-      {/* ── Content ───────────────────────────────────────────────────── */}
-      {tab === 'structure' ? (
-        <div className="flex-1 overflow-hidden p-4 flex gap-4 min-h-0">
-          {loading ? (
-            <div className="flex gap-4 w-full">
-              <Skeleton className="w-56 rounded-xl flex-shrink-0" />
-              <Skeleton className="w-64 rounded-xl flex-shrink-0" />
-              <Skeleton className="flex-1 rounded-xl" />
-            </div>
-          ) : (
-            <>
-              <WarehouseFilterPanel
-                warehouses={warehouses} stats={stats}
-                selectedWhId={selectedWhId} onSelectWh={handleSelectWh}
-                search={whSearch} onSearch={setWhSearch}
-              />
-              <LocationTree
-                warehouses={warehouses} selectedWhId={selectedWhId}
-                selectedRackId={selectedRack?.id ?? ''}
-                onSelectRack={handleSelectRack}
-              />
-              <RackSlotDetails
-                rack={selectedRack} wh={selectedWh}
-                onAddSlot={(rackId) => setModal({ type: 'addSlot', rackId })}
-                onBulkGenerate={(rack) => setModal({ type: 'bulkGenerate', rack })}
-              />
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-slate-400">
-          <div className="text-center">
-            <Layers className="w-10 h-10 mx-auto mb-2 opacity-30" />
-            <p className="font-medium">{TABS.find((t) => t.id === tab)?.label}</p>
-            <p className="text-sm mt-1">Coming soon</p>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modals ────────────────────────────────────────────────────── */}
+      {/* Modals */}
       {modal?.type === 'createRack' && (
         <CreateRackModal whId={modal.whId} onClose={() => setModal(null)} onDone={() => { setModal(null); load(); }} />
       )}
-      {modal?.type === 'bulkGenerate' && (
-        <BulkGenerateModal rack={modal.rack} onClose={() => setModal(null)} onDone={() => { setModal(null); load(); }} />
-      )}
-      {modal?.type === 'addSlot' && (
-        <AddSlotModal rackId={modal.rackId} onClose={() => setModal(null)} onDone={() => { setModal(null); load(); }} />
+      {modal?.type === 'editSlot' && (
+        <EditSlotModal slot={modal.slot} onClose={() => setModal(null)} onDone={() => { setModal(null); load(); selectSlot(modal.slot); }} />
       )}
     </div>
   );

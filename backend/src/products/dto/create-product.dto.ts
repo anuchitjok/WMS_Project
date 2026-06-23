@@ -1,6 +1,6 @@
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsEnum, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ProductType } from '@prisma/client';
+import { ProductType, ProductStatus } from '@prisma/client';
 
 export class CreateProductDto {
   @ApiProperty()
@@ -13,7 +13,7 @@ export class CreateProductDto {
   @IsNotEmpty({ message: 'name is required' })
   name: string;
 
-  @ApiPropertyOptional({ description: 'Long description (2000+ chars)' })
+  @ApiPropertyOptional()
   @IsString()
   @IsOptional()
   description?: string;
@@ -32,6 +32,11 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   partNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  vendorPartNumber?: string;
 
   @ApiPropertyOptional({ enum: ProductType, default: 'SPARE_PART' })
   @IsEnum(ProductType)
@@ -64,11 +69,21 @@ export class CreateProductDto {
   @IsOptional()
   serialControlled?: boolean;
 
+  @ApiPropertyOptional({ description: 'If true, batch/lot number mandatory on receiving' })
+  @IsBoolean()
+  @IsOptional()
+  batchControlled?: boolean;
+
   @ApiPropertyOptional({ minimum: 0 })
   @IsNumber()
   @Min(0)
   @IsOptional()
   minStock?: number;
+
+  @ApiPropertyOptional({ enum: ProductStatus, default: 'ACTIVE' })
+  @IsEnum(ProductStatus)
+  @IsOptional()
+  productStatus?: ProductStatus;
 }
 
 export class UpdateProductDto {
@@ -96,6 +111,11 @@ export class UpdateProductDto {
   @IsString()
   @IsOptional()
   partNumber?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  vendorPartNumber?: string;
 
   @ApiPropertyOptional({ enum: ProductType })
   @IsEnum(ProductType)
@@ -128,9 +148,25 @@ export class UpdateProductDto {
   @IsOptional()
   serialControlled?: boolean;
 
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  batchControlled?: boolean;
+
   @ApiPropertyOptional({ minimum: 0 })
   @IsNumber()
   @Min(0)
   @IsOptional()
   minStock?: number;
+
+  @ApiPropertyOptional({ enum: ProductStatus })
+  @IsEnum(ProductStatus)
+  @IsOptional()
+  productStatus?: ProductStatus;
+}
+
+export class ChangeProductStatusDto {
+  @ApiProperty({ enum: ProductStatus })
+  @IsEnum(ProductStatus)
+  productStatus: ProductStatus;
 }

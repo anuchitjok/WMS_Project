@@ -88,7 +88,7 @@ export const inventoryApi = {
   updateLocation: (id: string, loc: { warehouseId?: string; rackId?: string; slotId?: string }) =>
     request<StockItem>(`/inventory/${id}/location`, { method: 'PATCH', body: JSON.stringify(loc) }),
   summary: () => request<unknown>('/inventory/summary'),
-  kpi: () => request<any>('/inventory/kpi'),
+  kpi: (warehouseId?: string) => request<any>(`/inventory/kpi${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
   enterpriseList: (filter: Record<string, any> = {}) => {
     const q = new URLSearchParams();
     Object.entries(filter).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== false) q.set(k, String(v)); });
@@ -142,9 +142,13 @@ export const requestsApi = {
     return request<PaginatedResponse<WithdrawalRequest>>(`/requests?${q}`);
   },
   get: (id: string) => request<WithdrawalRequest>(`/requests/${id}`),
-  create: (data: { department: string; purpose?: string; items: { productId: string; quantity: number }[] }) =>
+  create: (data: { rmaCaseNumber: string; remark?: string; department?: string; purpose?: string; items: { productId: string; quantity: number }[] }) =>
     request<WithdrawalRequest>('/requests', { method: 'POST', body: JSON.stringify(data) }),
+  rmaCases: () => request<any[]>('/requests/rma-cases'),
+  productsAvailable: (brandId?: string) =>
+    request<any[]>(`/requests/products-available${brandId ? `?brandId=${brandId}` : ''}`),
   submit: (id: string) => request<WithdrawalRequest>(`/requests/${id}/submit`, { method: 'PATCH' }),
+  cancel: (id: string) => request<WithdrawalRequest>(`/requests/${id}/cancel`, { method: 'PATCH' }),
   approve: (id: string, approved: boolean, rejectReason?: string) =>
     request<WithdrawalRequest>(`/requests/${id}/approve`, {
       method: 'PATCH',
@@ -222,14 +226,55 @@ export const warehouseApi = {
   updateSlot: (id: string, dto: any) => request<any>(`/warehouse/slots/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
   deleteSlot: (id: string) => request<any>(`/warehouse/slots/${id}`, { method: 'DELETE' }),
   getSlotDetail: (id: string) => request<any>(`/warehouse/slots/${id}/detail`),
+  // Brand Master
+  brandsManaged: () => request<any[]>('/warehouse/brands/managed'),
+  createBrand: (dto: { code?: string; name: string; contact?: string }) => request<any>('/warehouse/brands', { method: 'POST', body: JSON.stringify(dto) }),
+  updateBrand: (id: string, dto: { name?: string; contact?: string; isActive?: boolean }) => request<any>(`/warehouse/brands/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteBrand: (id: string) => request<any>(`/warehouse/brands/${id}`, { method: 'DELETE' }),
+  // Vendor Master
+  vendorsManaged: () => request<any[]>('/warehouse/vendors/managed'),
+  createVendor: (dto: { code: string; name: string; contact?: string; email?: string }) => request<any>('/warehouse/vendors', { method: 'POST', body: JSON.stringify(dto) }),
+  updateVendor: (id: string, dto: { name?: string; contact?: string; email?: string; isActive?: boolean }) => request<any>(`/warehouse/vendors/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteVendor: (id: string) => request<any>(`/warehouse/vendors/${id}`, { method: 'DELETE' }),
+  // Phase 2: per-brand inventory rollup
+  inventoryByBrand: () => request<any[]>('/warehouse/inventory-by-brand'),
+};
+
+// Warehouse Master (admin structure management — separate from Operations Control Center)
+export const warehouseMasterApi = {
+  tree: () => request<any[]>('/warehouse-master'),
+  summary: () => request<{ totalWarehouses: number; activeWarehouses: number; totalRacks: number; totalSlots: number }>('/warehouse-master/summary'),
+  impact: (entity: 'warehouse' | 'rack' | 'slot', id: string) => request<any>(`/warehouse-master/${entity}/${id}/impact`),
+  // Warehouse
+  createWarehouse: (dto: { code: string; name: string; location?: string }) => request<any>('/warehouse-master/warehouses', { method: 'POST', body: JSON.stringify(dto) }),
+  updateWarehouse: (id: string, dto: { name?: string; location?: string }) => request<any>(`/warehouse-master/warehouses/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  activateWarehouse: (id: string) => request<any>(`/warehouse-master/warehouses/${id}/activate`, { method: 'PATCH', body: '{}' }),
+  deactivateWarehouse: (id: string) => request<any>(`/warehouse-master/warehouses/${id}/deactivate`, { method: 'PATCH', body: '{}' }),
+  // Rack
+  createRack: (dto: any) => request<any>('/warehouse-master/racks', { method: 'POST', body: JSON.stringify(dto) }),
+  updateRack: (id: string, dto: any) => request<any>(`/warehouse-master/racks/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteRack: (id: string) => request<any>(`/warehouse-master/racks/${id}`, { method: 'DELETE' }),
+  // Slot
+  createSlot: (dto: any) => request<any>('/warehouse-master/slots', { method: 'POST', body: JSON.stringify(dto) }),
+  updateSlot: (id: string, dto: any) => request<any>(`/warehouse-master/slots/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteSlot: (id: string) => request<any>(`/warehouse-master/slots/${id}`, { method: 'DELETE' }),
 };
 
 // Receiving
+export interface ReceivingImportRow { rowNumber: number; data: Record<string, any>; errors: string[]; valid: boolean }
+export interface ReceivingImportPreview { columns: string[]; rows: ReceivingImportRow[]; summary: { total: number; valid: number; invalid: number } }
 export const receivingApi = {
   list: (status?: string) => request<any[]>(`/receiving${status ? `?status=${status}` : ''}`),
   get: (id: string) => request<any>(`/receiving/${id}`),
   create: (dto: any) => request<any>('/receiving', { method: 'POST', body: JSON.stringify(dto) }),
+  inspect: (id: string, dto: { items: { itemId: string; inspectedQty: number; inspectionOutcome: string; inspectorNotes?: string; serialNumber?: string; batchNumber?: string }[] }) =>
+    request<any>(`/receiving/${id}/inspect`, { method: 'PATCH', body: JSON.stringify(dto) }),
   verify: (id: string) => request<any>(`/receiving/${id}/verify`, { method: 'PATCH' }),
+  // Bulk import (one file = one goods receipt)
+  importTemplate: () => downloadFile('/receiving/import/template', 'template-receiving.xlsx'),
+  importPreview: (file: File) => uploadMultipart<ReceivingImportPreview>('/receiving/import/preview', file),
+  importCommit: (header: Record<string, string | undefined>, file: File) =>
+    uploadMultipart<any>('/receiving/import/commit', file, header),
 };
 
 // Putaway
@@ -347,6 +392,9 @@ export const productsApi = {
   get: (id: string) => request<any>(`/products/${id}`),
   create: (dto: any) => request<any>('/products', { method: 'POST', body: JSON.stringify(dto) }),
   update: (id: string, dto: any) => request<any>(`/products/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  changeStatus: (id: string, productStatus: string) =>
+    request<any>(`/products/${id}/status`, { method: 'PATCH', body: JSON.stringify({ productStatus }) }),
+  activeForDropdown: () => request<any[]>('/products/active'),
   // KPI & Enterprise
   kpi: () => request<any>('/products/kpi'),
   enterpriseList: (filter: Record<string, any> = {}) => {
@@ -390,8 +438,21 @@ export const settingsApi = {
 };
 
 // Reports
+export type ReportType = 'master-data' | 'balance' | 'receive';
+export interface ReportColumn { header: string; key: string }
+export interface ReportResult { columns: ReportColumn[]; rows: Record<string, any>[] }
+function reportQuery(filters: Record<string, string | undefined> = {}) {
+  const q = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => { if (v) q.set(k, v); });
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
 export const reportsApi = {
   summary: () => request<any>('/reports/summary'),
+  data: (report: ReportType, filters: Record<string, string | undefined> = {}) =>
+    request<ReportResult>(`/reports/${report}${reportQuery(filters)}`),
+  export: (report: ReportType, format: 'xlsx' | 'csv', filters: Record<string, string | undefined> = {}) =>
+    downloadFile(`/reports/${report}/export${reportQuery({ ...filters, format })}`, `${report}.${format}`),
 };
 
 // RTV
@@ -427,6 +488,31 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
   const token = getToken();
   const fd = new FormData();
   fd.append('file', file);
+  const res = await fetch(`${BASE}/api${path}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, // no Content-Type — browser sets boundary
+    body: fd,
+  });
+  if (res.status === 401) {
+    localStorage.removeItem('wms_token');
+    if (typeof window !== 'undefined') window.location.href = '/login';
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: 'Upload failed' }));
+    const msg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
+    throw new Error(msg || `Upload failed (${res.status})`);
+  }
+  return res.json();
+}
+
+// Upload a file plus optional extra form fields (multipart) — for flows that
+// carry header metadata alongside the spreadsheet (e.g. Goods Receiving import).
+async function uploadMultipart<T>(path: string, file: File, fields: Record<string, string | undefined> = {}): Promise<T> {
+  const token = getToken();
+  const fd = new FormData();
+  fd.append('file', file);
+  Object.entries(fields).forEach(([k, v]) => { if (v != null && v !== '') fd.append(k, v); });
   const res = await fetch(`${BASE}/api${path}`, {
     method: 'POST',
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, // no Content-Type — browser sets boundary

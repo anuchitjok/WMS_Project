@@ -41,3 +41,13 @@ generated/
 # Misc
 *.pptx~
 ~$*
+
+# Binaries & local tunneling tooling
+*.exe
+cloudflared*
+config.yml
+
+# Local backups & data/report dumps
+backups/
+backend/backups/
+*.xlsx

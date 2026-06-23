@@ -69,10 +69,20 @@ export class CreateReceivingDto {
   @IsNotEmpty()
   sourceType: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'RMA reference / case no. (free text, user-entered)' })
   @IsString()
   @IsOptional()
   sourceRef?: string;
+
+  @ApiPropertyOptional({ description: 'Air waybill number' })
+  @IsString()
+  @IsOptional()
+  awbNumber?: string;
+
+  @ApiPropertyOptional({ description: 'Invoice number' })
+  @IsString()
+  @IsOptional()
+  invoiceNumber?: string;
 
   @ApiPropertyOptional({ description: 'Purchase order reference' })
   @IsString()

@@ -54,57 +54,57 @@ export default function RolesPage() {
     try {
       const codes = [...(matrix[roleId] ?? [])].map((id) => idToCode.get(id)).filter(Boolean) as string[];
       await rolesApi.setPermissions(roleId, codes);
-      toast.success('บันทึกสิทธิ์แล้ว');
+      toast.success('Permissions saved');
     } catch (e: any) { toast.error(e.message); } finally { setSavingRole(null); }
   }
   async function createRole() {
-    try { await rolesApi.create(newRole); toast.success('สร้าง role แล้ว'); setRoleOpen(false); setNewRole({ key: '', name: '', description: '' }); load(); }
+    try { await rolesApi.create(newRole); toast.success('Role created'); setRoleOpen(false); setNewRole({ key: '', name: '', description: '' }); load(); }
     catch (e: any) { toast.error(e.message); }
   }
   async function createPerm() {
-    try { await rolesApi.createPermission(newPerm); toast.success('สร้าง permission แล้ว'); setPermOpen(false); setNewPerm({ module: '', action: '', description: '' }); load(); }
+    try { await rolesApi.createPermission(newPerm); toast.success('Permission created'); setPermOpen(false); setNewPerm({ module: '', action: '', description: '' }); load(); }
     catch (e: any) { toast.error(e.message); }
   }
   async function clone(id: string) {
-    const name = window.prompt('ชื่อ role ใหม่ (clone):');
+    const name = window.prompt('New role name (clone):');
     if (!name) return;
-    try { await rolesApi.clone(id, name); toast.success('Clone แล้ว'); load(); } catch (e: any) { toast.error(e.message); }
+    try { await rolesApi.clone(id, name); toast.success('Cloned'); load(); } catch (e: any) { toast.error(e.message); }
   }
   async function toggleActive(id: string) {
-    try { await rolesApi.toggle(id); toast.success('อัปเดตสถานะแล้ว'); load(); } catch (e: any) { toast.error(e.message); }
+    try { await rolesApi.toggle(id); toast.success('Status updated'); load(); } catch (e: any) { toast.error(e.message); }
   }
   async function removeRole(id: string) {
-    try { await rolesApi.remove(id); toast.success('ลบแล้ว'); load(); } catch (e: any) { toast.error(e.message); }
+    try { await rolesApi.remove(id); toast.success('Deleted'); load(); } catch (e: any) { toast.error(e.message); }
   }
 
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="Role & Permission Matrix" subtitle="สร้าง/แก้ไขบทบาทและสิทธิ์แบบ dynamic (RBAC)" icon={ShieldCheck}
+      <PageHeader title="Role & Permission Matrix" subtitle="Create/edit roles and permissions dynamically (RBAC)" icon={ShieldCheck}
         action={
           <div className="flex gap-2">
             <Dialog open={permOpen} onOpenChange={setPermOpen}>
               <DialogTrigger render={<Button variant="outline" />}><Plus className="h-4 w-4 mr-1" />Permission</DialogTrigger>
               <DialogContent>
-                <DialogHeader><DialogTitle>สร้าง Permission ใหม่</DialogTitle></DialogHeader>
+                <DialogHeader><DialogTitle>Create New Permission</DialogTitle></DialogHeader>
                 <div className="space-y-3">
                   <div className="space-y-1"><Label>Module</Label><Input value={newPerm.module} onChange={(e) => setNewPerm((p) => ({ ...p, module: e.target.value }))} placeholder="inventory" /></div>
                   <div className="space-y-1"><Label>Action</Label><Input value={newPerm.action} onChange={(e) => setNewPerm((p) => ({ ...p, action: e.target.value }))} placeholder="export" /></div>
                   <div className="space-y-1"><Label>Description</Label><Input value={newPerm.description} onChange={(e) => setNewPerm((p) => ({ ...p, description: e.target.value }))} /></div>
-                  <p className="text-xs text-slate-400">code = module.action (เช่น inventory.export)</p>
+                  <p className="text-xs text-slate-400">code = module.action (e.g. inventory.export)</p>
                 </div>
-                <DialogFooter><Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={createPerm}>สร้าง</Button></DialogFooter>
+                <DialogFooter><Button className="bg-green-600 hover:bg-green-700 text-white" onClick={createPerm}>Create</Button></DialogFooter>
               </DialogContent>
             </Dialog>
             <Dialog open={roleOpen} onOpenChange={setRoleOpen}>
-              <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white" />}><Plus className="h-4 w-4 mr-1" />Role</DialogTrigger>
+              <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}><Plus className="h-4 w-4 mr-1" />Role</DialogTrigger>
               <DialogContent>
-                <DialogHeader><DialogTitle>สร้าง Role ใหม่</DialogTitle></DialogHeader>
+                <DialogHeader><DialogTitle>Create New Role</DialogTitle></DialogHeader>
                 <div className="space-y-3">
                   <div className="space-y-1"><Label>Key</Label><Input value={newRole.key} onChange={(e) => setNewRole((r) => ({ ...r, key: e.target.value }))} placeholder="STORE_KEEPER" /></div>
                   <div className="space-y-1"><Label>Name</Label><Input value={newRole.name} onChange={(e) => setNewRole((r) => ({ ...r, name: e.target.value }))} placeholder="Store Keeper" /></div>
                   <div className="space-y-1"><Label>Description</Label><Input value={newRole.description} onChange={(e) => setNewRole((r) => ({ ...r, description: e.target.value }))} /></div>
                 </div>
-                <DialogFooter><Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={createRole}>สร้าง</Button></DialogFooter>
+                <DialogFooter><Button className="bg-green-600 hover:bg-green-700 text-white" onClick={createRole}>Create</Button></DialogFooter>
               </DialogContent>
             </Dialog>
           </div>
@@ -144,7 +144,7 @@ export default function RolesPage() {
                       <td className="px-4 py-2"><span className="font-mono text-slate-700">{p.code}</span>{p.description && <span className="text-slate-400 ml-2">{p.description}</span>}</td>
                       {roles.map((r) => (
                         <td key={r.id} className="px-3 py-2 text-center">
-                          <input type="checkbox" className="h-4 w-4 accent-blue-600 cursor-pointer disabled:opacity-30"
+                          <input type="checkbox" className="h-4 w-4 accent-green-600 cursor-pointer disabled:opacity-30"
                             disabled={r.key === 'SUPER_ADMIN'}
                             checked={r.key === 'SUPER_ADMIN' ? true : (matrix[r.id]?.has(p.id) ?? false)}
                             onChange={() => toggle(r.id, p.id)} />
@@ -157,11 +157,11 @@ export default function RolesPage() {
             </tbody>
             <tfoot>
               <tr className="bg-slate-50 border-t border-slate-200">
-                <td className="px-4 py-3 font-medium text-slate-600">บันทึกต่อบทบาท →</td>
+                <td className="px-4 py-3 font-medium text-slate-600">Save per role →</td>
                 {roles.map((r) => (
                   <td key={r.id} className="px-3 py-3 text-center">
                     {r.key !== 'SUPER_ADMIN' && (
-                      <Button size="sm" className="h-7 bg-blue-600 hover:bg-blue-700 text-white" disabled={savingRole === r.id} onClick={() => saveRole(r.id)}><Save className="h-3.5 w-3.5" /></Button>
+                      <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" disabled={savingRole === r.id} onClick={() => saveRole(r.id)}><Save className="h-3.5 w-3.5" /></Button>
                     )}
                   </td>
                 ))}
@@ -170,7 +170,7 @@ export default function RolesPage() {
           </table>
         </div>
       )}
-      <p className="text-xs text-slate-400">SUPER_ADMIN มีสิทธิ์ทั้งหมดเสมอ (immutable) · clone/disable/delete ที่หัวคอลัมน์ · เพิ่ม permission/role ได้แบบ dynamic</p>
+      <p className="text-xs text-slate-400">SUPER_ADMIN always has full access (immutable) · clone/disable/delete via the column header · add permissions/roles dynamically</p>
     </div>
   );
 }

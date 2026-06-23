@@ -15,6 +15,16 @@ import { UserRole, RequestStatus } from '@prisma/client';
 export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 
+  @Get('rma-cases')
+  getOpenRtvCases() {
+    return this.requestsService.getOpenRtvCases();
+  }
+
+  @Get('products-available')
+  getProductsWithAvailableQty(@Query('brandId') brandId?: string) {
+    return this.requestsService.getProductsWithAvailableQty(brandId);
+  }
+
   @Get()
   findAll(
     @Query('status') status?: RequestStatus,

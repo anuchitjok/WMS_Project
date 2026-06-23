@@ -47,7 +47,7 @@ export default function WarehouseReturnsPage() {
               : rows.length === 0 ? <tr><td colSpan={4} className="px-4 py-12 text-center text-slate-400">No returns awaiting verification</td></tr>
               : rows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-700">{r.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{r.refNumber}</td>
                   <td className="px-4 py-3 text-slate-600">{r.rmaCaseNumber ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{r.items?.map((it: any) => it.product?.code).join(', ')}</td>
                   <td className="px-4 py-3 space-x-1">

@@ -324,6 +324,9 @@ model Warehouse {
   name       String
   location   String?
   isActive   Boolean     @default(true)
+  isDeleted  Boolean     @default(false)
+  deletedAt  DateTime?
+  deletedBy  String?
   racks      Rack[]
   stockItems StockItem[]
   userAccess UserWarehouse[]
@@ -342,6 +345,9 @@ model Rack {
   columns     Int         @default(1)
   description String?
   isActive    Boolean     @default(true)
+  isDeleted   Boolean     @default(false)
+  deletedAt   DateTime?
+  deletedBy   String?
   warehouse   Warehouse   @relation(fields: [warehouseId], references: [id])
   slots       Slot[]
   stockItems  StockItem[]
@@ -365,6 +371,9 @@ model Slot {
   capacity   Int        @default(1)
   maxWeight  Float?
   isActive   Boolean    @default(true)
+  isDeleted  Boolean    @default(false)
+  deletedAt  DateTime?
+  deletedBy  String?
   rack       Rack       @relation(fields: [rackId], references: [id])
   stockItems StockItem[]
   createdAt  DateTime   @default(now())
@@ -380,26 +389,33 @@ enum ProductType {
   SPARE_PART
 }
 
+enum ProductStatus {
+  ACTIVE        // Orderable and receivable — appears in all dropdowns
+  INACTIVE      // Hidden from receiving dropdowns; existing stock remains
+  DISCONTINUED  // End-of-life; no new receipts allowed; existing stock still managed
+}
+
 model Product {
-  id               String       @id @default(cuid())
-  code             String       @unique
+  id               String        @id @default(cuid())
+  code             String        @unique
   name             String
-  description      String?      @db.Text
+  description      String?       @db.Text
   manufacturer     String?
   model            String?
-  partNumber       String?      @unique
+  partNumber       String?       @unique
   vendorPartNumber String?
-  productType      ProductType  @default(SPARE_PART)
+  productType      ProductType   @default(SPARE_PART)
   brandId          String?
   category         String?
-  unit             String       @default("unit")
-  unitCost         Float        @default(0)
-  serialControlled Boolean      @default(false) // if true, serial mandatory on receive
-  batchControlled  Boolean      @default(false) // Phase 1 — if true, batch/lot mandatory on receive
-  minStock         Int          @default(0)
-  isActive         Boolean      @default(true)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  unit             String        @default("unit")
+  unitCost         Float         @default(0)
+  serialControlled Boolean       @default(false)
+  batchControlled  Boolean       @default(false)
+  minStock         Int           @default(0)
+  productStatus    ProductStatus @default(ACTIVE)
+  isActive         Boolean       @default(true) // kept in sync with productStatus for backward compat
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   brand                  Brand?                @relation(fields: [brandId], references: [id])
   stockItems             StockItem[]
@@ -412,6 +428,7 @@ model Product {
   @@index([manufacturer])
   @@index([partNumber])
   @@index([productType])
+  @@index([productStatus])
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
@@ -470,28 +487,49 @@ model GoodsReceiving {
   notes        String?
   createdAt    DateTime             @default(now())
 
-  receivedBy User?                @relation(fields: [receivedById], references: [id])
-  items      GoodsReceivingItem[]
+  receivedBy    User?                  @relation(fields: [receivedById], references: [id])
+  items         GoodsReceivingItem[]
+  discrepancies ReceivingDiscrepancy[]
 
   @@index([createdAt])
   @@index([statusEnum])
 }
 
 model GoodsReceivingItem {
-  id              String    @id @default(cuid())
-  receivingId     String
-  productId       String
-  serialNumber    String?
-  batchNumber     String?   // Phase 1 — lot/batch captured at receipt
-  expiryDate      DateTime? // Phase 1 — FEFO support
-  manufactureDate DateTime? // Phase 1
-  quantity        Float     @default(1)
-  condition       String    @default("good")
-  stockItemId     String?
+  id                String    @id @default(cuid())
+  receivingId       String
+  productId         String
+  serialNumber      String?
+  batchNumber       String?   // Phase 1 — lot/batch captured at receipt
+  expiryDate        DateTime? // Phase 1 — FEFO support
+  manufactureDate   DateTime? // Phase 1
+  quantity          Float     @default(1)
+  condition         String    @default("good")
+  stockItemId       String?
+  // Phase 2 — inspection outcome fields
+  inspectedQty      Float?    // quantity confirmed by inspector (may differ from received qty)
+  inspectionOutcome String?   // good | doa | damaged | short_qty | wrong_item | missing_accessories
+  inspectorNotes    String?
 
-  receiving GoodsReceiving @relation(fields: [receivingId], references: [id])
-  product   Product        @relation(fields: [productId], references: [id])
-  stockItem StockItem?     @relation(fields: [stockItemId], references: [id])
+  receiving     GoodsReceiving          @relation(fields: [receivingId], references: [id])
+  product       Product                 @relation(fields: [productId], references: [id])
+  stockItem     StockItem?              @relation(fields: [stockItemId], references: [id])
+  discrepancies ReceivingDiscrepancy[]
+}
+
+model ReceivingDiscrepancy {
+  id           String             @id @default(cuid())
+  receivingId  String
+  itemId       String
+  type         String             // short_qty | wrong_item | missing_accessories
+  orderedQty   Float
+  receivedQty  Float
+  inspectedQty Float
+  notes        String?
+  createdAt    DateTime           @default(now())
+
+  receiving GoodsReceiving     @relation(fields: [receivingId], references: [id])
+  item      GoodsReceivingItem @relation(fields: [itemId], references: [id])
 }
 
 // ─── Withdrawal Requests ──────────────────────────────────────────────────────

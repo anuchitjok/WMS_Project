@@ -16,15 +16,127 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
+import { ColumnManagerButton, useColumnPrefs, type ColumnDef } from '@/components/inventory/column-manager';
+
+// ─── Column configuration (user-configurable: show/hide + drag reorder) ───────
+// Locked columns (sku, qty, status) cannot be hidden — they carry the row's identity/state.
+
+const GROUP_CFG: Record<string, { label: string; bg: string; border: string }> = {
+  product:      { label: 'Product Information',  bg: 'bg-slate-700',  border: 'border-slate-600/30' },
+  inventory:    { label: 'Inventory Status',      bg: 'bg-green-800',  border: 'border-green-700/30' },
+  location:     { label: 'Warehouse Location',     bg: 'bg-teal-800',   border: 'border-teal-700/30' },
+  traceability: { label: 'Traceability & Audit',  bg: 'bg-indigo-800', border: 'border-indigo-700/30' },
+};
+
+const COLUMN_DEFS: ColumnDef[] = [
+  { key: 'sku',         label: 'SKU / Part #',    group: 'product',      locked: true },
+  { key: 'type',        label: 'Type',             group: 'product' },
+  { key: 'productModel',label: 'Product / Model',  group: 'product' },
+  { key: 'brand',        label: 'Brand',            group: 'product' },
+  { key: 'serialBatch', label: 'Serial / Batch',   group: 'inventory' },
+  { key: 'qty',          label: 'Qty',              group: 'inventory',   locked: true },
+  { key: 'status',      label: 'Status',           group: 'inventory',   locked: true },
+  { key: 'ownership',   label: 'Ownership',        group: 'inventory' },
+  { key: 'warehouse',   label: 'Warehouse',        group: 'location' },
+  { key: 'zone',         label: 'Zone',             group: 'location' },
+  { key: 'rack',         label: 'Rack',             group: 'location' },
+  { key: 'slot',         label: 'Bin / Slot',       group: 'location' },
+  { key: 'receiveDate', label: 'Receive Date',     group: 'traceability' },
+  { key: 'agingDays',   label: 'Aging Days',       group: 'traceability' },
+  { key: 'recvBy',      label: 'Recv By',          group: 'traceability' },
+  { key: 'awb',           label: 'AWB',              group: 'traceability' },
+  { key: 'invoiceNo',   label: 'Invoice No.',      group: 'traceability' },
+  { key: 'rmaRef',      label: 'RMA Ref',          group: 'traceability' },
+];
+
+interface RowCtx {
+  rcv: any; rmaRef: string | undefined; agingDays: number; isAging: boolean; isAgingCritical: boolean;
+  fmt: (d: any) => string;
+}
+
+const CELL_RENDERERS: Record<string, (item: any, ctx: RowCtx) => React.ReactNode> = {
+  sku: (item) => (
+    <>
+      <p className="font-mono font-bold text-green-700 text-[11px]">{item.product?.code}</p>
+      {item.product?.partNumber && <p className="text-[10px] text-slate-400 font-mono">{item.product.partNumber}</p>}
+    </>
+  ),
+  type: (item) => (
+    <Badge variant="outline" className={cn('text-[10px]', item.product?.productType === 'SPARE_PART' ? 'bg-teal-100 text-teal-700' : 'bg-emerald-100 text-emerald-700')}>
+      {item.product?.productType?.replace('_', ' ')}
+    </Badge>
+  ),
+  productModel: (item) => (
+    <>
+      <p className="font-medium text-slate-700 truncate">{item.product?.name}</p>
+      {item.product?.model && <p className="text-[10px] text-slate-400">{item.product.model}</p>}
+    </>
+  ),
+  brand: (item) => item.product?.brand?.name ?? '—',
+  serialBatch: (item) => item.serialNumber ?? item.batchNumber ?? '—',
+  qty: (item) => item.quantity,
+  status: (item) => <StatusBadge status={item.status} />,
+  ownership: (item) => (
+    <span className="text-[10px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 font-medium">{OWNERSHIP_LABEL[item.ownershipType] ?? item.ownershipType}</span>
+  ),
+  warehouse: (item) => item.warehouse?.code ?? '—',
+  zone: (item) => item.rack?.zone ?? '—',
+  rack: (item) => item.rack?.code ?? '—',
+  slot: (item) => item.slot?.code ?? '—',
+  receiveDate: (item, ctx) => ctx.fmt(item.receivedDate),
+  agingDays: (_item, ctx) => (
+    <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums',
+      ctx.isAgingCritical ? 'bg-red-100 text-red-700' : ctx.isAging ? 'bg-yellow-100 text-yellow-700' : 'text-slate-400')}>
+      {ctx.agingDays}d
+    </span>
+  ),
+  recvBy: (item) => item.createdBy?.fullName ?? '—',
+  awb: (_item, ctx) => ctx.rcv?.awbNumber ?? '—',
+  invoiceNo: (_item, ctx) => ctx.rcv?.invoiceNumber ?? '—',
+  rmaRef: (_item, ctx) => ctx.rmaRef ?? '—',
+};
+
+const CELL_CLASS: Record<string, string> = {
+  sku: 'px-3 py-2.5 min-w-[130px]',
+  type: 'px-3 py-2.5',
+  productModel: 'px-3 py-2.5 max-w-[150px]',
+  brand: 'px-3 py-2.5 whitespace-nowrap text-slate-500',
+  serialBatch: 'px-3 py-2.5 font-mono text-[11px] text-indigo-700 font-medium whitespace-nowrap',
+  qty: 'px-3 py-2.5 text-center font-bold tabular-nums',
+  status: 'px-3 py-2.5',
+  ownership: 'px-3 py-2.5 whitespace-nowrap',
+  warehouse: 'px-3 py-2.5 whitespace-nowrap font-medium',
+  zone: 'px-3 py-2.5 whitespace-nowrap text-slate-400 text-[10px]',
+  rack: 'px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600',
+  slot: 'px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600',
+  receiveDate: 'px-3 py-2.5 whitespace-nowrap text-slate-400',
+  agingDays: 'px-3 py-2.5 whitespace-nowrap',
+  recvBy: 'px-3 py-2.5 whitespace-nowrap text-slate-400',
+  awb: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
+  invoiceNo: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
+  rmaRef: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
+};
+
+// Groups columns into contiguous bands by `group`, in the user's current order —
+// so the colored header band stays correct even after a custom drag reorder.
+function computeBands(cols: ColumnDef[]) {
+  const bands: { group: string; count: number }[] = [];
+  for (const c of cols) {
+    const last = bands[bands.length - 1];
+    if (last && last.group === c.group) last.count += 1;
+    else bands.push({ group: c.group, count: 1 });
+  }
+  return bands;
+}
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
 const STATUS_CFG: Record<string, { label: string; bg: string; text: string; dot: string }> = {
   AVAILABLE:          { label: 'Available',    bg: 'bg-green-100',   text: 'text-green-800',  dot: 'bg-green-500' },
-  RESERVED:           { label: 'Reserved',     bg: 'bg-blue-100',    text: 'text-blue-800',   dot: 'bg-blue-500' },
+  RESERVED:           { label: 'Reserved',     bg: 'bg-teal-100',    text: 'text-teal-800',   dot: 'bg-teal-500' },
   PICKING:            { label: 'Picking',      bg: 'bg-cyan-100',    text: 'text-cyan-800',   dot: 'bg-cyan-500' },
   PICKED:             { label: 'Picked',       bg: 'bg-cyan-200',    text: 'text-cyan-900',   dot: 'bg-cyan-600' },
-  QUARANTINE:         { label: 'Quarantine',   bg: 'bg-red-100',     text: 'text-red-800',    dot: 'bg-red-500' },
+  QUARANTINE:         { label: 'On Hold',      bg: 'bg-red-100',     text: 'text-red-800',    dot: 'bg-red-500' },
   RTV_PENDING:        { label: 'RTV Pending',  bg: 'bg-orange-100',  text: 'text-orange-800', dot: 'bg-orange-500' },
   DOA:                { label: 'DOA',          bg: 'bg-red-200',     text: 'text-red-900',    dot: 'bg-red-700' },
   DAMAGED:            { label: 'Damaged',      bg: 'bg-rose-100',    text: 'text-rose-800',   dot: 'bg-rose-500' },
@@ -49,30 +161,72 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ─── KPI Bar ──────────────────────────────────────────────────────────────────
+// CR-INV-001: Total SKU / Total Qty / Available Qty / Reserved Qty / RTV Qty / Aging KPIs.
+// Cards act as quick filters — clicking applies the matching status/aging filter.
 
-function InventoryKpiBar({ kpi, loading }: { kpi: any; loading: boolean }) {
+function InventoryKpiBar({
+  kpi, loading, activeStatus, activeAging90, activeAging365, onQuickFilter,
+}: {
+  kpi: any; loading: boolean;
+  activeStatus: string; activeAging90: boolean; activeAging365: boolean;
+  onQuickFilter: (patch: { status?: string; aging90?: boolean; aging365?: boolean }) => void;
+}) {
   const cards = [
-    { label: 'Total Items',  value: kpi?.totalItems,    icon: Box,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
-    { label: 'Available',    value: kpi?.available,      icon: CheckCircle2, color: 'text-green-700',  bg: 'bg-green-50',    border: 'border-green-200' },
-    { label: 'Reserved',     value: kpi?.reserved,       icon: Shield,       color: 'text-blue-700',   bg: 'bg-blue-50',     border: 'border-blue-200' },
-    { label: 'Quarantine',   value: kpi?.quarantine,     icon: AlertTriangle,color: (kpi?.quarantine ?? 0) > 0 ? 'text-red-700' : 'text-slate-400',    bg: (kpi?.quarantine ?? 0) > 0 ? 'bg-red-50' : 'bg-slate-50',       border: (kpi?.quarantine ?? 0) > 0 ? 'border-red-200' : 'border-slate-200' },
-    { label: 'RTV Pending',  value: kpi?.rtv,            icon: RefreshCw,    color: (kpi?.rtv ?? 0) > 0 ? 'text-orange-700' : 'text-slate-400',         bg: (kpi?.rtv ?? 0) > 0 ? 'bg-orange-50' : 'bg-slate-50',          border: (kpi?.rtv ?? 0) > 0 ? 'border-orange-200' : 'border-slate-200' },
-    { label: 'DOA',          value: kpi?.doa,            icon: X,            color: (kpi?.doa ?? 0) > 0 ? 'text-red-900' : 'text-slate-400',             bg: (kpi?.doa ?? 0) > 0 ? 'bg-red-100' : 'bg-slate-50',            border: (kpi?.doa ?? 0) > 0 ? 'border-red-300' : 'border-slate-200' },
-    { label: 'Aging >90d',   value: kpi?.agingCount,     icon: Clock,        color: (kpi?.agingCount ?? 0) > 0 ? 'text-amber-700' : 'text-slate-400',   bg: (kpi?.agingCount ?? 0) > 0 ? 'bg-amber-50' : 'bg-slate-50',    border: (kpi?.agingCount ?? 0) > 0 ? 'border-amber-200' : 'border-slate-200' },
-    { label: 'Low Stock',    value: kpi?.lowStockCount,  icon: TrendingDown, color: (kpi?.lowStockCount ?? 0) > 0 ? 'text-yellow-700' : 'text-slate-400',bg: (kpi?.lowStockCount ?? 0) > 0 ? 'bg-yellow-50' : 'bg-slate-50',border: (kpi?.lowStockCount ?? 0) > 0 ? 'border-yellow-200' : 'border-slate-200' },
+    { key: 'totalSku',  label: 'Total SKU',     value: kpi?.totalSku,     icon: Box,          color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: () => onQuickFilter({ status: '', aging90: false, aging365: false }) },
+    { key: 'totalQty',  label: 'Total Qty',     value: kpi?.totalQty,     icon: Layers,       color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: () => onQuickFilter({ status: '', aging90: false, aging365: false }) },
+    { key: 'available', label: 'Available Qty', value: kpi?.availableQty, icon: CheckCircle2, color: 'text-green-700',  bg: 'bg-green-50',   border: 'border-green-200', active: activeStatus === 'AVAILABLE', onClick: () => onQuickFilter({ status: activeStatus === 'AVAILABLE' ? '' : 'AVAILABLE' }) },
+    { key: 'reserved',  label: 'Reserved Qty',  value: kpi?.reservedQty,  icon: Shield,       color: 'text-teal-700',   bg: 'bg-teal-50',    border: 'border-teal-200', active: activeStatus === 'RESERVED', onClick: () => onQuickFilter({ status: activeStatus === 'RESERVED' ? '' : 'RESERVED' }) },
+    { key: 'rtv',       label: 'RTV Qty',       value: kpi?.rtvQty,       icon: RefreshCw,    color: (kpi?.rtvQty ?? 0) > 0 ? 'text-orange-700' : 'text-slate-400', bg: (kpi?.rtvQty ?? 0) > 0 ? 'bg-orange-50' : 'bg-slate-50', border: (kpi?.rtvQty ?? 0) > 0 ? 'border-orange-200' : 'border-slate-200', active: activeStatus === 'RTV_PENDING', onClick: () => onQuickFilter({ status: activeStatus === 'RTV_PENDING' ? '' : 'RTV_PENDING' }) },
+    { key: 'aging90',   label: 'Aging >90 days',value: kpi?.aging90Count, icon: Clock,        color: (kpi?.aging90Count ?? 0) > 0 ? 'text-amber-700' : 'text-slate-400', bg: (kpi?.aging90Count ?? 0) > 0 ? 'bg-amber-50' : 'bg-slate-50', border: (kpi?.aging90Count ?? 0) > 0 ? 'border-amber-200' : 'border-slate-200', active: activeAging90, onClick: () => onQuickFilter({ aging90: !activeAging90, aging365: false }) },
+    { key: 'aging365',  label: 'Aging >1 year', value: kpi?.aging365Count,icon: AlertTriangle,color: (kpi?.aging365Count ?? 0) > 0 ? 'text-red-700' : 'text-slate-400', bg: (kpi?.aging365Count ?? 0) > 0 ? 'bg-red-50' : 'bg-slate-50', border: (kpi?.aging365Count ?? 0) > 0 ? 'border-red-200' : 'border-slate-200', active: activeAging365, onClick: () => onQuickFilter({ aging365: !activeAging365, aging90: false }) },
   ];
 
   return (
-    <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 flex-shrink-0">
-      {cards.map(({ label, value, icon: Icon, color, bg, border }) => (
-        <div key={label} className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm', bg, border)}>
+    <div className="grid grid-cols-4 lg:grid-cols-7 gap-2 flex-shrink-0">
+      {cards.map(({ key, label, value, icon: Icon, color, bg, border, active, onClick }) => (
+        <button key={key} type="button" onClick={onClick}
+          className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm text-left transition-colors',
+            bg, active ? 'border-green-500 ring-2 ring-green-200' : border, 'hover:brightness-95')}>
           <Icon className={cn('w-4 h-4 flex-shrink-0', color)} />
           <div className="min-w-0">
-            {loading ? <Skeleton className="h-5 w-8" /> : <p className={cn('text-lg font-bold tabular-nums leading-none', color)}>{value ?? 0}</p>}
+            {loading ? <Skeleton className="h-5 w-8" /> : <p className={cn('text-lg font-bold tabular-nums leading-none', color)}>{(value ?? 0).toLocaleString()}</p>}
             <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{label}</p>
           </div>
-        </div>
+        </button>
       ))}
+    </div>
+  );
+}
+
+// ─── Bottleneck Section ───────────────────────────────────────────────────────
+// CR-INV-001 #3: quantity grouped by Available / Reserved / RTV Pending.
+
+function BottleneckSection({ kpi, loading }: { kpi: any; loading: boolean }) {
+  const rows = [
+    { label: 'Available',    value: kpi?.bottleneck?.available ?? 0,   color: 'bg-green-500',  text: 'text-green-700' },
+    { label: 'Reserved',     value: kpi?.bottleneck?.reserved ?? 0,    color: 'bg-teal-500',   text: 'text-teal-700' },
+    { label: 'RTV Pending',  value: kpi?.bottleneck?.rtvPending ?? 0,  color: 'bg-orange-500', text: 'text-orange-700' },
+  ];
+  const max = Math.max(1, ...rows.map((r) => r.value));
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 flex-shrink-0">
+      <p className="text-xs font-semibold text-slate-600 mb-3">Bottleneck — Quantity by Stage</p>
+      {loading ? (
+        <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-6" />)}</div>
+      ) : (
+        <div className="space-y-2.5">
+          {rows.map(({ label, value, color, text }) => (
+            <div key={label} className="flex items-center gap-3">
+              <span className="text-xs text-slate-500 w-24 flex-shrink-0">{label}</span>
+              <div className="flex-1 h-5 bg-slate-100 rounded-full overflow-hidden">
+                <div className={cn('h-full rounded-full transition-all', color)} style={{ width: `${(value / max) * 100}%` }} />
+              </div>
+              <span className={cn('text-xs font-bold tabular-nums w-14 text-right', text)}>{value.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -119,7 +273,7 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
         {sections.map(({ id, label, icon: Icon }) => (
           <button key={id} onClick={() => setSection(id)}
             className={cn('flex items-center gap-1 px-3 py-2.5 text-xs font-medium whitespace-nowrap border-b-2 transition-colors',
-              section === id ? 'border-blue-600 text-blue-700 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700')}>
+              section === id ? 'border-green-600 text-green-700 bg-white' : 'border-transparent text-slate-500 hover:text-slate-700')}>
             <Icon className="w-3.5 h-3.5" />{label}
           </button>
         ))}
@@ -150,7 +304,7 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
                 ].map(({ l, v, m }) => (
                   <div key={l} className="bg-slate-50 rounded-lg p-2">
                     <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">{l}</p>
-                    <p className={cn('text-sm mt-0.5 break-all font-medium text-slate-800', m && 'font-mono text-xs text-blue-700')}>{v}</p>
+                    <p className={cn('text-sm mt-0.5 break-all font-medium text-slate-800', m && 'font-mono text-xs text-green-700')}>{v}</p>
                   </div>
                 ))}
               </div>
@@ -184,10 +338,10 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
                   return (
                     <div key={gri.id} className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-xs font-bold text-blue-700">{rcv?.refNumber}</span>
+                        <span className="font-mono text-xs font-bold text-green-700">{rcv?.refNumber}</span>
                         <span className="text-[10px] text-slate-400">{fmt(rcv?.receivedDate)}</span>
                       </div>
-                      {[{ l: 'AWB', v: rcv?.awbNumber || '—' }, { l: 'Invoice No.', v: rcv?.invoiceNumber || '—' }, { l: 'GSW No.', v: rcv?.gswNumber || '—' }, { l: 'Source', v: rcv?.sourceType || '—' }, { l: 'Received By', v: rcv?.receivedBy?.fullName || '—' }, { l: 'Qty', v: String(gri.quantity) }, { l: 'Condition', v: gri.condition || '—' }].map(({ l, v }) => (
+                      {[{ l: 'AWB', v: rcv?.awbNumber || '—' }, { l: 'Invoice No.', v: rcv?.invoiceNumber || '—' }, { l: 'Customer Case', v: rcv?.gswNumber || '—' }, { l: 'Source', v: rcv?.sourceType || '—' }, { l: 'Received By', v: rcv?.receivedBy?.fullName || '—' }, { l: 'Qty', v: String(gri.quantity) }, { l: 'Condition', v: gri.condition || '—' }].map(({ l, v }) => (
                         <div key={l} className="flex justify-between text-xs"><span className="text-slate-400">{l}</span><span className="font-mono text-slate-700">{v}</span></div>
                       ))}
                     </div>
@@ -201,7 +355,7 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
                   <div className="flex-1"><p className="text-xs font-medium text-slate-700">Stock Received</p><p className="text-[10px] text-slate-400">Qty {data.quantity} · {fmt(data.receivedDate)}</p></div>
                 </div>
                 {data.withdrawalRequestItems?.map((wri: any) => (
-                  <div key={wri.id} className="flex items-start gap-2 border-l-2 border-blue-400 pl-3 py-1.5">
+                  <div key={wri.id} className="flex items-start gap-2 border-l-2 border-green-400 pl-3 py-1.5">
                     <div className="flex-1">
                       <p className="text-xs font-medium text-slate-700">Withdrawal Request</p>
                       <p className="text-[10px] font-mono text-slate-400">{wri.request?.refNumber}</p>
@@ -260,7 +414,7 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
         <div className="border-t border-slate-100 p-3 flex gap-2 flex-shrink-0 bg-slate-50">
           <Button size="sm" variant="outline" className="flex-1 text-xs"
             onClick={() => { inventoryApi.updateStatus(data.id, data.status === 'AVAILABLE' ? 'QUARANTINE' : 'AVAILABLE').then(() => { toast.success('Status updated'); onClose(); }).catch((e: any) => toast.error(e.message)); }}>
-            {data.status === 'QUARANTINE' ? '✅ Release' : '🚫 Quarantine'}
+            {data.status === 'QUARANTINE' ? '✅ Release' : '🚫 On Hold'}
           </Button>
           <Link href="/rtv"><Button size="sm" variant="outline" className="text-xs gap-1"><RefreshCw className="w-3.5 h-3.5" /> RTV</Button></Link>
           <Link href="/adjustment"><Button size="sm" variant="outline" className="text-xs gap-1"><SlidersHorizontal className="w-3.5 h-3.5" /> Adjust</Button></Link>
@@ -272,19 +426,21 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
 
 // ─── Inventory Row ────────────────────────────────────────────────────────────
 
-function InventoryRow({ item, isSelected, onSelect }: { item: any; isSelected: boolean; onSelect: () => void }) {
+function InventoryRow({ item, isSelected, onSelect, visibleColumns, colSpan }: { item: any; isSelected: boolean; onSelect: () => void; visibleColumns: ColumnDef[]; colSpan: number }) {
   const [expanded, setExpanded] = useState(false);
   const rcv = item.goodsReceivingItems?.[0]?.receiving;
   const rmaRef = item.withdrawalRequestItems?.[0]?.request?.rmaCaseNumber;
   const agingDays = item.receivedDate ? Math.floor((Date.now() - new Date(item.receivedDate).getTime()) / 86_400_000) : 0;
   const isAging = agingDays > 90;
+  const isAgingCritical = agingDays > 365;
   const fmt = (d: any) => d ? new Date(d).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
+  const ctx: RowCtx = { rcv, rmaRef, agingDays, isAging, isAgingCritical, fmt };
 
   return (
     <>
       <tr
         className={cn('border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer text-xs',
-          isSelected ? 'bg-blue-50/60 ring-1 ring-inset ring-blue-300' : '',
+          isSelected ? 'bg-green-50/60 ring-1 ring-inset ring-green-300' : '',
           item.status === 'DOA' ? 'border-l-2 border-l-red-600' :
           item.status === 'RTV_PENDING' ? 'border-l-2 border-l-orange-400' :
           item.status === 'QUARANTINE' ? 'border-l-2 border-l-red-400' :
@@ -297,45 +453,12 @@ function InventoryRow({ item, isSelected, onSelect }: { item: any; isSelected: b
             {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
           </button>
         </td>
-        {/* Product */}
-        <td className="px-3 py-2.5 min-w-[130px]">
-          <p className="font-mono font-bold text-blue-700 text-[11px]">{item.product?.code}</p>
-          {item.product?.partNumber && <p className="text-[10px] text-slate-400 font-mono">{item.product.partNumber}</p>}
-        </td>
-        <td className="px-3 py-2.5">
-          <Badge variant="outline" className={cn('text-[10px]', item.product?.productType === 'SPARE_PART' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700')}>
-            {item.product?.productType?.replace('_',' ')}
-          </Badge>
-        </td>
-        <td className="px-3 py-2.5 max-w-[150px]">
-          <p className="font-medium text-slate-700 truncate">{item.product?.name}</p>
-          {item.product?.model && <p className="text-[10px] text-slate-400">{item.product.model}</p>}
-        </td>
-        <td className="px-3 py-2.5 whitespace-nowrap text-slate-500">{item.product?.brand?.name ?? '—'}</td>
-        {/* Inventory */}
-        <td className="px-3 py-2.5 font-mono text-[11px] text-indigo-700 font-medium whitespace-nowrap">{item.serialNumber ?? item.batchNumber ?? '—'}</td>
-        <td className="px-3 py-2.5 text-center font-bold tabular-nums">{item.quantity}</td>
-        <td className="px-3 py-2.5"><StatusBadge status={item.status} /></td>
-        <td className="px-3 py-2.5 whitespace-nowrap">
-          <span className="text-[10px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 font-medium">{OWNERSHIP_LABEL[item.ownershipType] ?? item.ownershipType}</span>
-        </td>
-        {/* Location */}
-        <td className="px-3 py-2.5 whitespace-nowrap font-medium">{item.warehouse?.code ?? '—'}</td>
-        <td className="px-3 py-2.5 whitespace-nowrap text-slate-400 text-[10px]">{item.rack?.zone ?? '—'}</td>
-        <td className="px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600">{item.rack?.code ?? '—'}</td>
-        <td className="px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600">{item.slot?.code ?? '—'}</td>
-        {/* Traceability */}
-        <td className="px-3 py-2.5 whitespace-nowrap text-slate-400">
-          {fmt(item.receivedDate)}
-          {isAging && <span className="ml-1 text-[9px] text-amber-600 font-bold">{agingDays}d</span>}
-        </td>
-        <td className="px-3 py-2.5 whitespace-nowrap text-slate-400">{item.createdBy?.fullName ?? '—'}</td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{rcv?.awbNumber ?? '—'}</td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{rcv?.invoiceNumber ?? '—'}</td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{rmaRef ?? '—'}</td>
+        {visibleColumns.map((col) => (
+          <td key={col.key} className={CELL_CLASS[col.key]}>{CELL_RENDERERS[col.key](item, ctx)}</td>
+        ))}
         <td className="px-3 py-2.5">
           <div className="flex gap-1">
-            <button onClick={(e) => { e.stopPropagation(); onSelect(); }} className="p-1 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600" title="View detail"><Eye className="w-3.5 h-3.5" /></button>
+            <button onClick={(e) => { e.stopPropagation(); onSelect(); }} className="p-1 rounded hover:bg-green-100 text-slate-400 hover:text-green-600" title="View detail"><Eye className="w-3.5 h-3.5" /></button>
             <button className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600"><MoreHorizontal className="w-3.5 h-3.5" /></button>
           </div>
         </td>
@@ -344,7 +467,7 @@ function InventoryRow({ item, isSelected, onSelect }: { item: any; isSelected: b
       {/* Expanded row */}
       {expanded && (
         <tr className="bg-slate-50/80 border-b border-slate-200">
-          <td colSpan={19} className="px-6 py-3">
+          <td colSpan={colSpan} className="px-6 py-3">
             <div className="grid grid-cols-4 gap-4 text-xs">
               <div>
                 <p className="font-semibold text-slate-600 mb-1.5 flex items-center gap-1"><Package className="w-3 h-3" /> Product</p>
@@ -360,7 +483,7 @@ function InventoryRow({ item, isSelected, onSelect }: { item: any; isSelected: b
               </div>
               <div>
                 <p className="font-semibold text-slate-600 mb-1.5 flex items-center gap-1"><FileText className="w-3 h-3" /> Receiving</p>
-                {[{ l: 'AWB', v: rcv?.awbNumber || '—' }, { l: 'Invoice', v: rcv?.invoiceNumber || '—' }, { l: 'GSW No.', v: rcv?.gswNumber || '—' }, { l: 'Source', v: rcv?.sourceType || '—' }].map(({ l, v }) => (
+                {[{ l: 'AWB', v: rcv?.awbNumber || '—' }, { l: 'Invoice', v: rcv?.invoiceNumber || '—' }, { l: 'Customer Case', v: rcv?.gswNumber || '—' }, { l: 'Source', v: rcv?.sourceType || '—' }].map(({ l, v }) => (
                   <div key={l} className="flex justify-between py-0.5"><span className="text-slate-400">{l}</span><span className="font-mono">{v}</span></div>
                 ))}
               </div>
@@ -394,35 +517,43 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('');
   const [whFilter, setWhFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [brandFilter, setBrandFilter] = useState('');
+  const [itemTypeFilter, setItemTypeFilter] = useState('');
   const [serialOnly, setSerialOnly] = useState(false);
   const [aging, setAging] = useState(false);
+  const [aging365, setAging365] = useState(false);
   const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [brands, setBrands] = useState<any[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const loadKpi = useCallback(async () => {
     setKpiLoading(true);
-    try { setKpi(await inventoryApi.kpi()); } finally { setKpiLoading(false); }
-  }, []);
+    try { setKpi(await inventoryApi.kpi(whFilter || undefined)); } finally { setKpiLoading(false); }
+  }, [whFilter]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await inventoryApi.enterpriseList({ search, warehouseId: whFilter, status: statusFilter, serialOnly, aging, page, limit: LIMIT });
+      const res = await inventoryApi.enterpriseList({ search, warehouseId: whFilter, status: statusFilter, brandId: brandFilter, itemType: itemTypeFilter, serialOnly, aging, aging365, page, limit: LIMIT });
       setData(res.data ?? []); setTotal(res.total ?? 0);
     } finally { setLoading(false); }
-  }, [search, whFilter, statusFilter, serialOnly, aging, page]);
+  }, [search, whFilter, statusFilter, brandFilter, itemTypeFilter, serialOnly, aging, aging365, page]);
 
-  useEffect(() => { loadKpi(); warehouseApi.list().then(setWarehouses).catch(() => {}); }, [loadKpi]);
-  useEffect(() => { setPage(1); }, [search, whFilter, statusFilter, serialOnly, aging]);
+  useEffect(() => { warehouseApi.list().then(setWarehouses).catch(() => {}); warehouseApi.brands().then(setBrands).catch(() => {}); }, []);
+  useEffect(() => { loadKpi(); }, [loadKpi]);
+  useEffect(() => { setPage(1); }, [search, whFilter, statusFilter, brandFilter, itemTypeFilter, serialOnly, aging, aging365]);
   useEffect(() => { load(); }, [load]);
 
-  const GROUPS = [
-    { label: 'Product Information',  cols: 4, bg: 'bg-slate-700' },
-    { label: 'Inventory Status',     cols: 4, bg: 'bg-blue-800' },
-    { label: 'Warehouse Location',   cols: 4, bg: 'bg-teal-800' },
-    { label: 'Traceability & Audit', cols: 5, bg: 'bg-indigo-800' },
-    { label: '',                     cols: 1, bg: 'bg-slate-700' },
-  ];
+  function applyQuickFilter(patch: { status?: string; aging90?: boolean; aging365?: boolean }) {
+    if (patch.status !== undefined) setStatusFilter(patch.status);
+    if (patch.aging90 !== undefined) { setAging(patch.aging90); if (patch.aging90) setAging365(false); }
+    if (patch.aging365 !== undefined) { setAging365(patch.aging365); if (patch.aging365) setAging(false); }
+  }
+
+  const columnPrefs = useColumnPrefs(COLUMN_DEFS, 'inventory');
+  const visibleColumns = columnPrefs.visibleColumns;
+  const bands = computeBands(visibleColumns);
+  const colSpan = 2 + visibleColumns.length; // +1 expand toggle, +1 action column
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-slate-50">
@@ -447,6 +578,7 @@ export default function InventoryPage() {
               <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
             </Button>
             <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs"><Download className="w-3.5 h-3.5" /> Export</Button>
+            <ColumnManagerButton defs={COLUMN_DEFS} moduleKey="inventory" prefs={columnPrefs} />
             <Link href="/adjustment"><Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs"><SlidersHorizontal className="w-3.5 h-3.5" /> Adjust</Button></Link>
             <Link href="/cycle-count"><Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs"><Zap className="w-3.5 h-3.5" /> Cycle Count</Button></Link>
             <Link href="/transfer"><Button size="sm" className="h-8 bg-teal-600 hover:bg-teal-700 text-white gap-1.5 text-xs"><ArrowRightLeft className="w-3.5 h-3.5" /> Transfer</Button></Link>
@@ -455,7 +587,13 @@ export default function InventoryPage() {
       </div>
 
       <div className="flex-1 overflow-hidden flex flex-col gap-3 p-4 min-h-0">
-        <InventoryKpiBar kpi={kpi} loading={kpiLoading} />
+        <InventoryKpiBar
+          kpi={kpi} loading={kpiLoading}
+          activeStatus={statusFilter} activeAging90={aging} activeAging365={aging365}
+          onQuickFilter={applyQuickFilter}
+        />
+
+        <BottleneckSection kpi={kpi} loading={kpiLoading} />
 
         {/* Filter bar */}
         <div className="flex flex-wrap gap-2 items-center flex-shrink-0">
@@ -467,21 +605,33 @@ export default function InventoryPage() {
             <option value="">All Status</option>
             {STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}
           </select>
+          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)}>
+            <option value="">All Brands</option>
+            {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={itemTypeFilter} onChange={(e) => setItemTypeFilter(e.target.value)}>
+            <option value="">All Item Types</option>
+            <option value="FINISHED_GOODS">Finished Goods</option>
+            <option value="SPARE_PART">Spare Part</option>
+          </select>
           <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-            <input type="checkbox" checked={serialOnly} onChange={(e) => setSerialOnly(e.target.checked)} className="accent-blue-600" />Serialized Only
+            <input type="checkbox" checked={serialOnly} onChange={(e) => setSerialOnly(e.target.checked)} className="accent-green-600" />Serialized Only
           </label>
           <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
-            <input type="checkbox" checked={aging} onChange={(e) => setAging(e.target.checked)} className="accent-amber-500" />Aging &gt;90d
+            <input type="checkbox" checked={aging} onChange={(e) => { setAging(e.target.checked); if (e.target.checked) setAging365(false); }} className="accent-amber-500" />Aging &gt;90d
+          </label>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+            <input type="checkbox" checked={aging365} onChange={(e) => { setAging365(e.target.checked); if (e.target.checked) setAging(false); }} className="accent-red-500" />Aging &gt;1 year
           </label>
           <div className="flex gap-1 flex-wrap">
-            {[{ label: '🔴 Quarantine', s: 'QUARANTINE' }, { label: '🟠 RTV', s: 'RTV_PENDING' }, { label: '💀 DOA', s: 'DOA' }, { label: '🔵 Reserved', s: 'RESERVED' }].map(({ label, s }) => (
+            {[{ label: '🔴 On Hold', s: 'QUARANTINE' }, { label: '🟠 RTV', s: 'RTV_PENDING' }, { label: '💀 DOA', s: 'DOA' }, { label: '🔵 Reserved', s: 'RESERVED' }].map(({ label, s }) => (
               <button key={s} onClick={() => setStatusFilter(statusFilter === s ? '' : s)}
-                className={cn('text-xs border rounded-lg px-2 py-1 font-medium transition-colors', statusFilter === s ? 'bg-blue-100 border-blue-400 text-blue-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')}>
+                className={cn('text-xs border rounded-lg px-2 py-1 font-medium transition-colors', statusFilter === s ? 'bg-green-100 border-green-400 text-green-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')}>
                 {label}
               </button>
             ))}
-            {(statusFilter || whFilter || serialOnly || aging) && (
-              <button onClick={() => { setStatusFilter(''); setWhFilter(''); setSerialOnly(false); setAging(false); }} className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear</button>
+            {(statusFilter || whFilter || brandFilter || itemTypeFilter || serialOnly || aging || aging365) && (
+              <button onClick={() => { setStatusFilter(''); setWhFilter(''); setBrandFilter(''); setItemTypeFilter(''); setSerialOnly(false); setAging(false); setAging365(false); }} className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear</button>
             )}
           </div>
           <div className="ml-auto text-xs text-slate-500 tabular-nums">{loading ? '…' : `${total.toLocaleString()} items`}</div>
@@ -494,34 +644,26 @@ export default function InventoryPage() {
               <thead className="sticky top-0 z-10">
                 <tr>
                   <th className="bg-slate-800 w-8" />
-                  {GROUPS.map((g, i) => (
-                    <th key={i} colSpan={g.cols} className={cn('text-center text-[10px] font-bold text-white py-1.5 uppercase tracking-widest border-r border-white/20', g.bg)}>{g.label}</th>
+                  {bands.map((b, i) => (
+                    <th key={i} colSpan={b.count} className={cn('text-center text-[10px] font-bold text-white py-1.5 uppercase tracking-widest border-r border-white/20', GROUP_CFG[b.group].bg)}>{GROUP_CFG[b.group].label}</th>
                   ))}
+                  <th className="bg-slate-700" />
                 </tr>
                 <tr className="bg-slate-700 text-white">
                   <th className="w-8 bg-slate-700" />
-                  {['SKU / Part #','Type','Product / Model','Brand'].map((h) => (
-                    <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap border-r border-slate-600/30">{h}</th>
-                  ))}
-                  {['Serial / Batch','Qty','Status','Ownership'].map((h) => (
-                    <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-blue-800 border-r border-blue-700/30">{h}</th>
-                  ))}
-                  {['Warehouse','Zone','Rack','Bin / Slot'].map((h) => (
-                    <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-teal-800 border-r border-teal-700/30">{h}</th>
-                  ))}
-                  {['Receive Date','Recv By','AWB','Invoice No.','RMA Ref'].map((h) => (
-                    <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-indigo-800 border-r border-indigo-700/30">{h}</th>
+                  {visibleColumns.map((col) => (
+                    <th key={col.key} className={cn('text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap border-r', GROUP_CFG[col.group].bg, GROUP_CFG[col.group].border)}>{col.label}</th>
                   ))}
                   <th className="px-3 py-2 bg-slate-700 w-16 text-center text-[11px]">Act</th>
                 </tr>
               </thead>
               <tbody>
                 {loading
-                  ? [...Array(10)].map((_, i) => <tr key={i} className="border-b border-slate-100">{[...Array(19)].map((_, j) => <td key={j} className="px-3 py-2.5"><Skeleton className="h-3.5" /></td>)}</tr>)
+                  ? [...Array(10)].map((_, i) => <tr key={i} className="border-b border-slate-100">{[...Array(colSpan)].map((_, j) => <td key={j} className="px-3 py-2.5"><Skeleton className="h-3.5" /></td>)}</tr>)
                   : data.length === 0
-                  ? <tr><td colSpan={19} className="px-4 py-12 text-center text-slate-400">No stock items found</td></tr>
+                  ? <tr><td colSpan={colSpan} className="px-4 py-12 text-center text-slate-400">No stock items found</td></tr>
                   : data.map((item) => (
-                      <InventoryRow key={item.id} item={item} isSelected={selectedId === item.id} onSelect={() => setSelectedId(selectedId === item.id ? null : item.id)} />
+                      <InventoryRow key={item.id} item={item} isSelected={selectedId === item.id} onSelect={() => setSelectedId(selectedId === item.id ? null : item.id)} visibleColumns={visibleColumns} colSpan={colSpan} />
                     ))}
               </tbody>
             </table>
@@ -539,7 +681,7 @@ export default function InventoryPage() {
 
         {/* Legend */}
         <div className="flex flex-wrap gap-4 text-[10px] text-slate-400 flex-shrink-0">
-          {[{ c: 'border-l-red-600', l: 'DOA' }, { c: 'border-l-orange-400', l: 'RTV Pending' }, { c: 'border-l-red-400', l: 'Quarantine' }, { c: 'border-l-amber-400', l: 'Aging >90d' }].map(({ c, l }) => (
+          {[{ c: 'border-l-red-600', l: 'DOA' }, { c: 'border-l-orange-400', l: 'RTV Pending' }, { c: 'border-l-red-400', l: 'On Hold' }, { c: 'border-l-amber-400', l: 'Aging >90d' }].map(({ c, l }) => (
             <div key={l} className={cn('flex items-center gap-1 border-l-2 pl-1.5', c)}>{l}</div>
           ))}
           <span className="text-slate-300">·</span>

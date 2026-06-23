@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
 import {
-  IsArray, IsOptional, IsString, IsNotEmpty, IsNumber, Min,
+  IsArray, IsOptional, IsString, IsNotEmpty, IsNumber, Min, MaxLength,
   ValidateNested, ArrayMinSize, IsDateString,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -18,10 +18,10 @@ export class RequestItemDto {
 }
 
 export class CreateRequestDto {
-  @ApiProperty()
+  @ApiPropertyOptional()
   @IsString()
-  @IsNotEmpty()
-  department: string;
+  @IsOptional()
+  department?: string;
 
   @ApiPropertyOptional()
   @IsString()
@@ -33,10 +33,16 @@ export class CreateRequestDto {
   @IsOptional()
   requiredDate?: string;
 
-  @ApiPropertyOptional()
+  @ApiProperty({ description: 'RMA Case reference number' })
+  @IsString()
+  @IsNotEmpty({ message: 'RMA Case Number is required' })
+  rmaCaseNumber: string;
+
+  @ApiPropertyOptional({ maxLength: 500 })
   @IsString()
   @IsOptional()
-  rmaCaseNumber?: string;
+  @MaxLength(500)
+  remark?: string;
 
   @ApiProperty({ type: [RequestItemDto] })
   @IsArray()

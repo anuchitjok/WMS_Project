@@ -46,6 +46,17 @@ export class CreateUserDto {
 }
 
 export class UpdateUserDto {
+  @ApiPropertyOptional({ description: 'Login username (must stay unique)' })
+  @IsString()
+  @IsOptional()
+  username?: string;
+
+  @ApiPropertyOptional({ description: 'Set a new password directly (min 8 chars)' })
+  @IsString()
+  @MinLength(8)
+  @IsOptional()
+  password?: string;
+
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()

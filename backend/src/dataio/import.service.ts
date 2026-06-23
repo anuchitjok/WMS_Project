@@ -1,9 +1,8 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import { Readable } from 'stream';
-import * as ExcelJS from 'exceljs';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { IMPORT_SCHEMAS, ImportType } from './import-schemas';
+import { parseSpreadsheet } from '../common/spreadsheet';
 import { UserRole, StockStatus, OwnershipType } from '@prisma/client';
 
 export interface ValidatedRow {
@@ -19,52 +18,13 @@ export interface PreviewResult {
   summary: { total: number; valid: number; invalid: number };
 }
 
-const MAX_ROWS = 5000; // guard against oversized files
-
 @Injectable()
 export class ImportService {
   constructor(private prisma: PrismaService) {}
 
   // ── Parse .xlsx or .csv into array of row objects keyed by header ─────────
-  private async parseFile(file: Express.Multer.File): Promise<Record<string, any>[]> {
-    if (!file) throw new BadRequestException('No file uploaded');
-    const wb = new ExcelJS.Workbook();
-    const name = (file.originalname || '').toLowerCase();
-
-    let ws: ExcelJS.Worksheet | undefined;
-    if (name.endsWith('.csv')) {
-      ws = await wb.csv.read(Readable.from(file.buffer));
-    } else if (name.endsWith('.xlsx')) {
-      await wb.xlsx.load(file.buffer as any);
-      ws = wb.worksheets[0];
-    } else {
-      throw new BadRequestException('Unsupported file format. Use .xlsx or .csv');
-    }
-    if (!ws) throw new BadRequestException('Could not read worksheet');
-
-    const headers: string[] = [];
-    ws.getRow(1).eachCell((cell, col) => { headers[col] = String(cell.value ?? '').trim(); });
-
-    const rows: Record<string, any>[] = [];
-    ws.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // skip header
-      const obj: Record<string, any> = { __row: rowNumber };
-      let hasData = false;
-      row.eachCell((cell, col) => {
-        const key = headers[col];
-        if (!key) return;
-        let v: any = cell.value;
-        if (v && typeof v === 'object' && 'text' in v) v = (v as any).text; // rich text / hyperlink
-        if (v !== null && v !== undefined && String(v).trim() !== '') hasData = true;
-        obj[key] = typeof v === 'string' ? v.trim() : v;
-      });
-      if (hasData) rows.push(obj);
-    });
-
-    if (rows.length > MAX_ROWS) {
-      throw new BadRequestException(`File too large: ${rows.length} rows (max ${MAX_ROWS})`);
-    }
-    return rows;
+  private parseFile(file: Express.Multer.File): Promise<Record<string, any>[]> {
+    return parseSpreadsheet(file);
   }
 
   private num(v: any): number | null {

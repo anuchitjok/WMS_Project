@@ -51,7 +51,7 @@ export default function ScannerPage() {
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-          <QrCode className="h-6 w-6 text-blue-600" />
+          <QrCode className="h-6 w-6 text-green-600" />
           Barcode Scanner
         </h1>
         <p className="text-slate-500 text-sm mt-1">Scan a barcode or enter a code manually to look up stock</p>
@@ -88,9 +88,9 @@ export default function ScannerPage() {
       {/* Result */}
       {loading && <Skeleton className="h-48 rounded-xl" />}
       {result && (
-        <Card className="border-blue-200 bg-blue-50/50">
+        <Card className="border-green-200 bg-green-50/50">
           <CardHeader>
-            <CardTitle className="text-base text-blue-900">Stock Item Found</CardTitle>
+            <CardTitle className="text-base text-green-900">Stock Item Found</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3 text-sm">

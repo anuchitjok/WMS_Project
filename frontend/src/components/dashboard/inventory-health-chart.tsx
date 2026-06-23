@@ -7,7 +7,7 @@ import type { InventoryHealth } from '@/lib/api';
 
 const SEGMENTS: { key: keyof InventoryHealth; label: string; bar: string; dot: string }[] = [
   { key: 'available',  label: 'Available',   bar: 'bg-emerald-500', dot: 'bg-emerald-500' },
-  { key: 'reserved',   label: 'Reserved',    bar: 'bg-blue-500',    dot: 'bg-blue-500' },
+  { key: 'reserved',   label: 'Reserved',    bar: 'bg-teal-500',    dot: 'bg-teal-500' },
   { key: 'picked',     label: 'Picked',      bar: 'bg-violet-500',  dot: 'bg-violet-500' },
   { key: 'qcHold',     label: 'QC Hold',     bar: 'bg-amber-500',   dot: 'bg-amber-500' },
   { key: 'rtvPending', label: 'RTV Pending', bar: 'bg-red-500',     dot: 'bg-red-500' },
@@ -44,7 +44,7 @@ export function InventoryHealthChart({ data, loading }: { data?: InventoryHealth
               <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', seg.dot)} />
               <span className="text-xs font-medium text-slate-500 truncate">{seg.label}</span>
             </div>
-            {loading ? <Skeleton className="h-7 w-10" /> : <span className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{(data![seg.key] || 0).toLocaleString()}</span>}
+            {loading ? <Skeleton className="h-7 w-10" /> : <span className="text-2xl font-bold text-slate-900 tabular-nums leading-none">{(data?.[seg.key] ?? 0).toLocaleString()}</span>}
           </div>
         ))}
       </div>

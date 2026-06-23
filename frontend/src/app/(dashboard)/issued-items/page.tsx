@@ -47,7 +47,7 @@ export default function IssuedItemsPage() {
               : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-12 text-center text-slate-400">No issued items awaiting usage confirmation</td></tr>
               : rows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-700">{r.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{r.refNumber}</td>
                   <td className="px-4 py-3 text-slate-600">{r.rmaCaseNumber ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{r.items?.map((it: any) => it.product?.code).join(', ')}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className={REQUEST_STATUS_COLORS[r.status as RequestStatus]}>{r.status.replace(/_/g, ' ')}</Badge></td>

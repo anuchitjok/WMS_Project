@@ -186,27 +186,37 @@ export class InventoryService {
 
   // ─── Enterprise KPI ───────────────────────────────────────────────────────
 
-  async getKpi() {
-    const AGING_DAYS = 90;
-    const agingCutoff = new Date(Date.now() - AGING_DAYS * 86_400_000);
+  async getKpi(warehouseId?: string) {
+    const AGING_90_DAYS = 90;
+    const AGING_365_DAYS = 365;
+    const aging90Cutoff = new Date(Date.now() - AGING_90_DAYS * 86_400_000);
+    const aging365Cutoff = new Date(Date.now() - AGING_365_DAYS * 86_400_000);
+    const whWhere: any = warehouseId ? { warehouseId } : {};
 
-    const [statusGroups, agingCount, lowStockProds, totalValue] = await Promise.all([
-      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true }, _sum: { quantity: true } }),
-      this.prisma.stockItem.count({
-        where: { receivedDate: { lt: agingCutoff }, status: { in: ['AVAILABLE', 'RESERVED'] } },
+    const [statusGroups, aging90Group, aging365Group, lowStockProds, totalValue, totalSku] = await Promise.all([
+      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true }, _sum: { quantity: true }, where: whWhere }),
+      this.prisma.stockItem.aggregate({
+        where: { ...whWhere, receivedDate: { lt: aging90Cutoff }, status: { in: ['AVAILABLE', 'RESERVED'] } },
+        _count: { _all: true }, _sum: { quantity: true },
+      }),
+      this.prisma.stockItem.aggregate({
+        where: { ...whWhere, receivedDate: { lt: aging365Cutoff }, status: { in: ['AVAILABLE', 'RESERVED'] } },
+        _count: { _all: true }, _sum: { quantity: true },
       }),
       this.prisma.product.findMany({
         where: { isActive: true, minStock: { gt: 0 } },
         select: { id: true, minStock: true, unitCost: true, _count: { select: { stockItems: true } } },
       }),
       this.prisma.stockItem.findMany({
-        where: { status: { notIn: ['SHIPPED', 'CLOSED', 'CANCELLED'] } },
+        where: { ...whWhere, status: { notIn: ['SHIPPED', 'CLOSED', 'CANCELLED'] } },
         select: { quantity: true, product: { select: { unitCost: true } } },
       }),
+      this.prisma.stockItem.findMany({ where: whWhere, select: { productId: true }, distinct: ['productId'] }),
     ]);
 
     const byStatus = Object.fromEntries(statusGroups.map((g) => [g.status, { count: g._count._all, qty: g._sum.quantity ?? 0 }]));
     const totalItems = statusGroups.reduce((a, g) => a + g._count._all, 0);
+    const totalQty = statusGroups.reduce((a, g) => a + (g._sum.quantity ?? 0), 0);
     const lowStockCount = lowStockProds.filter((p) => p._count.stockItems < p.minStock).length;
     const inventoryValue = totalValue.reduce((a, i) => a + i.quantity * (i.product?.unitCost ?? 0), 0);
 
@@ -219,15 +229,30 @@ export class InventoryService {
       rtv:        byStatus['RTV_PENDING']?.count ?? 0,
       doa:        byStatus['DOA']?.count ?? 0,
       damaged:    byStatus['DAMAGED']?.count ?? 0,
-      agingCount,
+      agingCount: aging90Group._count._all,
       lowStockCount,
       inventoryValue: Math.round(inventoryValue),
+      // ─── Additive fields for Inventory Dashboard Enhancement (CR-INV-001) ───
+      totalSku: totalSku.length,
+      totalQty,
+      availableQty: byStatus['AVAILABLE']?.qty ?? 0,
+      reservedQty: byStatus['RESERVED']?.qty ?? 0,
+      rtvQty: byStatus['RTV_PENDING']?.qty ?? 0,
+      aging90Count: aging90Group._count._all,
+      aging90Qty: aging90Group._sum.quantity ?? 0,
+      aging365Count: aging365Group._count._all,
+      aging365Qty: aging365Group._sum.quantity ?? 0,
+      bottleneck: {
+        available: byStatus['AVAILABLE']?.qty ?? 0,
+        reserved: byStatus['RESERVED']?.qty ?? 0,
+        rtvPending: byStatus['RTV_PENDING']?.qty ?? 0,
+      },
     };
   }
 
   // ─── Enhanced list for enterprise grid ───────────────────────────────────
 
-  async findEnterpriseList(filter: StockFilterDto & { condition?: string; sourceType?: string; serialOnly?: boolean; aging?: boolean }) {
+  async findEnterpriseList(filter: StockFilterDto & { condition?: string; sourceType?: string; brandId?: string; itemType?: string; serialOnly?: boolean; aging?: boolean; aging365?: boolean }) {
     const { search, status, warehouseId, page = 1, limit = 50 } = filter;
     const skip = (page - 1) * limit;
 
@@ -235,10 +260,15 @@ export class InventoryService {
     if (status) where.status = status;
     if (warehouseId) where.warehouseId = warehouseId;
     if (filter.serialOnly) where.serialNumber = { not: null };
-    if (filter.aging) {
+    if (filter.aging365) {
+      const cut365 = new Date(Date.now() - 365 * 86_400_000);
+      where.receivedDate = { lt: cut365 };
+    } else if (filter.aging) {
       const cut = new Date(Date.now() - 90 * 86_400_000);
       where.receivedDate = { lt: cut };
     }
+    if (filter.brandId) where.product = { ...where.product, brandId: filter.brandId };
+    if (filter.itemType) where.product = { ...where.product, productType: filter.itemType };
     if (search) {
       where.OR = [
         { serialNumber: { contains: search, mode: 'insensitive' } },

@@ -214,7 +214,7 @@ export function NotificationBell() {
                   className={cn(
                     'px-4 py-3 cursor-pointer transition-colors',
                     'hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100',
-                    !n.isRead && 'bg-blue-50/50 border-l-2 border-blue-500',
+                    !n.isRead && 'bg-green-50/60 border-l-2 border-green-500',
                   )}
                 >
                   {/* Two-column: icon | text + unread dot */}
@@ -248,7 +248,7 @@ export function NotificationBell() {
                     {/* Unread indicator – fixed size, never grows */}
                     {!n.isRead && (
                       <div
-                        className="h-2 w-2 rounded-full bg-blue-500 flex-shrink-0 mt-1.5"
+                        className="h-2 w-2 rounded-full bg-green-500 flex-shrink-0 mt-1.5"
                         aria-label="Unread"
                       />
                     )}
@@ -264,7 +264,7 @@ export function NotificationBell() {
           <Link href="/notifications" onClick={() => setOpen(false)}>
             <Button
               variant="ghost"
-              className="w-full text-xs text-slate-500 hover:text-blue-600 h-8"
+              className="w-full text-xs text-slate-500 hover:text-green-600 h-8"
             >
               View all notifications
             </Button>
@@ -286,11 +286,11 @@ export function NotificationBell() {
         aria-haspopup="dialog"
         className={cn(
           'relative p-2 rounded-lg transition-colors focus:outline-none',
-          'hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-blue-400',
-          open && 'bg-slate-700',
+          'hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-green-400',
+          open && 'bg-slate-100',
         )}
       >
-        <Bell className="h-5 w-5 text-slate-300" />
+        <Bell className="h-5 w-5 text-slate-500" />
         {unread > 0 && (
           <span
             className="absolute top-1 right-1 h-4 min-w-4 rounded-full bg-red-500 text-[10px] text-white flex items-center justify-center font-bold px-0.5 tabular-nums"

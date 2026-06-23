@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM   HSNT WMS - Start All Services
-REM   เปิด Backend + Frontend + Browser
+REM   Launch Backend + Frontend + Browser
 REM ============================================================
 title HSNT WMS Launcher
 
@@ -15,32 +15,32 @@ echo    HSNT WMS - Starting Services
 echo ============================================
 echo.
 
-REM --- ตรวจสอบ Node.js ---
+REM --- Check Node.js ---
 where node >nul 2>nul
 if errorlevel 1 (
-  echo [ERROR] ไม่พบ Node.js ที่ %NODE_DIR%
-  echo         กรุณาตรวจสอบการติดตั้ง Node.js
+  echo [ERROR] Node.js not found at %NODE_DIR%
+  echo         Please check your Node.js installation
   pause
   exit /b 1
 )
 
-echo [1/3] เปิด Backend  (http://localhost:3001) ...
+echo [1/3] Starting Backend  (http://localhost:3001) ...
 start "WMS Backend" cmd /k "set PATH=%NODE_DIR%;%PATH% && cd /d "%ROOT%backend" && npm run start:dev"
 
-echo [2/3] รอ Backend เริ่มทำงาน (8 วินาที) ...
+echo [2/3] Waiting for Backend to start (8 seconds) ...
 timeout /t 8 /nobreak >nul
 
-echo [3/3] เปิด Frontend (http://localhost:3000) ...
+echo [3/3] Starting Frontend (http://localhost:3000) ...
 start "WMS Frontend" cmd /k "set PATH=%NODE_DIR%;%PATH% && cd /d "%ROOT%frontend" && npm run dev"
 
 echo.
-echo รอ Frontend เริ่มทำงาน (10 วินาที) แล้วเปิดเบราว์เซอร์ ...
+echo Waiting for Frontend to start (10 seconds), then opening browser ...
 timeout /t 10 /nobreak >nul
 start "" http://localhost:3000
 
 echo.
 echo ============================================
-echo    เปิดบริการเรียบร้อย!
+echo    All services started!
 echo ============================================
 echo    Frontend : http://localhost:3000
 echo    Backend  : http://localhost:3001/api
@@ -48,8 +48,8 @@ echo    API Docs : http://localhost:3001/api/docs
 echo.
 echo    Login: admin / Admin@123
 echo.
-echo    *** อย่าปิดหน้าต่าง Backend และ Frontend ***
-echo    ถ้าจะหยุดทั้งหมด ให้รัน  stop.bat
+echo    *** Do NOT close the Backend and Frontend windows ***
+echo    To stop everything, run  stop.bat
 echo ============================================
 echo.
 pause

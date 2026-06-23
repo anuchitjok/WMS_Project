@@ -35,6 +35,9 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -49,38 +52,42 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* White + Green enterprise theme (HSNT WMS) */
+  --background: #f8fafc;          /* slate-50 app canvas */
+  --foreground: #111827;          /* gray-900 primary text */
+  --card: #ffffff;
+  --card-foreground: #111827;
+  --popover: #ffffff;
+  --popover-foreground: #111827;
+  --primary: #16a34a;             /* green-600 brand */
+  --primary-foreground: #ffffff;
+  --primary-hover: #15803d;       /* green-700 hover */
+  --success: #22c55e;             /* green-500 */
+  --success-foreground: #ffffff;
+  --secondary: #ffffff;           /* secondary buttons = white w/ green border (see button.tsx) */
+  --secondary-foreground: #15803d;
+  --muted: #f1f5f9;               /* slate-100 */
+  --muted-foreground: #6b7280;    /* gray-500 secondary text */
+  --accent: #ecfdf5;              /* green-50 tint */
+  --accent-foreground: #15803d;   /* green-700 */
+  --destructive: #dc2626;         /* red-600 solid danger */
+  --border: #e5e7eb;              /* gray-200 */
+  --input: #e5e7eb;
+  --ring: #16a34a;                /* green focus ring */
+  --chart-1: #16a34a;
+  --chart-2: #22c55e;
+  --chart-3: #4ade80;
+  --chart-4: #86efac;
+  --chart-5: #bbf7d0;
+  --radius: 0.75rem;              /* 12px enterprise corners */
+  --sidebar: #ffffff;
+  --sidebar-foreground: #111827;
+  --sidebar-primary: #16a34a;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ecfdf5;      /* green-50 active/hover tint */
+  --sidebar-accent-foreground: #15803d;
+  --sidebar-border: #e5e7eb;
+  --sidebar-ring: #16a34a;
 }
 
 .dark {

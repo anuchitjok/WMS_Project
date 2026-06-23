@@ -9,7 +9,7 @@ import type { LucideIcon } from 'lucide-react';
 export type KpiTone = 'blue' | 'green' | 'amber' | 'red' | 'violet' | 'slate';
 
 const TONE: Record<KpiTone, string> = {
-  blue:   'bg-blue-50 text-blue-600',
+  blue:   'bg-teal-50 text-teal-600',
   green:  'bg-emerald-50 text-emerald-600',
   amber:  'bg-amber-50 text-amber-600',
   red:    'bg-red-50 text-red-600',
@@ -17,43 +17,72 @@ const TONE: Record<KpiTone, string> = {
   slate:  'bg-slate-100 text-slate-600',
 };
 
+// Threshold-based operational status (real, value-derived — NOT a fabricated trend).
+export type KpiStatus = 'normal' | 'attention' | 'critical';
+
+const STATUS_DOT: Record<KpiStatus, string> = {
+  normal: 'bg-emerald-500',
+  attention: 'bg-amber-500',
+  critical: 'bg-red-500',
+};
+const STATUS_LABEL: Record<KpiStatus, string> = {
+  normal: 'Normal',
+  attention: 'Attention',
+  critical: 'Critical',
+};
+const STATUS_ACCENT: Record<KpiStatus, string> = {
+  normal: 'before:bg-emerald-400',
+  attention: 'before:bg-amber-400',
+  critical: 'before:bg-red-500',
+};
+
 export interface KpiCardProps {
   label: string;
   value: number | string | null;
   icon: LucideIcon;
   tone?: KpiTone;
+  status?: KpiStatus;
   delta?: number | null;
   href?: string;
   loading?: boolean;
   emptyText?: string;
 }
 
-export function KpiCard({ label, value, icon: Icon, tone = 'blue', delta, href, loading, emptyText = 'N/A' }: KpiCardProps) {
+export function KpiCard({ label, value, icon: Icon, tone = 'blue', status, delta, href, loading, emptyText = 'N/A' }: KpiCardProps) {
   const body = (
     <div
       className={cn(
-        'h-full bg-white border border-slate-200 rounded-xl p-4 shadow-sm transition-all',
+        'relative h-full overflow-hidden bg-white border border-slate-200 rounded-xl p-4 shadow-sm transition-all',
+        // left status accent bar
+        status && 'before:absolute before:left-0 before:top-0 before:h-full before:w-1',
+        status && STATUS_ACCENT[status],
         href && 'hover:shadow-md hover:border-slate-300',
       )}
     >
       <div className="flex items-center justify-between">
-        <span className={cn('h-10 w-10 rounded-lg grid place-items-center flex-shrink-0', TONE[tone])}>
+        <span className={cn('h-11 w-11 rounded-xl grid place-items-center flex-shrink-0', TONE[tone])}>
           <Icon className="h-5 w-5" />
         </span>
-        {typeof delta === 'number' && delta !== 0 && !loading && (
+        {!loading && status && (
+          <span className="flex items-center gap-1.5">
+            <span className={cn('h-2 w-2 rounded-full', STATUS_DOT[status])} />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{STATUS_LABEL[status]}</span>
+          </span>
+        )}
+        {!loading && !status && typeof delta === 'number' && delta !== 0 && (
           <span className={cn('text-xs font-semibold tabular-nums', delta > 0 ? 'text-emerald-600' : 'text-red-600')}>
             {delta > 0 ? '▲' : '▼'} {Math.abs(delta)}
           </span>
         )}
       </div>
       {loading ? (
-        <Skeleton className="h-8 w-16 mt-3" />
+        <Skeleton className="h-9 w-16 mt-3" />
       ) : (
-        <p className="mt-3 text-3xl font-bold text-slate-900 tabular-nums leading-none">
+        <p className="mt-3 text-[2rem] font-bold text-slate-900 tabular-nums leading-none">
           {value === null ? emptyText : typeof value === 'number' ? value.toLocaleString() : value}
         </p>
       )}
-      <p className="mt-1.5 text-[13px] font-medium text-slate-500 leading-tight">{label}</p>
+      <p className="mt-2 text-[13px] font-medium text-slate-500 leading-tight">{label}</p>
     </div>
   );
 

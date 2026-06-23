@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ProductType } from '@prisma/client';
+import { ProductType, ProductStatus } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 
 // Column definitions shared between export & template
@@ -27,9 +27,10 @@ export class ProductsService {
 
   // ─── Product Master ────────────────────────────────────────────────────────
 
-  findAll(search?: string, productType?: ProductType) {
+  findAll(search?: string, productType?: ProductType, productStatus?: ProductStatus) {
     return this.prisma.product.findMany({
       where: {
+        ...(productStatus ? { productStatus } : {}),
         ...(productType ? { productType } : {}),
         ...(search ? {
           OR: [
@@ -44,7 +45,7 @@ export class ProductsService {
         } : {}),
       },
       include: { brand: true, _count: { select: { stockItems: true } } },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { name: 'asc' },
     });
   }
 
@@ -59,6 +60,7 @@ export class ProductsService {
       const exists = await this.prisma.product.findUnique({ where: { partNumber: dto.partNumber } });
       if (exists) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
     }
+    const status: ProductStatus = dto.productStatus ?? ProductStatus.ACTIVE;
     const p = await this.prisma.product.create({
       data: {
         code: dto.code, name: dto.name, description: dto.description ?? null,
@@ -67,7 +69,11 @@ export class ProductsService {
         productType: dto.productType ?? ProductType.SPARE_PART,
         brandId: dto.brandId || undefined, category: dto.category,
         unit: dto.unit ?? 'unit', unitCost: dto.unitCost ?? 0,
-        serialControlled: dto.serialControlled ?? false, minStock: dto.minStock ?? 0,
+        serialControlled: dto.serialControlled ?? false,
+        batchControlled: dto.batchControlled ?? false,
+        minStock: dto.minStock ?? 0,
+        productStatus: status,
+        isActive: status === ProductStatus.ACTIVE,
       },
       include: { brand: true },
     });
@@ -83,19 +89,38 @@ export class ProductsService {
       const clash = await this.prisma.product.findFirst({ where: { partNumber: dto.partNumber, NOT: { id } } });
       if (clash) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
     }
+    const data: any = {
+      name: dto.name, description: dto.description, manufacturer: dto.manufacturer,
+      model: dto.model, partNumber: dto.partNumber, vendorPartNumber: dto.vendorPartNumber ?? null,
+      productType: dto.productType, category: dto.category, unit: dto.unit,
+      unitCost: dto.unitCost, serialControlled: dto.serialControlled,
+      batchControlled: dto.batchControlled,
+      minStock: dto.minStock, brandId: dto.brandId || undefined,
+    };
+    if (dto.productStatus !== undefined) {
+      data.productStatus = dto.productStatus;
+      data.isActive = dto.productStatus === ProductStatus.ACTIVE;
+    }
+    const p = await this.prisma.product.update({ where: { id }, data, include: { brand: true } });
+    await this.prisma.auditLog.create({
+      data: { userId, action: 'PRODUCT_UPDATED', entityType: 'Product', entityId: id, detail: p.code },
+    });
+    return p;
+  }
+
+  async changeStatus(id: string, newStatus: ProductStatus, userId: string) {
+    const product = await this.findOne(id);
+    if (product.productStatus === newStatus) return product;
     const p = await this.prisma.product.update({
       where: { id },
-      data: {
-        name: dto.name, description: dto.description, manufacturer: dto.manufacturer,
-        model: dto.model, partNumber: dto.partNumber, vendorPartNumber: dto.vendorPartNumber ?? null,
-        productType: dto.productType, category: dto.category, unit: dto.unit,
-        unitCost: dto.unitCost, serialControlled: dto.serialControlled,
-        minStock: dto.minStock, brandId: dto.brandId || undefined,
-      },
+      data: { productStatus: newStatus, isActive: newStatus === ProductStatus.ACTIVE },
       include: { brand: true },
     });
     await this.prisma.auditLog.create({
-      data: { userId, action: 'PRODUCT_UPDATED', entityType: 'Product', entityId: id, detail: p.code },
+      data: {
+        userId, action: 'PRODUCT_STATUS_CHANGED', entityType: 'Product', entityId: id,
+        detail: `${p.code}: ${product.productStatus} → ${newStatus}`,
+      },
     });
     return p;
   }
@@ -105,7 +130,11 @@ export class ProductsService {
   async getKpi() {
     const [
       totalSku,
+      activeCount,
+      inactiveCount,
+      discontinuedCount,
       serializedItems,
+      batchControlledCount,
       quarantineCount,
       rtvPendingCount,
       doaCount,
@@ -113,23 +142,31 @@ export class ProductsService {
       lowStockProds,
       inventoryAgg,
     ] = await Promise.all([
-      this.prisma.product.count({ where: { isActive: true } }),
-      this.prisma.stockItem.count({ where: { serialNumber: { not: null } } }),
+      this.prisma.product.count(),
+      this.prisma.product.count({ where: { productStatus: ProductStatus.ACTIVE } }),
+      this.prisma.product.count({ where: { productStatus: ProductStatus.INACTIVE } }),
+      this.prisma.product.count({ where: { productStatus: ProductStatus.DISCONTINUED } }),
+      this.prisma.product.count({ where: { serialControlled: true } }),
+      this.prisma.product.count({ where: { batchControlled: true } }),
       this.prisma.stockItem.count({ where: { status: 'QUARANTINE' } }),
       this.prisma.stockItem.count({ where: { status: 'RTV_PENDING' } }),
       this.prisma.stockItem.count({ where: { status: 'DOA' } }),
       this.prisma.warehouse.count({ where: { isActive: true } }),
       this.prisma.product.findMany({
-        where: { isActive: true, minStock: { gt: 0 } },
+        where: { productStatus: ProductStatus.ACTIVE, minStock: { gt: 0 } },
         select: { id: true, minStock: true, _count: { select: { stockItems: true } } },
       }),
       this.prisma.stockItem.aggregate({ _sum: { quantity: true } }),
     ]);
 
-    const lowStock = lowStockProds.filter((p) => (p._count.stockItems) < p.minStock).length;
+    const lowStock = lowStockProds.filter((p) => p._count.stockItems < p.minStock).length;
     const totalQty = inventoryAgg._sum.quantity ?? 0;
 
-    return { totalSku, serializedItems, lowStock, quarantineCount, rtvPendingCount, doaCount, totalWarehouses, totalQty };
+    return {
+      totalSku, activeCount, inactiveCount, discontinuedCount,
+      serializedItems, batchControlledCount, lowStock,
+      quarantineCount, rtvPendingCount, doaCount, totalWarehouses, totalQty,
+    };
   }
 
   // ─── Enterprise List ───────────────────────────────────────────────────────
@@ -137,14 +174,19 @@ export class ProductsService {
   async getEnterpriseList(filter: {
     search?: string; warehouseId?: string; brandId?: string;
     productType?: string; stockStatus?: string; serialOnly?: boolean;
+    productStatus?: string; category?: string;
     page?: number; limit?: number;
   }) {
-    const { search, warehouseId, brandId, productType, stockStatus, serialOnly, page = 1, limit = 50 } = filter;
+    const { search, warehouseId, brandId, productType, stockStatus, serialOnly, productStatus, category, page = 1, limit = 50 } = filter;
     const skip = (page - 1) * limit;
 
-    const where: any = { isActive: true };
+    // Default to ACTIVE when no productStatus filter provided (maintains backward compat)
+    const where: any = productStatus
+      ? { productStatus }
+      : { productStatus: ProductStatus.ACTIVE };
     if (productType) where.productType = productType;
     if (brandId) where.brandId = brandId;
+    if (category) where.category = { contains: category, mode: 'insensitive' };
     if (search) {
       where.OR = [
         { code: { contains: search, mode: 'insensitive' } },
@@ -219,7 +261,9 @@ export class ProductsService {
         partNumber: p.partNumber, vendorPartNumber: p.vendorPartNumber,
         productType: p.productType, category: p.category,
         unit: p.unit, unitCost: p.unitCost, minStock: p.minStock,
-        serialControlled: p.serialControlled,
+        serialControlled: p.serialControlled, batchControlled: p.batchControlled,
+        productStatus: p.productStatus,
+        brandId: p.brandId ?? '',
         brandName: p.brand?.name ?? '',
         totalQty,
         stockItemCount: p._count.stockItems,

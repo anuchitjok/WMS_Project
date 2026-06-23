@@ -42,7 +42,7 @@ export default function AdjustmentPage() {
       <PageHeader title="Stock Adjustment" subtitle="Controlled quantity adjustment with approval" icon={Calculator}
         action={
           <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white" />}>+ Adjustment Request</DialogTrigger>
+            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>+ Adjustment Request</DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>Create Stock Adjustment</DialogTitle></DialogHeader>
               <div className="space-y-3">
@@ -53,7 +53,7 @@ export default function AdjustmentPage() {
                   <div className="space-y-1"><Label>Qty After</Label><Input type="number" value={form.quantityAfter} onChange={(e) => setForm((f) => ({ ...f, quantityAfter: Number(e.target.value) }))} /></div>
                 </div>
               </div>
-              <DialogFooter><Button onClick={submit} className="bg-blue-600 hover:bg-blue-700 text-white">Create</Button></DialogFooter>
+              <DialogFooter><Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }
@@ -73,7 +73,7 @@ export default function AdjustmentPage() {
               : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No adjustments</td></tr>
               : rows.map((a) => (
                 <tr key={a.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-700">{a.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{a.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{a.productLabel}</td>
                   <td className="px-4 py-3 text-slate-600">{a.reason}</td>
                   <td className="px-4 py-3 font-medium">{a.quantityBefore} → {a.quantityAfter}</td>

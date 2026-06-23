@@ -16,7 +16,7 @@ import { formatDate } from '@/lib/utils';
 
 const STATUS_COLORS: Record<string, string> = {
   OPEN: 'bg-slate-100 text-slate-700', IN_PROGRESS: 'bg-yellow-100 text-yellow-800',
-  REVIEW: 'bg-blue-100 text-blue-800', APPROVED: 'bg-green-100 text-green-700',
+  REVIEW: 'bg-orange-100 text-orange-800', APPROVED: 'bg-green-100 text-green-700',
   CLOSED: 'bg-slate-200 text-slate-600', CANCELLED: 'bg-red-100 text-red-700',
 };
 
@@ -69,7 +69,7 @@ export default function CycleCountPage() {
       <PageHeader title="Cycle Count" subtitle="Inventory accuracy verification and variance management" icon={Calculator}
         action={
           <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-blue-600 hover:bg-blue-700 text-white" />}><Plus className="h-4 w-4 mr-1" />New Count Session</DialogTrigger>
+            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}><Plus className="h-4 w-4 mr-1" />New Count Session</DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>Create Count Session</DialogTitle></DialogHeader>
               <div className="space-y-3">
@@ -89,7 +89,7 @@ export default function CycleCountPage() {
                 </div>
                 <div className="space-y-1"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} /></div>
               </div>
-              <DialogFooter><Button onClick={create} className="bg-blue-600 hover:bg-blue-700 text-white">Create Session</Button></DialogFooter>
+              <DialogFooter><Button onClick={create} className="bg-green-600 hover:bg-green-700 text-white">Create Session</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }
@@ -106,8 +106,8 @@ export default function CycleCountPage() {
               : sessions.length === 0 ? <p className="p-8 text-center text-slate-400 text-sm">No sessions</p>
               : sessions.map((s) => (
                 <div key={s.id} onClick={() => loadSession(s.id)}
-                  className={`p-3 cursor-pointer hover:bg-slate-50 transition-colors ${selected?.id === s.id ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}>
-                  <p className="font-mono text-xs font-semibold text-blue-700">{s.refNumber}</p>
+                  className={`p-3 cursor-pointer hover:bg-slate-50 transition-colors ${selected?.id === s.id ? 'bg-green-50 border-l-4 border-green-500' : ''}`}>
+                  <p className="font-mono text-xs font-semibold text-green-700">{s.refNumber}</p>
                   <div className="flex items-center justify-between mt-1">
                     <Badge variant="outline" className={STATUS_COLORS[s.status]}>{s.status}</Badge>
                     <span className="text-xs text-slate-400">{s._count?.lines ?? 0} lines</span>
@@ -132,7 +132,7 @@ export default function CycleCountPage() {
                   <p className="text-xs text-slate-400">{selected.summary?.counted}/{selected.summary?.total} counted · {selected.summary?.varianceCount} variances</p>
                 </div>
                 <div className="flex gap-2">
-                  {selected.status === 'IN_PROGRESS' && <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" onClick={submit}>Submit for Review</Button>}
+                  {selected.status === 'IN_PROGRESS' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={submit}>Submit for Review</Button>}
                   {selected.status === 'REVIEW' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={approve}>Approve & Apply</Button>}
                 </div>
               </div>
@@ -167,7 +167,7 @@ export default function CycleCountPage() {
                         </td>
                         <td className="px-3 py-2">
                           {l.countedQty === null && ['OPEN', 'IN_PROGRESS'].includes(selected.status) && (
-                            <Button size="sm" className="h-6 text-xs bg-blue-600 hover:bg-blue-700 text-white" onClick={() => submitCount(l.id)}>
+                            <Button size="sm" className="h-6 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => submitCount(l.id)}>
                               <CheckCircle2 className="h-3 w-3" />
                             </Button>
                           )}

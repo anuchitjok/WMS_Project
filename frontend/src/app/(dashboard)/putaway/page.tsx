@@ -50,7 +50,7 @@ export default function PutawayPage() {
                   <td className="px-4 py-3 font-medium">{i.quantity}</td>
                   <td className="px-4 py-3 text-xs text-slate-600">{[i.warehouse?.code, i.rack?.code, i.slot?.code].filter(Boolean).join(' › ') || '—'}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className="bg-amber-100 text-amber-700">Pending Putaway</Badge></td>
-                  <td className="px-4 py-3"><Button size="sm" className="h-7 bg-blue-600 hover:bg-blue-700 text-white" onClick={() => confirm(i)}>Confirm</Button></td>
+                  <td className="px-4 py-3"><Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => confirm(i)}>Confirm</Button></td>
                 </tr>
               ))}
           </tbody>

@@ -22,7 +22,7 @@ export default function DashboardError({ error, reset }: { error: Error & { dige
         </p>
       </div>
       <div className="flex gap-2">
-        <Button onClick={reset} className="bg-blue-600 hover:bg-blue-700 text-white">Try again</Button>
+        <Button onClick={reset} className="bg-green-600 hover:bg-green-700 text-white">Try again</Button>
         <Button variant="outline" onClick={() => (window.location.href = '/dashboard')}>Go to Dashboard</Button>
       </div>
     </div>

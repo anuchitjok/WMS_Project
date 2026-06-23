@@ -10,8 +10,8 @@ export function PageHeader({ title, subtitle, icon: Icon, action }: PageHeaderPr
     <div className="flex items-start justify-between gap-4 mb-5">
       <div className="flex items-center gap-3">
         {Icon && (
-          <div className="rounded-lg bg-blue-100 p-2.5">
-            <Icon className="h-5 w-5 text-blue-600" />
+          <div className="rounded-xl bg-green-50 p-2.5 ring-1 ring-green-100">
+            <Icon className="h-5 w-5 text-green-600" />
           </div>
         )}
         <div>

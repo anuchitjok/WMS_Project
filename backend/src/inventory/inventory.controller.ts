@@ -26,7 +26,7 @@ export class InventoryController {
 
   @Get('kpi')
   @ApiOperation({ summary: 'Enterprise inventory KPI stats' })
-  getKpi() { return this.inventoryService.getKpi(); }
+  getKpi(@Query('warehouseId') warehouseId?: string) { return this.inventoryService.getKpi(warehouseId); }
 
   @Get('enterprise-list')
   @ApiOperation({ summary: 'Enterprise inventory list with traceability' })
@@ -34,14 +34,17 @@ export class InventoryController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('warehouseId') warehouseId?: string,
+    @Query('brandId') brandId?: string,
+    @Query('itemType') itemType?: string,
     @Query('serialOnly') serialOnly?: string,
     @Query('aging') aging?: string,
+    @Query('aging365') aging365?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     return this.inventoryService.findEnterpriseList({
-      search, status: status as any, warehouseId,
-      serialOnly: serialOnly === 'true', aging: aging === 'true',
+      search, status: status as any, warehouseId, brandId, itemType,
+      serialOnly: serialOnly === 'true', aging: aging === 'true', aging365: aging365 === 'true',
       page: page ? +page : 1, limit: limit ? +limit : 50,
     } as any);
   }

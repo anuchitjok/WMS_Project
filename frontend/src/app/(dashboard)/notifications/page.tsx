@@ -42,7 +42,7 @@ export default function NotificationsPage() {
           : !data?.data?.length ? <div className="p-12 text-center text-slate-400"><Bell className="h-10 w-10 mx-auto mb-3 opacity-20" /><p>No notifications</p></div>
           : data.data.map((n: any) => (
             <div key={n.id} onClick={() => read(n.id)}
-              className={cn('flex gap-4 p-4 hover:bg-slate-50 cursor-pointer transition-colors', !n.isRead && 'bg-blue-50/30 border-l-4 border-blue-500')}>
+              className={cn('flex gap-4 p-4 hover:bg-slate-50 cursor-pointer transition-colors', !n.isRead && 'bg-green-50/30 border-l-4 border-green-500')}>
               <span className="text-xl flex-shrink-0 mt-0.5">{TYPE_ICONS[n.type] ?? '💬'}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2">
@@ -52,7 +52,7 @@ export default function NotificationsPage() {
                 <p className="text-sm text-slate-500 mt-0.5">{n.message}</p>
                 {n.entityType && <Badge variant="outline" className="text-[10px] mt-1">{n.entityType}</Badge>}
               </div>
-              {!n.isRead && <div className="h-2.5 w-2.5 rounded-full bg-blue-500 flex-shrink-0 mt-1.5" />}
+              {!n.isRead && <div className="h-2.5 w-2.5 rounded-full bg-green-500 flex-shrink-0 mt-1.5" />}
             </div>
           ))}
       </div>

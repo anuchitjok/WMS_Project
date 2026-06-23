@@ -42,7 +42,7 @@ export default function SettingsPage() {
               {s.description && <p className="text-xs text-slate-400 mb-2">{s.description}</p>}
               <div className="flex gap-2 mt-2">
                 <Input className="h-8 text-sm" defaultValue={s.value} onChange={(e) => setEdits((p) => ({ ...p, [s.key]: e.target.value }))} />
-                <Button size="sm" className="h-8 bg-blue-600 hover:bg-blue-700 text-white" onClick={() => save(s.key)} disabled={edits[s.key] === undefined || edits[s.key] === s.value}>Save</Button>
+                <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white" onClick={() => save(s.key)} disabled={edits[s.key] === undefined || edits[s.key] === s.value}>Save</Button>
               </div>
             </div>
           ))}

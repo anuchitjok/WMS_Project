@@ -2,7 +2,11 @@ import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } f
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { WarehouseService } from './warehouse.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RackType, SlotStatus, SlotType } from '@prisma/client';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RackType, SlotStatus, SlotType, UserRole } from '@prisma/client';
+
+const MASTER_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR] as const;
 
 @ApiTags('Warehouse')
 @ApiBearerAuth()
@@ -15,6 +19,36 @@ export class WarehouseController {
   @Get('products') findProducts() { return this.warehouseService.findProducts(); }
   @Get('brands') findBrands() { return this.warehouseService.findBrands(); }
   @Get('vendors') findVendors() { return this.warehouseService.findVendors(); }
+
+  // ─── Brand Master ────────────────────────────────────────────────────────────
+  @Get('brands/managed') @ApiOperation({ summary: 'List all brands with product counts (master view)' })
+  listBrandsManaged() { return this.warehouseService.listBrandsManaged(); }
+
+  @Post('brands') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Create brand' })
+  createBrand(@Body() dto: { code?: string; name: string; contact?: string }) { return this.warehouseService.createBrand(dto); }
+
+  @Patch('brands/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Update brand' })
+  updateBrand(@Param('id') id: string, @Body() dto: any) { return this.warehouseService.updateBrand(id, dto); }
+
+  @Delete('brands/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Deactivate brand' })
+  deleteBrand(@Param('id') id: string) { return this.warehouseService.deleteBrand(id); }
+
+  // ─── Vendor Master ─────────────────────────────────────────────────────────
+  @Get('vendors/managed') @ApiOperation({ summary: 'List all vendors with RTV counts (master view)' })
+  listVendorsManaged() { return this.warehouseService.listVendorsManaged(); }
+
+  @Post('vendors') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Create vendor' })
+  createVendor(@Body() dto: { code: string; name: string; contact?: string; email?: string }) { return this.warehouseService.createVendor(dto); }
+
+  @Patch('vendors/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Update vendor' })
+  updateVendor(@Param('id') id: string, @Body() dto: any) { return this.warehouseService.updateVendor(id, dto); }
+
+  @Delete('vendors/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Deactivate vendor' })
+  deleteVendor(@Param('id') id: string) { return this.warehouseService.deleteVendor(id); }
+
+  // ─── Phase 2: Per-brand inventory rollup ─────────────────────────────────────
+  @Get('inventory-by-brand') @ApiOperation({ summary: 'Inventory rolled up per brand' })
+  inventoryByBrand() { return this.warehouseService.inventoryByBrand(); }
   @Get('stats') @ApiOperation({ summary: 'KPI stats for warehouse layout' })
   getStats(@Query('warehouseId') warehouseId?: string) { return this.warehouseService.getStats(warehouseId); }
   @Get('slots/:id/detail') @ApiOperation({ summary: 'Slot detail with stock items' })

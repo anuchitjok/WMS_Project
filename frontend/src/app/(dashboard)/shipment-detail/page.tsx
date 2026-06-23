@@ -18,7 +18,7 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
   PACKING: <Clock className="h-4 w-4 text-orange-500" />,
   PACKED: <CheckCircle2 className="h-4 w-4 text-orange-600" />,
   READY_TO_SHIP: <Clock className="h-4 w-4 text-purple-500" />,
-  SHIPPED: <Truck className="h-4 w-4 text-blue-600" />,
+  SHIPPED: <Truck className="h-4 w-4 text-green-600" />,
   DELIVERED: <CheckCircle2 className="h-4 w-4 text-green-600" />,
   CLOSED: <CheckCircle2 className="h-4 w-4 text-slate-500" />,
 };
@@ -65,7 +65,7 @@ function ShipmentDetailInner() {
             {task.partialPick && <Badge variant="outline" className="bg-amber-100 text-amber-700 text-xs mb-1">Partial</Badge>}
           </div>
           <div className="h-2 bg-slate-100 rounded-full mt-2 overflow-hidden">
-            <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: `${task.progressPct}%` }} />
+            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${task.progressPct}%` }} />
           </div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -82,7 +82,7 @@ function ShipmentDetailInner() {
           {task.shipment ? (
             <div>
               <p className="font-semibold text-sm">{task.shipment.carrier || 'No carrier'}</p>
-              <p className="font-mono text-xs text-blue-600">{task.shipment.trackingNumber || '—'}</p>
+              <p className="font-mono text-xs text-green-600">{task.shipment.trackingNumber || '—'}</p>
             </div>
           ) : <p className="text-slate-400 text-sm">No shipment yet</p>}
         </div>
@@ -147,7 +147,7 @@ function ShipmentDetailInner() {
           <div className="space-y-3">
             {task.shipment.timeline.map((tl: any) => (
               <div key={tl.id} className="flex gap-3 items-start">
-                <Truck className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                <Truck className="h-4 w-4 text-green-500 flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="font-medium text-slate-800 text-sm">{tl.status}</p>
                   <p className="text-xs text-slate-500">{tl.description}</p>

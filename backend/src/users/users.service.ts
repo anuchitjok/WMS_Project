@@ -68,19 +68,36 @@ export class UsersService {
 
   async update(id: string, dto: any, actorId: string) {
     await this.findOne(id);
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: {
-        fullName: dto.fullName,
-        email: dto.email,
-        department: dto.department,
-        phone: dto.phone,
-        role: dto.role as UserRole | undefined,
-        roleId: dto.roleId,
-      },
-      select: USER_SELECT,
-    });
+
+    // Username must stay unique across (non-deleted) users
+    if (dto.username) {
+      const clash = await this.prisma.user.findFirst({
+        where: { username: dto.username, NOT: { id } },
+        select: { id: true },
+      });
+      if (clash) throw new ConflictException('Username already exists');
+    }
+
+    const data: any = {
+      fullName: dto.fullName,
+      email: dto.email,
+      department: dto.department,
+      phone: dto.phone,
+      role: dto.role as UserRole | undefined,
+      roleId: dto.roleId,
+    };
+    if (dto.username) data.username = dto.username;
+    if (dto.password) {
+      data.passwordHash = await bcrypt.hash(dto.password, 12);
+      data.passwordChangedAt = new Date();
+      data.forcePasswordChange = false; // admin set an explicit password
+      data.failedLoginCount = 0;
+      data.lockedUntil = null;
+    }
+
+    const user = await this.prisma.user.update({ where: { id }, data, select: USER_SELECT });
     await this.audit(actorId, 'USER_UPDATED', id);
+    if (dto.password) await this.audit(actorId, 'PASSWORD_SET_BY_ADMIN', id);
     return user;
   }
 

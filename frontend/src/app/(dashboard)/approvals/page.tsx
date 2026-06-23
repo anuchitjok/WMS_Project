@@ -57,7 +57,7 @@ export default function ApprovalsWorkspacePage() {
               : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No requests pending approval</td></tr>
               : rows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-700">{r.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{r.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{r.requester?.fullName}<br /><span className="text-xs text-slate-400">{r.department}</span></td>
                   <td className="px-4 py-3 text-slate-600">{r.rmaCaseNumber ?? '—'}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className="bg-green-100 text-green-700">Stock OK</Badge></td>
