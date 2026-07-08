@@ -8,7 +8,6 @@ import { authApi } from '@/lib/api';
 import {
   Hexagon,
   Boxes,
-  Truck,
   ClipboardList,
   BarChart3,
   ShieldCheck,
@@ -131,12 +130,9 @@ export default function LoginPage() {
           {[
             { top: '24%', left: '20%' },
             { top: '30%', left: '82%' },
-            { top: '12%', left: '50%' },
             { top: '78%', left: '26%' },
             { top: '78%', left: '76%' },
-            { top: '90%', left: '50%' },
             { top: '52%', left: '8%' },
-            { top: '46%', left: '92%' },
           ].map((p, i) => (
             <span
               key={i}
@@ -162,18 +158,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="wms-kpi wms-kpi-inbound" style={{ animationDelay: '0.8s' }}>
-            <span className="wms-kpi-icon">
-              <Truck size={18} />
-            </span>
-            <div>
-              <p className="wms-kpi-label">Inbound</p>
-              <p className="wms-kpi-value">128</p>
-              <p className="wms-kpi-sub">Orders today</p>
-            </div>
-          </div>
-
-          <div className="wms-kpi wms-kpi-outbound" style={{ animationDelay: '1.4s' }}>
+          <div className="wms-kpi wms-kpi-outbound" style={{ animationDelay: '1.2s' }}>
             <span className="wms-kpi-icon wms-kpi-icon-solid">
               <ClipboardList size={18} />
             </span>
@@ -181,17 +166,6 @@ export default function LoginPage() {
               <p className="wms-kpi-label">Outbound</p>
               <p className="wms-kpi-value">256</p>
               <p className="wms-kpi-sub">Orders today</p>
-            </div>
-          </div>
-
-          <div className="wms-kpi wms-kpi-accuracy" style={{ animationDelay: '0.4s' }}>
-            <span className="wms-kpi-icon wms-kpi-icon-solid">
-              <Boxes size={18} />
-            </span>
-            <div>
-              <p className="wms-kpi-label">Stock Accuracy</p>
-              <p className="wms-kpi-value">99.8%</p>
-              <p className="wms-kpi-delta">Excellent</p>
             </div>
           </div>
         </div>
@@ -213,8 +187,8 @@ export default function LoginPage() {
         <div className="wms-card">
           <div className="wms-brand">
             <span className="wms-brand-mark">
-              <Hexagon size={34} className="wms-brand-hex" />
-              <BarChart3 size={16} className="wms-brand-glyph" />
+              <span className="wms-brand-hex"><Hexagon size={34} /></span>
+              <span className="wms-brand-glyph"><BarChart3 size={16} /></span>
             </span>
             <span className="wms-brand-name">
               HSNT<span className="wms-brand-name-accent">WMS</span>
@@ -229,7 +203,7 @@ export default function LoginPage() {
             <div className="wms-field">
               <label htmlFor="username">Username</label>
               <div className="wms-input-wrap">
-                <User size={18} className="wms-input-icon" />
+                <span className="wms-input-icon"><User size={18} /></span>
                 <input
                   id="username"
                   placeholder="Enter your username"
@@ -244,7 +218,7 @@ export default function LoginPage() {
             <div className="wms-field">
               <label htmlFor="password">Password</label>
               <div className="wms-input-wrap">
-                <Lock size={18} className="wms-input-icon" />
+                <span className="wms-input-icon"><Lock size={18} /></span>
                 <input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
@@ -304,7 +278,7 @@ export default function LoginPage() {
           --muted: #6b7280;
           --border: #e5e7eb;
           display: grid;
-          grid-template-columns: 65% 35%;
+          grid-template-columns: 68% 32%;
           min-height: 100vh;
           background: #ffffff;
           color: var(--ink);
@@ -345,7 +319,7 @@ export default function LoginPage() {
           position: absolute;
           border-radius: 50%;
           filter: blur(70px);
-          opacity: 0.6;
+          opacity: 0.4;
           pointer-events: none;
         }
         .wms-ambient-1 {
@@ -514,31 +488,23 @@ export default function LoginPage() {
           border: 1px solid var(--border);
           border-radius: 18px;
           box-shadow: 0 16px 40px rgba(17, 24, 39, 0.1);
-          animation: kpiFloat 6s ease-in-out infinite;
+          animation: kpiFloat 8s ease-in-out infinite;
         }
         @keyframes kpiFloat {
           0%, 100% {
             transform: translateY(0);
           }
           50% {
-            transform: translateY(-12px);
+            transform: translateY(-7px);
           }
         }
         .wms-kpi-inventory {
-          top: 4%;
-          left: 28%;
-        }
-        .wms-kpi-inbound {
-          top: 14%;
-          right: -2%;
+          top: 8%;
+          left: 14%;
         }
         .wms-kpi-outbound {
-          bottom: 12%;
-          right: 4%;
-        }
-        .wms-kpi-accuracy {
-          bottom: 16%;
-          left: -2%;
+          bottom: 14%;
+          right: 10%;
         }
         .wms-kpi-icon {
           display: grid;
@@ -643,11 +609,17 @@ export default function LoginPage() {
         }
         .wms-brand-hex {
           position: absolute;
+          inset: 0;
+          display: grid;
+          place-items: center;
           color: var(--green);
         }
         .wms-brand-glyph {
-          position: relative;
-          color: #fff;
+          position: absolute;
+          inset: 0;
+          display: grid;
+          place-items: center;
+          color: var(--green-hover);
           z-index: 1;
         }
         .wms-brand-name {

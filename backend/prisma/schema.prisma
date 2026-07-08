@@ -370,6 +370,9 @@ model Slot {
   status     SlotStatus @default(EMPTY)
   capacity   Int        @default(1)
   maxWeight  Float?
+  lengthCm   Float?
+  widthCm    Float?
+  heightCm   Float?
   isActive   Boolean    @default(true)
   isDeleted  Boolean    @default(false)
   deletedAt  DateTime?

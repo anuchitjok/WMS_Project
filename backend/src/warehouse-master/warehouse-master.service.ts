@@ -158,7 +158,7 @@ export class WarehouseMasterService {
   }
 
   // ── Slot ────────────────────────────────────────────────────────────────────
-  async createSlot(dto: { rackId: string; code: string; name?: string; level?: number; column?: number; slotType?: SlotType; capacity?: number; maxWeight?: number }, userId: string) {
+  async createSlot(dto: { rackId: string; code: string; name?: string; level?: number; column?: number; slotType?: SlotType; capacity?: number; maxWeight?: number; lengthCm?: number; widthCm?: number; heightCm?: number }, userId: string) {
     if (!dto.code?.trim()) throw new ConflictException('Slot code is required');
     const rack = await this.prisma.rack.findFirst({ where: { id: dto.rackId, isDeleted: false } });
     if (!rack) throw new NotFoundException('Rack not found');
@@ -169,7 +169,7 @@ export class WarehouseMasterService {
     return slot;
   }
 
-  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; capacity: number; maxWeight: number }>, userId: string) {
+  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; capacity: number; maxWeight: number; lengthCm: number; widthCm: number; heightCm: number }>, userId: string) {
     const before = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
     if (!before) throw new NotFoundException('Slot not found');
     const after = await this.prisma.slot.update({ where: { id }, data: dto });

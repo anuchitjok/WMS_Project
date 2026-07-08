@@ -107,10 +107,10 @@ export default function DashboardPage() {
   // Row 2 KPI cards with threshold status indicators.
   const cards: { label: string; value: number | null; icon: typeof PackagePlus; tone: KpiTone; href: string; status: KpiStatus }[] = [
     { label: 'Receiving Today',    value: kpis?.todayReceiving    ?? null, icon: PackagePlus,   tone: 'blue',   href: '/receiving',            status: 'normal' },
-    { label: 'Pending Putaway',    value: kpis?.pendingPutaway    ?? null, icon: MapPin,        tone: 'violet', href: '/putaway',              status: cls(kpis?.pendingPutaway ?? 0, 0, 25) },
-    { label: 'Pending Approval',   value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'amber',  href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
+    { label: 'Pending Putaway',    value: kpis?.pendingPutaway    ?? null, icon: MapPin,        tone: 'blue',   href: '/putaway',              status: cls(kpis?.pendingPutaway ?? 0, 0, 25) },
+    { label: 'Pending Approval',   value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'blue',   href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
     { label: 'Active Fulfillment', value: kpis?.activeFulfillment ?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: 'Shipment Today',     value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'green',  href: '/outbound/fulfillment', status: 'normal' },
+    { label: 'Shipment Today',     value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
     { label: 'Critical Alerts',    value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/inventory',            status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
   ];
 

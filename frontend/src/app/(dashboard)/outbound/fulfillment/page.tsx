@@ -6,7 +6,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Truck, RefreshCw, AlertTriangle, Package, PackageCheck, Clock,
-  Zap, ChevronUp, ChevronDown,
+  Zap, ChevronUp, ChevronDown, Printer,
   CheckCircle2, Layers, BoxSelect, ShipWheel, LayoutGrid,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -118,7 +118,7 @@ function KpiFilterBar({
           key={key}
           onClick={() => onSelect(key)}
           className={cn(
-            'flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white shadow-sm transition-all cursor-pointer hover:border-slate-300',
+            'flex items-center gap-2.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white shadow-sm transition-all cursor-pointer hover:border-slate-300',
             selected === key && activeCls,
           )}
         >
@@ -126,15 +126,15 @@ function KpiFilterBar({
           <div className="text-left">
             {loading
               ? <Skeleton className="h-5 w-8" />
-              : <p className={cn('text-xl font-bold tabular-nums leading-none', numCls)}>{count}</p>
+              : <p className="text-xl font-bold tabular-nums leading-none text-slate-900">{count}</p>
             }
-            <p className="text-[10px] text-slate-500 mt-0.5 whitespace-nowrap">{label}</p>
+            <p className="text-[11px] text-slate-500 mt-1 whitespace-nowrap">{label}</p>
           </div>
         </button>
       ))}
       {/* SLA Risk — info only */}
       <div className={cn(
-        'flex items-center gap-2 px-3 py-2 rounded-lg border shadow-sm',
+        'flex items-center gap-2.5 px-3.5 py-2 rounded-lg border shadow-sm',
         slaRisk > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200',
       )}>
         <Clock className={cn('w-4 h-4 flex-shrink-0', slaRisk > 0 ? 'text-red-600' : 'text-slate-400')} />
@@ -142,7 +142,7 @@ function KpiFilterBar({
           {loading ? <Skeleton className="h-5 w-8" /> : (
             <p className={cn('text-xl font-bold tabular-nums leading-none', slaRisk > 0 ? 'text-red-700' : 'text-slate-500')}>{slaRisk}</p>
           )}
-          <p className="text-[10px] text-slate-500 mt-0.5">SLA Risk</p>
+          <p className="text-[11px] text-slate-500 mt-1">SLA Risk</p>
         </div>
       </div>
     </div>
@@ -170,7 +170,7 @@ function ProgressCell({ task }: { task: any }) {
       <div className="flex-1 h-1.5 bg-slate-200 rounded-full overflow-hidden min-w-[40px]">
         <div className={cn('h-full rounded-full transition-all', bar)} style={{ width: `${Math.min(pct, 100)}%` }} />
       </div>
-      <span className="text-[10px] text-slate-500 tabular-nums whitespace-nowrap">{picked}/{items}</span>
+      <span className="text-[11px] text-slate-500 tabular-nums whitespace-nowrap">{picked}/{items}</span>
     </div>
   );
 }
@@ -187,7 +187,7 @@ function StatusBadge({ status }: { status: string }) {
     status === 'DELIVERED'     ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
     'bg-red-100 text-red-800 border-red-300';
   return (
-    <span className={cn('inline-flex items-center border rounded px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap', cls)}>
+    <span className={cn('inline-flex items-center border rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap', cls)}>
       {status.replace(/_/g, ' ')}
     </span>
   );
@@ -222,12 +222,12 @@ function SortTh({
 }) {
   const active = current === field;
   return (
-    <th className={cn('px-3 py-2.5 text-left', className)}>
+    <th className={cn('px-3 py-3 text-left', className)}>
       <button
         onClick={() => onSort(field)}
         className={cn(
-          'flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide whitespace-nowrap group',
-          active ? 'text-slate-900' : 'text-slate-400 hover:text-slate-600',
+          'flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap group',
+          active ? 'text-slate-900' : 'text-slate-500 hover:text-slate-700',
         )}
       >
         {label}
@@ -254,43 +254,43 @@ function ActionCell({
   const canShip = ['PACKED', 'READY_TO_SHIP'].includes(task.status);
 
   return (
-    <div className="flex items-center gap-1 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap">
       {!isExc && (
-        <Button size="sm" className="h-6 text-[11px] px-2 bg-green-600 hover:bg-green-700 text-white"
+        <Button size="sm" className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
           onClick={() => onAdvance(task.id)}>
           Next →
         </Button>
       )}
       {canPack && (
-        <Button size="sm" className="h-6 text-[11px] px-2 bg-teal-600 hover:bg-teal-700 text-white"
+        <Button size="sm" className="h-7 text-xs px-2.5 bg-teal-600 hover:bg-teal-700 text-white"
           onClick={() => onPack(task)} title="Pack">
-          <Package className="w-3 h-3" />
+          <Package className="w-3.5 h-3.5" />
         </Button>
       )}
       {canShip && (
-        <Button size="sm" className="h-6 text-[11px] px-2 bg-purple-600 hover:bg-purple-700 text-white"
+        <Button size="sm" className="h-7 text-xs px-2.5 bg-purple-600 hover:bg-purple-700 text-white"
           onClick={() => onShip(task)} title="Ship">
-          <Truck className="w-3 h-3" />
+          <Truck className="w-3.5 h-3.5" />
         </Button>
       )}
       <button
         onClick={() => documentsApi.openWithAuth(documentsApi.pickingSlipUrl(task.requestId ?? task.id))}
-        className="h-6 w-6 flex items-center justify-center border border-slate-200 rounded text-slate-400 hover:text-green-600 hover:border-green-300"
+        className="h-7 w-7 flex items-center justify-center border border-slate-200 rounded-md text-slate-400 hover:text-green-600 hover:border-green-300 transition-colors"
         title="Print Picking Slip"
       >
-        🖨
+        <Printer className="w-3.5 h-3.5" />
       </button>
       {!isExc && (
         <button
-          className="h-6 w-6 flex items-center justify-center border border-slate-200 rounded text-slate-400 hover:text-red-600 hover:border-red-300"
+          className="h-7 w-7 flex items-center justify-center border border-slate-200 rounded-md text-slate-400 hover:text-red-600 hover:border-red-300 transition-colors"
           onClick={() => onException(task.id)}
           title="Mark Exception"
         >
-          <AlertTriangle className="w-3 h-3" />
+          <AlertTriangle className="w-3.5 h-3.5" />
         </button>
       )}
       <Link href={`/shipment-detail?taskId=${task.id}`}>
-        <button className="h-6 px-1.5 text-[10px] border border-slate-200 rounded text-slate-400 hover:text-slate-700">
+        <button className="h-7 px-2.5 text-xs border border-slate-200 rounded-md text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors">
           Detail
         </button>
       </Link>
@@ -394,17 +394,17 @@ function ActionQueueTable({
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <SortTh label="Request Time" field="time" current={sortField} asc={sortAsc} onSort={onSort} className="w-[110px]" />
-                  <th className="px-3 py-2.5 text-left text-[11px] font-medium text-slate-400 uppercase tracking-wide w-[130px]">Order No</th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-medium text-slate-400 uppercase tracking-wide w-[120px]">Status</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[130px]">Order No</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[120px]">Status</th>
                   <SortTh label="SLA"          field="sla"  current={sortField} asc={sortAsc} onSort={onSort} className="w-[72px]" />
-                  <th className="px-3 py-2.5 text-center text-[11px] font-medium text-slate-400 uppercase tracking-wide w-[56px]">Items</th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-medium text-slate-400 uppercase tracking-wide w-[96px]">
+                  <th className="px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[56px]">Items</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[96px]">
                     {ownerColHeader(selectedLane)}
                   </th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-medium text-slate-400 uppercase tracking-wide w-[140px]">
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[140px]">
                     {extraColHeader(selectedLane)}
                   </th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-medium text-slate-400 uppercase tracking-wide">Action</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -412,31 +412,31 @@ function ActionQueueTable({
                   const effectiveLane = selectedLane === 'all' ? task._lane : selectedLane;
                   return (
                     <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="px-3 py-2 font-mono text-xs text-slate-600">
+                      <td className="px-3 py-3 font-mono text-xs text-slate-600">
                         {formatRequestTime(task.createdAt ?? task.updatedAt)}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-3">
                         <div className="flex flex-col">
                           <span className="font-mono text-xs font-semibold text-green-700">{task.refNumber}</span>
                           {task.requestRef && task.requestRef !== task.refNumber && (
-                            <span className="font-mono text-[10px] text-slate-400">{task.requestRef}</span>
+                            <span className="font-mono text-[11px] text-slate-400">{task.requestRef}</span>
                           )}
                         </div>
                       </td>
-                      <td className="px-3 py-2"><StatusBadge status={task.status} /></td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-3"><StatusBadge status={task.status} /></td>
+                      <td className="px-3 py-3">
                         <SlaCell createdAt={task.createdAt ?? task.updatedAt} />
                       </td>
-                      <td className="px-3 py-2 text-center text-xs text-slate-500">
+                      <td className="px-3 py-3 text-center text-xs text-slate-500">
                         {task.items?.length ?? 0}
                       </td>
-                      <td className="px-3 py-2 text-xs text-slate-500 truncate max-w-[96px]">
+                      <td className="px-3 py-3 text-xs text-slate-500 truncate max-w-[96px]">
                         {task.assignedTo ?? task.owner ?? '—'}
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-3">
                         <ExtraCell task={task} lane={effectiveLane} />
                       </td>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-3">
                         <ActionCell
                           task={task}
                           onAdvance={onAdvance}
