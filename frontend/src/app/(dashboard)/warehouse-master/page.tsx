@@ -80,6 +80,24 @@ export default function WarehouseMasterPage() {
     catch (e: any) { toast.error(e.message); }
   }
 
+  // Single source of truth for structural actions — shared by the detail panel's
+  // contextual CTA and the Quick Actions menu so both trigger identical behavior.
+  function handleAction(a: string) {
+    if (!sel && a !== 'createWh') return;
+    switch (a) {
+      case 'createWh': setModal({ kind: 'wh', mode: 'create' }); break;
+      case 'editWh': if (sel?.type === 'warehouse') setModal({ kind: 'wh', mode: 'edit', data: sel.data }); break;
+      case 'activate': if (sel?.type === 'warehouse') doAction(() => warehouseMasterApi.activateWarehouse(sel.data.id), 'Warehouse activated'); break;
+      case 'deactivate': if (sel?.type === 'warehouse') doAction(() => warehouseMasterApi.deactivateWarehouse(sel.data.id), 'Warehouse deactivated'); break;
+      case 'createRack': if (sel?.type === 'warehouse') setModal({ kind: 'rack', mode: 'create', warehouseId: sel.data.id }); break;
+      case 'editRack': if (sel?.type === 'rack') setModal({ kind: 'rack', mode: 'edit', data: sel.data }); break;
+      case 'deleteRack': if (sel?.type === 'rack') setModal({ kind: 'delete', entity: 'rack', id: sel.data.id, label: sel.data.code }); break;
+      case 'createSlot': if (sel?.type === 'rack') setModal({ kind: 'slot', mode: 'create', rackId: sel.data.id }); break;
+      case 'editSlot': if (sel?.type === 'slot') setModal({ kind: 'slot', mode: 'edit', data: sel.data }); break;
+      case 'deleteSlot': if (sel?.type === 'slot') setModal({ kind: 'delete', entity: 'slot', id: sel.data.id, label: sel.data.code }); break;
+    }
+  }
+
   return (
     <div className="p-4 sm:p-5 space-y-4 bg-slate-50 min-h-full">
       {/* Header */}
@@ -105,8 +123,8 @@ export default function WarehouseMasterPage() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Total Warehouses', value: summary?.totalWarehouses, icon: WhIcon, tile: 'bg-green-50 text-green-600' },
-          { label: 'Active Warehouses', value: summary?.activeWarehouses, icon: CheckCircle2, tile: 'bg-emerald-50 text-emerald-600' },
-          { label: 'Total Racks', value: summary?.totalRacks, icon: Layers, tile: 'bg-teal-50 text-teal-600' },
+          { label: 'Active Warehouses', value: summary?.activeWarehouses, icon: CheckCircle2, tile: 'bg-green-50 text-green-600' },
+          { label: 'Total Racks', value: summary?.totalRacks, icon: Layers, tile: 'bg-slate-100 text-slate-600' },
           { label: 'Total Slots', value: summary?.totalSlots, icon: Grid3x3, tile: 'bg-slate-100 text-slate-600' },
         ].map((c) => {
           const Icon = c.icon;
@@ -124,9 +142,24 @@ export default function WarehouseMasterPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
         {/* Left — Tree */}
         <div className="lg:col-span-1 xl:col-span-1 bg-white border border-slate-200 rounded-xl p-3 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide px-2 py-1.5">Structure</h2>
+          <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide px-2 pt-1.5">Structure</h2>
+          {/* Persistent orientation cue — the create flow is otherwise easy to miss */}
+          <p className="px-2 pb-2 pt-0.5 text-[11px] leading-snug text-slate-400">
+            Select a <span className="text-green-600 font-medium">Warehouse</span> to add Racks · a <span className="text-green-600 font-medium">Rack</span> to add Slots
+          </p>
           {loading ? (
             <div className="space-y-1 mt-1">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-8" />)}</div>
+          ) : tree.length === 0 ? (
+            <div className="mt-2 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center">
+              <WhIcon className="h-8 w-8 mx-auto text-slate-300" />
+              <p className="mt-2 text-sm font-medium text-slate-600">No warehouses yet</p>
+              <p className="mt-1 text-xs text-slate-400">Start by creating a warehouse, then add racks and slots inside it.</p>
+              {canWrite && (
+                <Button size="sm" className="mt-3 gap-1.5 bg-green-600 hover:bg-green-700 text-white" onClick={() => setModal({ kind: 'wh', mode: 'create' })}>
+                  <Plus className="w-4 h-4" /> Create your first warehouse
+                </Button>
+              )}
+            </div>
           ) : (
             <div className="mt-1 space-y-0.5 max-h-[70vh] overflow-y-auto">
               {tree.map((w) => (
@@ -158,35 +191,18 @@ export default function WarehouseMasterPage() {
                   ))}
                 </div>
               ))}
-              {tree.length === 0 && <p className="text-sm text-slate-400 text-center py-8">No warehouses</p>}
             </div>
           )}
         </div>
 
         {/* Center — Detail */}
         <div className="lg:col-span-2 xl:col-span-2">
-          <DetailPanel sel={sel} />
+          <DetailPanel sel={sel} canWrite={canWrite} onAction={handleAction} />
         </div>
 
         {/* Right — Quick Actions */}
         <div className="lg:col-span-3 xl:col-span-1">
-          <QuickActions sel={sel} canWrite={canWrite}
-            onAction={(a) => {
-              if (!sel && a !== 'createWh') return;
-              switch (a) {
-                case 'createWh': setModal({ kind: 'wh', mode: 'create' }); break;
-                case 'editWh': if (sel?.type === 'warehouse') setModal({ kind: 'wh', mode: 'edit', data: sel.data }); break;
-                case 'activate': if (sel?.type === 'warehouse') doAction(() => warehouseMasterApi.activateWarehouse(sel.data.id), 'Warehouse activated'); break;
-                case 'deactivate': if (sel?.type === 'warehouse') doAction(() => warehouseMasterApi.deactivateWarehouse(sel.data.id), 'Warehouse deactivated'); break;
-                case 'createRack': if (sel?.type === 'warehouse') setModal({ kind: 'rack', mode: 'create', warehouseId: sel.data.id }); break;
-                case 'editRack': if (sel?.type === 'rack') setModal({ kind: 'rack', mode: 'edit', data: sel.data }); break;
-                case 'deleteRack': if (sel?.type === 'rack') setModal({ kind: 'delete', entity: 'rack', id: sel.data.id, label: sel.data.code }); break;
-                case 'createSlot': if (sel?.type === 'rack') setModal({ kind: 'slot', mode: 'create', rackId: sel.data.id }); break;
-                case 'editSlot': if (sel?.type === 'slot') setModal({ kind: 'slot', mode: 'edit', data: sel.data }); break;
-                case 'deleteSlot': if (sel?.type === 'slot') setModal({ kind: 'delete', entity: 'slot', id: sel.data.id, label: sel.data.code }); break;
-              }
-            }}
-          />
+          <QuickActions sel={sel} canWrite={canWrite} onAction={handleAction} />
         </div>
       </div>
 
@@ -222,14 +238,23 @@ function Node({ icon: Icon, label, sub, badge, depth, hasChildren, open, onToggl
 }
 
 // ─── Detail panel ────────────────────────────────────────────────────────────────
-function DetailPanel({ sel }: { sel: Sel }) {
+function DetailPanel({ sel, canWrite, onAction }: { sel: Sel; canWrite: boolean; onAction: (a: string) => void }) {
   if (!sel) return (
     <div className="bg-white border border-slate-200 rounded-xl p-8 shadow-sm text-center">
       <Building2 className="h-9 w-9 mx-auto text-slate-300" />
-      <p className="mt-2 text-sm font-medium text-slate-600">Select a node</p>
-      <p className="text-xs text-slate-400">Choose a warehouse, rack, or slot from the tree to view details</p>
+      <p className="mt-2 text-sm font-medium text-slate-600">Select a warehouse to begin</p>
+      <p className="text-xs text-slate-400 mt-1 max-w-xs mx-auto">
+        Click a node in the Structure tree to see its details. Selecting a Warehouse lets you add Racks; selecting a Rack lets you add Slots.
+      </p>
     </div>
   );
+
+  // Breadcrumb path so the operator always knows where the selected node sits.
+  const crumbs: string[] =
+    sel.type === 'warehouse' ? [sel.data.name]
+    : sel.type === 'rack' ? [sel.warehouse.name, sel.data.code]
+    : [sel.warehouse.name, sel.rack.code, sel.data.code];
+
   const rows: [string, React.ReactNode][] =
     sel.type === 'warehouse' ? [
       ['Type', 'Warehouse'], ['Code', sel.data.code], ['Name', sel.data.name], ['Location', sel.data.location ?? '—'],
@@ -247,9 +272,27 @@ function DetailPanel({ sel }: { sel: Sel }) {
         ? `${sel.data.lengthCm} × ${sel.data.widthCm} × ${sel.data.heightCm}` : '—'],
       ['Stock items', sel.data._count?.stockItems ?? 0],
     ];
+
+  // The single most likely next step for this node, surfaced inline (not buried in the side menu).
+  const nextStep =
+    sel.type === 'warehouse' ? { action: 'createRack', label: 'Add Rack to this warehouse', icon: Layers }
+    : sel.type === 'rack' ? { action: 'createSlot', label: 'Add Slot to this rack', icon: MapPin }
+    : null;
+
+  const typeLabel = sel.type.charAt(0).toUpperCase() + sel.type.slice(1);
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">{sel.type} Detail</h2>
+      {/* Breadcrumb — orientation / system status */}
+      <nav className="flex items-center flex-wrap gap-1 text-xs text-slate-400 mb-2">
+        {crumbs.map((c, i) => (
+          <span key={i} className="flex items-center gap-1">
+            {i > 0 && <ChevronRight className="w-3 h-3" />}
+            <span className={i === crumbs.length - 1 ? 'font-medium text-slate-600' : ''}>{c}</span>
+          </span>
+        ))}
+      </nav>
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">{typeLabel} Detail</h2>
       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
         {rows.map(([k, v]) => (
           <div key={k} className="flex items-center justify-between gap-3 text-sm border-b border-slate-50 pb-2">
@@ -257,6 +300,19 @@ function DetailPanel({ sel }: { sel: Sel }) {
           </div>
         ))}
       </dl>
+
+      {/* Contextual primary next-step — placed where the eye already is (Fitts's Law) */}
+      {canWrite && nextStep && (
+        <button
+          onClick={() => onAction(nextStep.action)}
+          className="mt-4 w-full flex items-center justify-center gap-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium py-2.5 transition-colors"
+        >
+          <Plus className="w-4 h-4" /> {nextStep.label}
+        </button>
+      )}
+      {canWrite && sel.type === 'slot' && (
+        <p className="mt-4 text-center text-xs text-slate-400">This slot is ready — it will appear as a putaway destination.</p>
+      )}
     </div>
   );
 }
@@ -266,41 +322,64 @@ function Pill({ tone, children }: { tone: 'green' | 'slate'; children: React.Rea
 
 // ─── Quick actions ───────────────────────────────────────────────────────────────
 function QuickActions({ sel, canWrite, onAction }: { sel: Sel; canWrite: boolean; onAction: (a: string) => void }) {
-  const items: { id: string; label: string; icon: any; show: boolean; danger?: boolean }[] = [
-    { id: 'createWh', label: 'Create Warehouse', icon: Plus, show: true },
-    { id: 'editWh', label: 'Edit Warehouse', icon: Pencil, show: sel?.type === 'warehouse' },
-    { id: 'activate', label: 'Activate', icon: Power, show: sel?.type === 'warehouse' && !sel.data.isActive },
-    { id: 'deactivate', label: 'Deactivate', icon: PowerOff, show: sel?.type === 'warehouse' && sel.data.isActive },
-    { id: 'createRack', label: 'Create Rack', icon: Plus, show: sel?.type === 'warehouse' },
-    { id: 'editRack', label: 'Edit Rack', icon: Pencil, show: sel?.type === 'rack' },
-    { id: 'createSlot', label: 'Create Slot', icon: Plus, show: sel?.type === 'rack' },
-    { id: 'deleteRack', label: 'Delete Rack', icon: Trash2, show: sel?.type === 'rack', danger: true },
-    { id: 'editSlot', label: 'Edit Slot', icon: Pencil, show: sel?.type === 'slot' },
-    { id: 'deleteSlot', label: 'Delete Slot', icon: Trash2, show: sel?.type === 'slot', danger: true },
-  ];
-  const visible = items.filter((i) => i.show);
+  // Manage-actions for the currently selected node. Creating children lives on the
+  // node's own detail panel (a more discoverable place), so it's not duplicated here.
+  const manage: { id: string; label: string; icon: any; show: boolean }[] = [
+    { id: 'editWh', label: 'Edit warehouse', icon: Pencil, show: sel?.type === 'warehouse' },
+    { id: 'activate', label: 'Activate warehouse', icon: Power, show: sel?.type === 'warehouse' && !sel.data.isActive },
+    { id: 'deactivate', label: 'Deactivate warehouse', icon: PowerOff, show: sel?.type === 'warehouse' && sel.data.isActive },
+    { id: 'editRack', label: 'Edit rack', icon: Pencil, show: sel?.type === 'rack' },
+    { id: 'editSlot', label: 'Edit slot', icon: Pencil, show: sel?.type === 'slot' },
+  ].filter((i) => i.show);
+
+  const destructive: { id: string; label: string; icon: any; show: boolean }[] = [
+    { id: 'deleteRack', label: 'Delete rack', icon: Trash2, show: sel?.type === 'rack' },
+    { id: 'deleteSlot', label: 'Delete slot', icon: Trash2, show: sel?.type === 'slot' },
+  ].filter((i) => i.show);
+
+  const contextLabel = !sel ? null
+    : sel.type === 'warehouse' ? `Warehouse · ${sel.data.code}`
+    : sel.type === 'rack' ? `Rack · ${sel.data.code}`
+    : `Slot · ${sel.data.code}`;
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">Quick Actions</h2>
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Manage</h2>
+      {contextLabel && <p className="text-[11px] text-slate-400 mb-3 mt-0.5 truncate">{contextLabel}</p>}
+      {!contextLabel && <div className="mb-3" />}
       {!canWrite ? (
         <div className="text-center py-6">
           <ShieldAlert className="h-7 w-7 mx-auto text-slate-300" />
           <p className="mt-2 text-xs text-slate-400">Read-only access.<br />Editing requires Manager role.</p>
         </div>
+      ) : !sel ? (
+        <p className="text-xs text-slate-400 text-center py-6 leading-relaxed">
+          Select a warehouse, rack, or slot<br />from the tree to edit or manage it.
+        </p>
       ) : (
         <div className="space-y-2">
-          {visible.map((i) => {
+          {manage.map((i) => {
             const Icon = i.icon;
             return (
               <button key={i.id} onClick={() => onAction(i.id)}
-                className={cn('w-full flex items-center gap-2.5 rounded-lg border p-2.5 text-sm font-medium transition-colors',
-                  i.danger ? 'border-slate-200 text-slate-600 hover:border-red-300 hover:bg-red-50 hover:text-red-600'
-                    : 'border-slate-200 text-slate-700 hover:border-green-300 hover:bg-green-50 hover:text-green-700')}>
+                className="w-full flex items-center gap-2.5 rounded-lg border border-slate-200 p-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-green-300 hover:bg-green-50 hover:text-green-700">
                 <Icon className="w-4 h-4" /> {i.label}
               </button>
             );
           })}
-          {!sel && <p className="text-[11px] text-slate-400 text-center pt-1">Select a node for more actions</p>}
+          {destructive.length > 0 && (
+            <div className="pt-2 mt-1 border-t border-slate-100 space-y-2">
+              {destructive.map((i) => {
+                const Icon = i.icon;
+                return (
+                  <button key={i.id} onClick={() => onAction(i.id)}
+                    className="w-full flex items-center gap-2.5 rounded-lg border border-slate-200 p-2.5 text-sm font-medium text-slate-600 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600">
+                    <Icon className="w-4 h-4" /> {i.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -341,8 +420,8 @@ function WarehouseModal({ mode, data, onClose, onSaved }: { mode: 'create' | 'ed
   return (
     <ModalWrap title={mode === 'create' ? 'Create Warehouse' : `Edit Warehouse — ${data?.code}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
-        {mode === 'create' && <Fld label="Code *"><Input placeholder="TOWER-D1FL" value={form.code} onChange={F('code')} /></Fld>}
-        <Fld label="Name *"><Input placeholder="Tower D1FL" value={form.name} onChange={F('name')} /></Fld>
+        {mode === 'create' && <Fld label="Code *"><Input autoFocus placeholder="TOWER-D1FL" value={form.code} onChange={F('code')} /><p className="mt-1 text-[11px] text-slate-400">Unique short ID · can’t be changed later</p></Fld>}
+        <Fld label="Name *"><Input autoFocus={mode !== 'create'} placeholder="Tower D1FL" value={form.name} onChange={F('name')} /></Fld>
         <Fld label="Location"><Input placeholder="Tower D · Level 1" value={form.location} onChange={F('location')} /></Fld>
         <div className="flex gap-2 pt-1">
           <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
@@ -369,8 +448,8 @@ function RackModal({ mode, warehouseId, data, onClose, onSaved }: { mode: 'creat
     <ModalWrap title={mode === 'create' ? 'Create Rack' : `Edit Rack — ${data?.code}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
-          {mode === 'create' && <Fld label="Code *"><Input placeholder="R-03" value={form.code} onChange={F('code')} /></Fld>}
-          <Fld label="Name"><Input value={form.name} onChange={F('name')} /></Fld>
+          {mode === 'create' && <Fld label="Code *"><Input autoFocus placeholder="R-03" value={form.code} onChange={F('code')} /></Fld>}
+          <Fld label="Name"><Input autoFocus={mode !== 'create'} value={form.name} onChange={F('name')} /></Fld>
           <Fld label="Zone"><Input value={form.zone} onChange={F('zone')} /></Fld>
           <Fld label="Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.rackType} onChange={F('rackType')}>
             {['STANDARD','DRIVE_IN','PUSH_BACK','CANTILEVER','FLOW','MEZZANINE','PALLET'].map((t) => <option key={t}>{t}</option>)}
@@ -378,6 +457,7 @@ function RackModal({ mode, warehouseId, data, onClose, onSaved }: { mode: 'creat
           <Fld label="Levels"><Input type="number" min={1} value={form.levels} onChange={F('levels')} /></Fld>
           <Fld label="Columns"><Input type="number" min={1} value={form.columns} onChange={F('columns')} /></Fld>
         </div>
+        <p className="text-[11px] text-slate-400 -mt-1">Levels &amp; Columns describe the rack’s size. You’ll add the actual slots one by one after saving.</p>
         <div className="flex gap-2 pt-1">
           <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
           <Button type="submit" className="flex-1 bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -410,12 +490,12 @@ function SlotModal({ mode, rackId, data, onClose, onSaved }: { mode: 'create' | 
     <ModalWrap title={mode === 'create' ? 'Create Slot' : `Edit Slot — ${data?.code}`} onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
-          {mode === 'create' && <Fld label="Code *"><Input placeholder="R-03-01" value={form.code} onChange={F('code')} /></Fld>}
-          <Fld label="Name"><Input value={form.name} onChange={F('name')} /></Fld>
+          {mode === 'create' && <Fld label="Code *"><Input autoFocus placeholder="R-03-01" value={form.code} onChange={F('code')} /></Fld>}
+          <Fld label="Name"><Input autoFocus={mode !== 'create'} value={form.name} onChange={F('name')} /></Fld>
           <Fld label="Slot Type"><select className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={form.slotType} onChange={F('slotType')}>
             {['STANDARD','PALLET','BULK','COLD','HAZMAT','OVERSIZE'].map((t) => <option key={t}>{t}</option>)}
           </select></Fld>
-          <Fld label="Capacity"><Input type="number" min={1} value={form.capacity} onChange={F('capacity')} /></Fld>
+          <Fld label="Capacity"><Input type="number" min={1} value={form.capacity} onChange={F('capacity')} /><p className="mt-1 text-[11px] text-slate-400">Units this slot holds</p></Fld>
           {mode === 'create' && <Fld label="Level"><Input type="number" min={1} value={form.level} onChange={F('level')} /></Fld>}
           {mode === 'create' && <Fld label="Column"><Input type="number" min={1} value={form.column} onChange={F('column')} /></Fld>}
         </div>
