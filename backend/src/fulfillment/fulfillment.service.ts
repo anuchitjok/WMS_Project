@@ -64,6 +64,26 @@ export class FulfillmentService {
     };
   }
 
+  // APPROVED requests with no active FulfillmentTask yet — the "ready to allocate"
+  // queue. Drives the Fulfillment board's request picker (see AllocationService.allocate
+  // for the matching duplicate-task guard this mirrors).
+  async allocatableRequests() {
+    const activeTasks = await this.prisma.fulfillmentTask.findMany({
+      where: { status: { notIn: [FulfillmentStatus.CANCELLED, FulfillmentStatus.RETURNED] } },
+      select: { requestId: true },
+    });
+    const allocatedIds = activeTasks.map((t) => t.requestId);
+
+    return this.prisma.withdrawalRequest.findMany({
+      where: { status: 'APPROVED', id: { notIn: allocatedIds } },
+      include: {
+        requester: { select: { id: true, fullName: true, department: true } },
+        items: { include: { product: { select: { code: true, name: true } } } },
+      },
+      orderBy: { approvedAt: 'asc' },
+    });
+  }
+
   async findAll(status?: FulfillmentStatus, warehouseId?: string) {
     return this.prisma.fulfillmentTask.findMany({
       where: {

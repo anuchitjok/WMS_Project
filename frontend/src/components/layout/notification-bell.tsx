@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { Bell, CheckCheck, X } from 'lucide-react';
 import { notifApi } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
@@ -14,6 +15,11 @@ const TYPE_ICONS: Record<string, string> = {
   PICKING_TASK: '📦', READY_FOR_PICKUP: '🚚', USAGE_REQUIRED: '🔔',
   DOA_DECLARED: '⚠️', RTV_OVERDUE: '⏱', UNUSED_RETURN: '🔁',
   LOW_STOCK: '↓', SLA_OVERDUE: '⏰', GENERAL: '💬',
+};
+
+// Notification types that have an obvious "go here to act on it" destination.
+const TYPE_ROUTES: Record<string, string> = {
+  PICKING_TASK: '/outbound/fulfillment',
 };
 
 // Gap between bell and the panel edge
@@ -34,6 +40,7 @@ interface PanelPos {
 }
 
 export function NotificationBell() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
@@ -129,7 +136,11 @@ export function NotificationBell() {
   const unread = data?.unread ?? 0;
 
   const readAll = async () => { await notifApi.markAllRead(); load(); };
-  const readOne = async (id: string) => { await notifApi.markRead(id); load(); };
+  const readOne = async (n: any) => {
+    await notifApi.markRead(n.id); load();
+    const dest = TYPE_ROUTES[n.type];
+    if (dest) { setOpen(false); router.push(dest); }
+  };
 
   // ── Portal panel ──────────────────────────────────────────────────────────
   const panel = open && mounted ? createPortal(
@@ -208,9 +219,9 @@ export function NotificationBell() {
                   key={n.id}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${n.isRead ? '' : 'Unread — '}${n.title}`}
-                  onClick={() => readOne(n.id)}
-                  onKeyDown={(e) => e.key === 'Enter' && readOne(n.id)}
+                  aria-label={`${n.isRead ? '' : 'Unread — '}${n.title}${TYPE_ROUTES[n.type] ? ' — click to open' : ''}`}
+                  onClick={() => readOne(n)}
+                  onKeyDown={(e) => e.key === 'Enter' && readOne(n)}
                   className={cn(
                     'px-4 py-3 cursor-pointer transition-colors',
                     'hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-100',

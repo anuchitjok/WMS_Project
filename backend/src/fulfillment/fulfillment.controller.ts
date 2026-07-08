@@ -29,6 +29,12 @@ export class FulfillmentController {
 
   // ── BOARD & VISIBILITY ──────────────────────────────────────────────────────
 
+  @Get('allocatable-requests')
+  @ApiOperation({ summary: 'APPROVED requests with no active FulfillmentTask — the allocate picker source' })
+  allocatableRequests() {
+    return this.svc.allocatableRequests();
+  }
+
   @Get('board')
   @ApiOperation({ summary: 'Real-time Kanban board grouped by lane' })
   board(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
