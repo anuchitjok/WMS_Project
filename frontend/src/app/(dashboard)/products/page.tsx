@@ -57,7 +57,7 @@ const BLANK = {
 function ProductStatusBadge({ status }: { status?: string }) {
   const cfg = PRODUCT_STATUS_CFG[status ?? ''] ?? { label: status || '—', bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
   return (
-    <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap', cfg.bg, cfg.text)}>
+    <span className={cn('inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap', cfg.bg, cfg.text)}>
       <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', cfg.dot)} />
       {cfg.label}
     </span>
@@ -68,18 +68,18 @@ function ProductStatusBadge({ status }: { status?: string }) {
 
 function KpiBar({ kpi, loading }: { kpi: any; loading: boolean }) {
   const cards = [
-    { label: 'Total SKU',       value: kpi?.totalSku,              icon: Tag,          color: 'text-green-700',   bg: 'bg-green-50',    border: 'border-green-200' },
+    { label: 'Total SKU',       value: kpi?.totalSku,              icon: Tag,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
     { label: 'Active',          value: kpi?.activeCount,           icon: CircleDot,    color: 'text-green-700',   bg: 'bg-green-50',    border: 'border-green-200' },
     { label: 'Inactive',        value: kpi?.inactiveCount,         icon: PauseCircle,  color: kpi?.inactiveCount > 0 ? 'text-slate-600' : 'text-slate-400', bg: 'bg-slate-50', border: 'border-slate-200' },
     { label: 'Discontinued',    value: kpi?.discontinuedCount,     icon: Ban,          color: kpi?.discontinuedCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.discontinuedCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.discontinuedCount > 0 ? 'border-red-200' : 'border-slate-200' },
-    { label: 'Serial Ctrl',     value: kpi?.serializedItems,       icon: Shield,       color: 'text-indigo-700',  bg: 'bg-indigo-50',   border: 'border-indigo-200' },
-    { label: 'Batch Ctrl',      value: kpi?.batchControlledCount,  icon: Zap,          color: 'text-violet-700',  bg: 'bg-violet-50',   border: 'border-violet-200' },
+    { label: 'Serial Ctrl',     value: kpi?.serializedItems,       icon: Shield,       color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
+    { label: 'Batch Ctrl',      value: kpi?.batchControlledCount,  icon: Zap,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
     { label: 'Low Stock',       value: kpi?.lowStock,              icon: TrendingDown, color: kpi?.lowStock > 0 ? 'text-amber-700' : 'text-slate-400', bg: kpi?.lowStock > 0 ? 'bg-amber-50' : 'bg-slate-50', border: kpi?.lowStock > 0 ? 'border-amber-200' : 'border-slate-200' },
     { label: 'On Hold',         value: kpi?.quarantineCount,       icon: AlertTriangle,color: kpi?.quarantineCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.quarantineCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.quarantineCount > 0 ? 'border-red-200' : 'border-slate-200' },
     { label: 'RTV Pending',     value: kpi?.rtvPendingCount,       icon: RefreshCw,    color: kpi?.rtvPendingCount > 0 ? 'text-orange-700' : 'text-slate-400', bg: kpi?.rtvPendingCount > 0 ? 'bg-orange-50' : 'bg-slate-50', border: kpi?.rtvPendingCount > 0 ? 'border-orange-200' : 'border-slate-200' },
     { label: 'DOA Items',       value: kpi?.doaCount,              icon: X,            color: kpi?.doaCount > 0 ? 'text-red-900' : 'text-slate-400', bg: kpi?.doaCount > 0 ? 'bg-red-100' : 'bg-slate-50', border: kpi?.doaCount > 0 ? 'border-red-300' : 'border-slate-200' },
-    { label: 'Warehouses',      value: kpi?.totalWarehouses,       icon: Building2,    color: 'text-purple-700',  bg: 'bg-purple-50',   border: 'border-purple-200' },
-    { label: 'Total Qty',       value: kpi?.totalQty?.toLocaleString(), icon: Box,     color: 'text-teal-700',   bg: 'bg-teal-50',    border: 'border-teal-200' },
+    { label: 'Warehouses',      value: kpi?.totalWarehouses,       icon: Building2,    color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
+    { label: 'Total Qty',       value: kpi?.totalQty?.toLocaleString(), icon: Box,     color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
   ];
   return (
     <div className="grid grid-cols-4 lg:grid-cols-6 xl:grid-cols-12 gap-2">
@@ -109,7 +109,7 @@ function StatusDots({ statusCounts }: { statusCounts: Record<string, number> }) 
     <div className="flex flex-wrap gap-1">
       {order.filter((s) => statusCounts[s]).map((s) => (
         <span key={s} title={`${s}: ${statusCounts[s]}`}
-          className={cn('inline-flex items-center gap-0.5 text-[9px] rounded px-1 py-0.5 font-medium', STATUS_BADGE[s] ?? 'bg-slate-100 text-slate-600')}>
+          className={cn('inline-flex items-center gap-0.5 text-[10px] rounded px-1 py-0.5 font-medium', STATUS_BADGE[s] ?? 'bg-slate-100 text-slate-600')}>
           {statusCounts[s]}
         </span>
       ))}
@@ -193,15 +193,15 @@ function ProductDetailDrawer({ productId, onClose, onEdit }: { productId: string
   return (
     <div className="fixed inset-y-0 right-0 z-50 w-[480px] bg-white shadow-2xl border-l border-slate-200 flex flex-col">
       {/* Header */}
-      <div className="px-5 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-800">
+      <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between bg-slate-50">
         <div>
           <div className="flex items-center gap-2 mb-0.5">
-            <p className="font-bold text-white">{loading ? '…' : data?.name}</p>
+            <p className="font-bold text-slate-900">{loading ? '…' : data?.name}</p>
             {data?.productStatus && <ProductStatusBadge status={data.productStatus} />}
           </div>
-          <p className="text-slate-400 text-xs font-mono">{loading ? '' : data?.code}</p>
+          <p className="text-slate-500 text-xs font-mono">{loading ? '' : data?.code}</p>
         </div>
-        <button onClick={onClose} className="text-slate-400 hover:text-white mt-0.5"><X className="w-5 h-5" /></button>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-700 mt-0.5"><X className="w-5 h-5" /></button>
       </div>
 
       {/* Section tabs */}
@@ -380,7 +380,14 @@ function ProductDetailDrawer({ productId, onClose, onEdit }: { productId: string
             onClick={async () => { try { await labelsApi.product([productId]); toast.success('Label PDF'); } catch (e: any) { toast.error(e.message); } }}>
             <Printer className="w-3.5 h-3.5" />
           </Button>
-          <Button size="sm" variant="outline" className="flex-1 gap-1.5 text-xs">
+          <Button size="sm" variant="outline" className="flex-1 gap-1.5 text-xs"
+            onClick={() => {
+              const token = localStorage.getItem('wms_token');
+              const url = productsApi.exportUrl('xlsx', { search: data.code });
+              fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+                .then((r) => r.blob())
+                .then((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `${data.code}-stock.xlsx`; a.click(); });
+            }}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
         </div>
@@ -433,7 +440,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
           {row.model && <p className="text-[10px] text-slate-400">{row.manufacturer ? `${row.manufacturer} · ` : ''}{row.model}</p>}
         </td>
         <td className="px-3 py-2.5">
-          <Badge variant="outline" className={cn('text-[10px] whitespace-nowrap', TYPE_BADGE[row.productType])}>{row.productType?.replace('_',' ')}</Badge>
+          <Badge variant="outline" className={cn('text-[11px] whitespace-nowrap', TYPE_BADGE[row.productType])}>{row.productType?.replace('_',' ')}</Badge>
         </td>
         <td className="px-3 py-2.5 max-w-[160px]"><p className="truncate text-slate-500">{row.description || '—'}</p></td>
 
@@ -449,8 +456,8 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
         {/* CONTROLS (S/B badges) */}
         <td className="px-3 py-2.5">
           <div className="flex gap-1">
-            <span className={cn('text-[9px] px-1 py-0.5 rounded font-bold border', row.serialControlled ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>S</span>
-            <span className={cn('text-[9px] px-1 py-0.5 rounded font-bold border', row.batchControlled ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>B</span>
+            <span className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.serialControlled ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>S</span>
+            <span className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.batchControlled ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>B</span>
           </div>
         </td>
 
@@ -462,20 +469,20 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
         <td className="px-3 py-2.5 text-center">
           <button onClick={(e) => { e.stopPropagation(); onDrilldown(); }}
             className="font-bold text-slate-800 hover:text-green-700 hover:underline tabular-nums">{row.totalQty}</button>
-          {row.isLowStock && <p className="text-[9px] text-amber-600 font-medium mt-0.5">LOW</p>}
+          {row.isLowStock && <p className="text-[10px] text-amber-600 font-medium mt-0.5">LOW</p>}
         </td>
         <td className="px-3 py-2.5"><StatusDots statusCounts={row.statusCounts} /></td>
-        <td className="px-3 py-2.5 whitespace-nowrap text-[10px] text-slate-500">{row.sourceType?.replace(/_/g,' ') || '—'}</td>
+        <td className="px-3 py-2.5 whitespace-nowrap text-[11px] text-slate-500">{row.sourceType?.replace(/_/g,' ') || '—'}</td>
 
         {/* TRACEABILITY */}
         <td className="px-3 py-2.5 text-center">
           {row.serialCount > 0
-            ? <span className="bg-indigo-100 text-indigo-700 text-[10px] rounded px-1.5 py-0.5 font-bold">{row.serialCount}</span>
-            : <span className="text-slate-300 text-[10px]">—</span>}
+            ? <span className="bg-indigo-100 text-indigo-700 text-[11px] rounded px-1.5 py-0.5 font-bold">{row.serialCount}</span>
+            : <span className="text-slate-300 text-[11px]">—</span>}
         </td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{row.awbNumber || '—'}</td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{row.invoiceNumber || '—'}</td>
-        <td className="px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500">{row.rmaRef || '—'}</td>
+        <td className="px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500">{row.awbNumber || '—'}</td>
+        <td className="px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500">{row.invoiceNumber || '—'}</td>
+        <td className="px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500">{row.rmaRef || '—'}</td>
 
         {/* AUDIT */}
         <td className="px-3 py-2.5 whitespace-nowrap text-slate-400">{fmt(row.createdAt)}</td>
@@ -664,11 +671,11 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   const F = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm((f: any) => ({ ...f, [k]: e.target.value }));
 
   const COL_GROUPS = [
-    { label: 'Product Identity', cols: 9, bg: 'bg-slate-700' },
-    { label: 'Inventory Context', cols: 5, bg: 'bg-green-800' },
-    { label: 'Traceability', cols: 4, bg: 'bg-teal-800' },
-    { label: 'Operational Audit', cols: 2, bg: 'bg-indigo-800' },
-    { label: '', cols: 1, bg: 'bg-slate-700' },
+    { label: 'Product Identity', cols: 9, accent: 'text-slate-500' },
+    { label: 'Inventory Context', cols: 5, accent: 'text-green-700' },
+    { label: 'Traceability', cols: 4, accent: 'text-teal-700' },
+    { label: 'Operational Audit', cols: 2, accent: 'text-indigo-600' },
+    { label: '', cols: 1, accent: 'text-slate-500' },
   ];
 
   return (
@@ -735,23 +742,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
               {STOCK_STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g,' ')}</option>)}
             </select>
           </div>
-          {/* Row 2: Quick filters */}
-          <div className="flex gap-1 flex-wrap">
-            <span className="text-[10px] text-slate-400 self-center mr-1">Quick:</span>
-            {[
-              { label: 'Active',       action: () => { setProductStatusFilter('ACTIVE'); setStatusFilter(''); } },
-              { label: 'Inactive',     action: () => { setProductStatusFilter('INACTIVE'); setStatusFilter(''); } },
-              { label: 'Discontinued', action: () => { setProductStatusFilter('DISCONTINUED'); setStatusFilter(''); } },
-              { label: 'On Hold',      action: () => setStatusFilter('QUARANTINE') },
-              { label: 'RTV Pending',  action: () => setStatusFilter('RTV_PENDING') },
-              { label: 'DOA',          action: () => setStatusFilter('DOA') },
-            ].map(({ label, action }) => (
-              <button key={label} onClick={action}
-                className="text-xs bg-white border border-slate-200 rounded-lg px-2 py-1 hover:bg-slate-50 text-slate-600 font-medium">{label}</button>
-            ))}
-            <button onClick={() => { setWhFilter(''); setBrandFilter(''); setTypeFilter(''); setStatusFilter(''); setProductStatusFilter('ACTIVE'); setCategoryFilter(''); setSerialOnly(false); }}
-              className="text-xs text-slate-400 hover:text-slate-600 px-2 ml-2">Clear all</button>
-          </div>
+          <button onClick={() => { setWhFilter(''); setBrandFilter(''); setTypeFilter(''); setStatusFilter(''); setProductStatusFilter('ACTIVE'); setCategoryFilter(''); setSerialOnly(false); }}
+            className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear all</button>
         </div>
       )}
 
@@ -773,33 +765,33 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
             <thead className="sticky top-0 z-10">
               {/* Group headers */}
               <tr>
-                <th className="bg-slate-800 w-8" />
+                <th className="bg-slate-100 border-b border-slate-200 w-8" />
                 {COL_GROUPS.map((g, i) => (
-                  <th key={i} colSpan={g.cols} className={cn('text-center text-[10px] font-bold text-white py-1.5 uppercase tracking-widest border-r border-white/20', g.bg)}>
+                  <th key={i} colSpan={g.cols} className={cn('text-center text-[10px] font-bold py-2 uppercase tracking-widest bg-slate-100 border-b border-r border-slate-200', g.accent)}>
                     {g.label}
                   </th>
                 ))}
               </tr>
               {/* Column headers */}
-              <tr className="bg-slate-700 text-white">
-                <th className="w-8 bg-slate-700" />
+              <tr className="bg-slate-50">
+                <th className="w-8 bg-slate-50 border-b border-slate-200" />
                 {/* Identity */}
                 {['SKU / Part #','Brand','Product / Model','Type','Description','Status','UOM','Category','Ctrl'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap border-r border-slate-600/30">{h}</th>
+                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Inventory */}
                 {['Warehouse','Bin / Rack','Qty','Condition','Source'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-green-800 border-r border-green-700/30">{h}</th>
+                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Traceability */}
                 {['Serial','AWB','Invoice No.','RMA Ref'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-teal-800 border-r border-teal-700/30">{h}</th>
+                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Audit */}
                 {['Created','Received'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap bg-indigo-800 border-r border-indigo-700/30">{h}</th>
+                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
-                <th className="px-3 py-2 bg-slate-700 w-16 text-center text-[11px]">Act</th>
+                <th className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 w-16 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Act</th>
               </tr>
             </thead>
             <tbody>
@@ -970,7 +962,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
     { key: 'awbNumber',        label: 'AWB',         render: (r: any) => <span className="font-mono text-xs">{r.awbNumber || '—'}</span> },
     { key: 'invoiceNumber',    label: 'Invoice No.', render: (r: any) => <span className="font-mono text-xs">{r.invoiceNumber || '—'}</span> },
     { key: 'gswNumber',        label: 'Customer Case',     render: (r: any) => <span className="font-mono text-xs">{r.gswNumber || '—'}</span> },
-    { key: 'productType',      label: 'Type',        render: (r: any) => <Badge variant="outline" className={cn('text-[10px]', TYPE_BADGE[r.productType])}>{r.productType?.replace('_',' ')}</Badge> },
+    { key: 'productType',      label: 'Type',        render: (r: any) => <Badge variant="outline" className={cn('text-[11px]', TYPE_BADGE[r.productType])}>{r.productType?.replace('_',' ')}</Badge> },
     { key: 'productName',      label: 'Product',     render: (r: any) => <span className="font-medium">{r.productName}</span> },
     { key: 'model',            label: 'Model',       render: (r: any) => r.model || '—' },
     { key: 'vendorPartNumber', label: 'Vendor P/N',  render: (r: any) => <span className="font-mono text-xs">{r.vendorPartNumber || '—'}</span> },
@@ -1039,8 +1031,8 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
         <div className="overflow-auto flex-1">
           <table className="w-full text-xs min-w-[1200px]">
             <thead className="sticky top-0 z-10">
-              <tr className="bg-slate-800 text-white">
-                {COLS.map((c) => <th key={c.key} className="text-left px-3 py-2.5 font-semibold whitespace-nowrap">{c.label}</th>)}
+              <tr className="bg-slate-50">
+                {COLS.map((c) => <th key={c.key} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-slate-200">{c.label}</th>)}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -1061,12 +1053,12 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
       <div className={cn('w-72 flex-shrink-0 flex flex-col gap-3 transition-all', !selected && 'opacity-40 pointer-events-none')}>
         {selected ? (
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="bg-slate-800 px-4 py-3 flex items-start justify-between">
+            <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-start justify-between">
               <div>
-                <p className="font-bold text-white text-sm">{selected.productName}</p>
-                <p className="text-slate-400 text-xs mt-0.5 font-mono">{selected.productCode}</p>
+                <p className="font-bold text-slate-900 text-sm">{selected.productName}</p>
+                <p className="text-slate-500 text-xs mt-0.5 font-mono">{selected.productCode}</p>
               </div>
-              <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-white"><X className="w-4 h-4" /></button>
+              <button onClick={() => setSelected(null)} className="text-slate-400 hover:text-slate-700"><X className="w-4 h-4" /></button>
             </div>
             <div className="p-4 space-y-3">
               <div className="flex items-center gap-2">
