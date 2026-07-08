@@ -11,7 +11,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
-import { cn } from '@/lib/utils';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { cn, hasUnsavedChanges } from '@/lib/utils';
+
+const BLANK_BRAND_FORM = { name: '', contact: '' };
+const BLANK_VENDOR_FORM = { code: '', name: '', contact: '', email: '' };
 
 type Tab = 'brands' | 'vendors' | 'rollup';
 
@@ -52,7 +57,8 @@ function BrandTab() {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [edit, setEdit] = useState<any>(null);
-  const [form, setForm] = useState({ name: '', contact: '' });
+  const [editBaseline, setEditBaseline] = useState<any>(null); // snapshot at open-time, for the unsaved-changes guard
+  const [form, setForm] = useState(BLANK_BRAND_FORM);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,13 +70,13 @@ function BrandTab() {
     try {
       // Code is auto-generated server-side (BR-####) — not entered by the user.
       await warehouseApi.createBrand({ name: form.name, contact: form.contact || undefined });
-      toast.success('Brand created'); setCreateOpen(false); setForm({ name: '', contact: '' }); load();
+      toast.success('Brand created'); setCreateOpen(false); setForm(BLANK_BRAND_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
   async function save() {
     try {
       await warehouseApi.updateBrand(edit.id, { name: edit.name, contact: edit.contact ?? '' });
-      toast.success('Brand updated'); setEdit(null); load();
+      toast.success('Brand updated'); setEdit(null); setEditBaseline(null); load();
     } catch (e: any) { toast.error(e.message); }
   }
   async function toggle(b: any) {
@@ -78,10 +84,13 @@ function BrandTab() {
     catch (e: any) { toast.error(e.message); }
   }
 
+  const createGuard = useDiscardGuard(hasUnsavedChanges(form, BLANK_BRAND_FORM), () => { setCreateOpen(false); setForm(BLANK_BRAND_FORM); });
+  const editGuard = useDiscardGuard(hasUnsavedChanges(edit, editBaseline), () => { setEdit(null); setEditBaseline(null); });
+
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <Dialog open={createOpen} onOpenChange={(o) => { if (o) setCreateOpen(true); else createGuard.requestClose(); }}>
           <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white gap-1.5" />}><Plus className="h-4 w-4" /> Create Brand</DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Create New Brand</DialogTitle></DialogHeader>
@@ -93,6 +102,7 @@ function BrandTab() {
             <DialogFooter><Button onClick={create} disabled={!form.name.trim()} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
           </DialogContent>
         </Dialog>
+        <DiscardChangesDialog open={createGuard.confirming} onKeepEditing={createGuard.keepEditing} onDiscard={createGuard.confirmDiscard} />
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
@@ -117,7 +127,7 @@ function BrandTab() {
                   <td className="px-4 py-3"><Badge variant="outline" className={b.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}>{b.isActive ? 'Active' : 'Inactive'}</Badge></td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
-                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Edit" onClick={() => setEdit({ ...b })}><Pencil className="h-3.5 w-3.5" /></Button>
+                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Edit" onClick={() => { setEdit({ ...b }); setEditBaseline({ ...b }); }}><Pencil className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={b.isActive ? 'Deactivate' : 'Activate'} onClick={() => toggle(b)}><Power className="h-3.5 w-3.5" /></Button>
                     </div>
                   </td>
@@ -127,7 +137,7 @@ function BrandTab() {
         </table>
       </div>
 
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) editGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Brand: {edit?.code}</DialogTitle></DialogHeader>
           {edit && (
@@ -139,6 +149,7 @@ function BrandTab() {
           <DialogFooter><Button onClick={save} className="bg-green-600 hover:bg-green-700 text-white">Save</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      <DiscardChangesDialog open={editGuard.confirming} onKeepEditing={editGuard.keepEditing} onDiscard={editGuard.confirmDiscard} />
     </div>
   );
 }
@@ -150,7 +161,8 @@ function VendorTab() {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [edit, setEdit] = useState<any>(null);
-  const [form, setForm] = useState({ code: '', name: '', contact: '', email: '' });
+  const [editBaseline, setEditBaseline] = useState<any>(null); // snapshot at open-time, for the unsaved-changes guard
+  const [form, setForm] = useState(BLANK_VENDOR_FORM);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,13 +173,13 @@ function VendorTab() {
   async function create() {
     try {
       await warehouseApi.createVendor({ code: form.code, name: form.name, contact: form.contact || undefined, email: form.email || undefined });
-      toast.success('Vendor created'); setCreateOpen(false); setForm({ code: '', name: '', contact: '', email: '' }); load();
+      toast.success('Vendor created'); setCreateOpen(false); setForm(BLANK_VENDOR_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
   async function save() {
     try {
       await warehouseApi.updateVendor(edit.id, { name: edit.name, contact: edit.contact ?? '', email: edit.email ?? '' });
-      toast.success('Vendor updated'); setEdit(null); load();
+      toast.success('Vendor updated'); setEdit(null); setEditBaseline(null); load();
     } catch (e: any) { toast.error(e.message); }
   }
   async function toggle(v: any) {
@@ -175,10 +187,13 @@ function VendorTab() {
     catch (e: any) { toast.error(e.message); }
   }
 
+  const createGuard = useDiscardGuard(hasUnsavedChanges(form, BLANK_VENDOR_FORM), () => { setCreateOpen(false); setForm(BLANK_VENDOR_FORM); });
+  const editGuard = useDiscardGuard(hasUnsavedChanges(edit, editBaseline), () => { setEdit(null); setEditBaseline(null); });
+
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <Dialog open={createOpen} onOpenChange={(o) => { if (o) setCreateOpen(true); else createGuard.requestClose(); }}>
           <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white gap-1.5" />}><Plus className="h-4 w-4" /> Create Vendor</DialogTrigger>
           <DialogContent>
             <DialogHeader><DialogTitle>Create New Vendor</DialogTitle></DialogHeader>
@@ -191,6 +206,7 @@ function VendorTab() {
             <DialogFooter><Button onClick={create} disabled={!form.code.trim() || !form.name.trim()} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
           </DialogContent>
         </Dialog>
+        <DiscardChangesDialog open={createGuard.confirming} onKeepEditing={createGuard.keepEditing} onDiscard={createGuard.confirmDiscard} />
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
@@ -217,7 +233,7 @@ function VendorTab() {
                   <td className="px-4 py-3"><Badge variant="outline" className={v.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}>{v.isActive ? 'Active' : 'Inactive'}</Badge></td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
-                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Edit" onClick={() => setEdit({ ...v })}><Pencil className="h-3.5 w-3.5" /></Button>
+                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title="Edit" onClick={() => { setEdit({ ...v }); setEditBaseline({ ...v }); }}><Pencil className="h-3.5 w-3.5" /></Button>
                       <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={v.isActive ? 'Deactivate' : 'Activate'} onClick={() => toggle(v)}><Power className="h-3.5 w-3.5" /></Button>
                     </div>
                   </td>
@@ -227,7 +243,7 @@ function VendorTab() {
         </table>
       </div>
 
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) editGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Vendor: {edit?.code}</DialogTitle></DialogHeader>
           {edit && (
@@ -240,6 +256,7 @@ function VendorTab() {
           <DialogFooter><Button onClick={save} className="bg-green-600 hover:bg-green-700 text-white">Save</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      <DiscardChangesDialog open={editGuard.confirming} onKeepEditing={editGuard.keepEditing} onDiscard={editGuard.confirmDiscard} />
     </div>
   );
 }

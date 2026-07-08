@@ -19,7 +19,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { cn } from '@/lib/utils';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { cn, hasUnsavedChanges } from '@/lib/utils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -592,6 +594,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   const [open, setOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState<any>(BLANK);
+  const [formBaseline, setFormBaseline] = useState<any>(BLANK); // snapshot at open-time, for the unsaved-changes guard
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [importResult, setImportResult] = useState<any>(null);
@@ -631,7 +634,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
 
   function openEdit(product: any) {
     setEditId(product.id);
-    setForm({
+    const loaded = {
       code: product.code ?? '',
       name: product.name ?? '',
       description: product.description ?? '',
@@ -648,7 +651,9 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
       batchControlled: product.batchControlled ?? false,
       productStatus: product.productStatus ?? 'ACTIVE',
       brandId: product.brandId ?? product.brand?.id ?? '',
-    });
+    };
+    setForm(loaded);
+    setFormBaseline(loaded);
     setSelectedId(null); // close drawer first
     setOpen(true);
   }
@@ -658,9 +663,14 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
     try {
       if (editId) { const { code, ...updatePayload } = form; await productsApi.update(editId, updatePayload); toast.success('Updated'); }
       else { await productsApi.create({ ...form, unitCost: Number(form.unitCost), minStock: Number(form.minStock), brandId: form.brandId || undefined }); toast.success('Created'); }
-      setOpen(false); setForm(BLANK); setEditId(null); load(); loadKpi();
+      setOpen(false); setForm(BLANK); setFormBaseline(BLANK); setEditId(null); load(); loadKpi();
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
   }
+
+  const formIsDirty = hasUnsavedChanges(form, formBaseline);
+  const formGuard = useDiscardGuard(formIsDirty, () => {
+    setOpen(false); setForm(BLANK); setFormBaseline(BLANK); setEditId(null);
+  });
 
   async function handleImport(file: File) {
     setImporting(true);
@@ -704,7 +714,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => { const token = localStorage.getItem('wms_token'); fetch(productsApi.exportUrl('xlsx'), { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then((r) => r.blob()).then((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'products.xlsx'; a.click(); }); }}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
-          <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => { setEditId(null); setForm(BLANK); setOpen(true); }}>
+          <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => { setEditId(null); setForm(BLANK); setFormBaseline(BLANK); setOpen(true); }}>
             <Plus className="w-3.5 h-3.5" /> New Product
           </Button>
         </div>
@@ -834,7 +844,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
       {drilldownRow && <DrilldownModal product={drilldownRow} onClose={() => setDrilldownRow(null)} />}
 
       {/* Create/Edit Dialog */}
-      <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setForm(BLANK); setEditId(null); } }}>
+      <Dialog open={open} onOpenChange={(o) => { if (o) setOpen(true); else formGuard.requestClose(); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editId ? 'Edit Product' : 'New Product'}</DialogTitle></DialogHeader>
           <div className="grid grid-cols-2 gap-4">
@@ -899,11 +909,12 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={formGuard.requestClose}>Cancel</Button>
             <Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <DiscardChangesDialog open={formGuard.confirming} onKeepEditing={formGuard.keepEditing} onDiscard={formGuard.confirmDiscard} />
 
       {/* Detail Drawer */}
       {selectedId && (
