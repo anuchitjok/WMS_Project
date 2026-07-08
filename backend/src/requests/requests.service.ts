@@ -339,6 +339,7 @@ export class RequestsService {
 
     this.realtime.emitRequestUpdate({ action: RequestStatus.APPROVED, requestId: id });
     this.notifications.notifyRequestDecision(id, req.requesterId, true).catch(() => {});
+    this.notifications.notifyPickingTask(id, req.refNumber).catch(() => {});
     return updated;
   }
 

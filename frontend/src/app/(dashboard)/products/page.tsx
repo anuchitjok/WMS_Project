@@ -649,7 +649,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   async function submit() {
     setBusy(true);
     try {
-      if (editId) { await productsApi.update(editId, form); toast.success('Updated'); }
+      if (editId) { const { code, ...updatePayload } = form; await productsApi.update(editId, updatePayload); toast.success('Updated'); }
       else { await productsApi.create({ ...form, unitCost: Number(form.unitCost), minStock: Number(form.minStock), brandId: form.brandId || undefined }); toast.success('Created'); }
       setOpen(false); setForm(BLANK); setEditId(null); load(); loadKpi();
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
@@ -859,7 +859,11 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
               </Select>
             </div>
             <div className="space-y-1"><Label>Brand</Label>
-              <Select value={form.brandId} onValueChange={(v) => setForm((f: any) => ({ ...f, brandId: v ?? '' }))}>
+              <Select
+                items={brands.map((b) => ({ value: b.id, label: b.name }))}
+                value={form.brandId}
+                onValueChange={(v) => setForm((f: any) => ({ ...f, brandId: v ?? '' }))}
+              >
                 <SelectTrigger><SelectValue placeholder="Select brand" /></SelectTrigger>
                 <SelectContent className="max-h-48">{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
               </Select>

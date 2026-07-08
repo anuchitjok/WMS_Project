@@ -302,6 +302,7 @@ export const fulfillmentApi = {
   get: (id: string) => request<any>(`/fulfillment/${id}`),
   handoverQueue: (warehouseId?: string) =>
     request<any[]>(`/fulfillment/handover-queue${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
+  allocatableRequests: () => request<any[]>('/fulfillment/allocatable-requests'),
 
   // Orchestration
   allocate: (requestId: string) =>

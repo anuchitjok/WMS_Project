@@ -6,11 +6,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Truck, RefreshCw, AlertTriangle, Package, PackageCheck, Clock,
-  Zap, ChevronUp, ChevronDown, Printer,
+  Zap, ChevronUp, ChevronDown, Printer, Search, User,
   CheckCircle2, Layers, BoxSelect, ShipWheel, LayoutGrid,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { fulfillmentApi, requestsApi, documentsApi } from '@/lib/api';
+import { fulfillmentApi, documentsApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -527,7 +527,10 @@ export default function FulfillmentBoardPage() {
   const [shipTask, setShipTask]     = useState<any>(null);
   const [shipForm, setShipForm]     = useState({ carrier: '', trackingNumber: '', receiverName: '', notes: '' });
   const [allocOpen, setAllocOpen]   = useState(false);
-  const [reqRef, setReqRef]         = useState('');
+  const [allocatable, setAllocatable] = useState<any[]>([]);
+  const [allocLoading, setAllocLoading] = useState(false);
+  const [allocSearch, setAllocSearch] = useState('');
+  const [allocatingId, setAllocatingId] = useState<string | null>(null);
   const [exceptionTaskId, setExceptionTaskId] = useState<string | null>(null);
 
   // Table state
@@ -592,17 +595,35 @@ export default function FulfillmentBoardPage() {
     } catch (e: any) { toast.error(e.message); }
   }
 
-  async function allocate() {
-    const reqs = await requestsApi.list({ limit: 5 }).catch(() => ({ data: [] }));
-    const req = (reqs as any).data?.find(
-      (r: any) => r.refNumber === reqRef.trim() || r.id === reqRef.trim(),
-    );
-    if (!req) { toast.error('Request not found'); return; }
+  const loadAllocatable = useCallback(async () => {
+    setAllocLoading(true);
+    try { setAllocatable(await fulfillmentApi.allocatableRequests()); }
+    catch { toast.error('Failed to load approved requests'); setAllocatable([]); }
+    finally { setAllocLoading(false); }
+  }, []);
+
+  function openAllocate() {
+    setAllocOpen(true);
+    setAllocSearch('');
+    loadAllocatable();
+  }
+
+  async function allocateRequest(req: any) {
+    setAllocatingId(req.id);
     try {
       await fulfillmentApi.allocate(req.id);
-      toast.success(`Allocated ${req.refNumber}`); setAllocOpen(false); setReqRef(''); load();
+      toast.success(`Allocated ${req.refNumber}`); setAllocOpen(false); load();
     } catch (e: any) { toast.error(e.message); }
+    finally { setAllocatingId(null); }
   }
+
+  const filteredAllocatable = allocatable.filter((r) => {
+    if (!allocSearch.trim()) return true;
+    const q = allocSearch.toLowerCase();
+    return r.refNumber?.toLowerCase().includes(q)
+      || r.requester?.fullName?.toLowerCase().includes(q)
+      || r.department?.toLowerCase().includes(q);
+  });
 
   function handleSort(field: SortField) {
     if (sortField === field) setSortAsc((v) => !v);
@@ -645,7 +666,7 @@ export default function FulfillmentBoardPage() {
           <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={load} disabled={loading}>
             <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
           </Button>
-          <Button size="sm" className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs" onClick={() => setAllocOpen(true)}>
+          <Button size="sm" className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs" onClick={openAllocate}>
             + Allocate
           </Button>
         </div>
@@ -684,18 +705,62 @@ export default function FulfillmentBoardPage() {
       )}
 
       <Dialog open={allocOpen} onOpenChange={setAllocOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-lg">
           <DialogHeader><DialogTitle>Allocate Request → Fulfillment Task</DialogTitle></DialogHeader>
-          <div className="space-y-2">
-            <Label className="text-xs">Request Ref / ID</Label>
-            <Input value={reqRef} onChange={(e) => setReqRef(e.target.value)} placeholder="WR-2026-XXXXXX" autoFocus />
-            <p className="text-xs text-slate-400">Request must be APPROVED. Stock will be reserved (FIFO).</p>
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">
+              Pick an approved request below — stock is reserved automatically (FIFO). No need to know the request number.
+            </p>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+              <Input
+                value={allocSearch}
+                onChange={(e) => setAllocSearch(e.target.value)}
+                placeholder="Search by request no., requester, or department…"
+                className="pl-8 h-9 text-sm"
+              />
+            </div>
+
+            <div className="max-h-80 overflow-y-auto -mx-1 px-1 space-y-2">
+              {allocLoading ? (
+                [...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-lg" />)
+              ) : filteredAllocatable.length === 0 ? (
+                <div className="text-center py-10 text-slate-400 text-sm">
+                  <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                  {allocatable.length === 0 ? 'No approved requests waiting for allocation' : 'No matches'}
+                </div>
+              ) : (
+                filteredAllocatable.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-lg p-3 hover:border-green-300 hover:bg-green-50/30 transition-colors">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-sm font-semibold text-green-700">{r.refNumber}</span>
+                        {r.rmaCaseNumber && <span className="text-[10px] text-slate-400">RMA {r.rmaCaseNumber}</span>}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                        <User className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{r.requester?.fullName ?? 'Unknown'}</span>
+                        {r.department && <span className="text-slate-300">·</span>}
+                        {r.department && <span className="truncate">{r.department}</span>}
+                        <span className="text-slate-300">·</span>
+                        <span className="whitespace-nowrap">{r.items?.length ?? 0} item{r.items?.length === 1 ? '' : 's'}</span>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs flex-shrink-0"
+                      disabled={!!allocatingId}
+                      onClick={() => allocateRequest(r)}
+                    >
+                      {allocatingId === r.id ? 'Allocating…' : 'Allocate'}
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAllocOpen(false)}>Cancel</Button>
-            <Button onClick={allocate} className="bg-green-700 hover:bg-green-800 text-white">
-              <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Allocate (FIFO)
-            </Button>
+            <Button variant="outline" onClick={() => setAllocOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

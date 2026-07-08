@@ -172,8 +172,8 @@ export class NotificationsService {
     await this.send({ type: approved ? 'REQUEST_APPROVED' : 'REQUEST_REJECTED', userIds: [requesterId], title: approved ? 'Request Approved' : 'Request Rejected', message: approved ? 'Your withdrawal request has been approved and will be processed.' : `Your request was rejected. Reason: ${reason ?? 'See system'}`, entityType: 'WithdrawalRequest', entityId: requestId, channel: NotificationChannel.BOTH });
   }
 
-  async notifyPickingTask(warehouseUserIds: string[], refNumber: string) {
-    await this.send({ type: 'PICKING_TASK', userIds: warehouseUserIds, title: 'Picking Task Ready', message: `Request ${refNumber} is approved and ready for picking.`, channel: NotificationChannel.IN_APP });
+  async notifyPickingTask(requestId: string, refNumber: string) {
+    await this.send({ type: 'PICKING_TASK', userIds: [], roleKeys: ['SUPER_ADMIN', 'ADMIN', 'WAREHOUSE_MANAGER', 'PICKER'], title: 'Picking Task Ready', message: `Request ${refNumber} is approved and ready for allocation.`, entityType: 'WithdrawalRequest', entityId: requestId, metadata: { refNumber }, channel: NotificationChannel.IN_APP });
   }
 
   async notifyReadyForPickup(requesterId: string, refNumber: string) {
