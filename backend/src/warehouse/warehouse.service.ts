@@ -113,25 +113,31 @@ export class WarehouseService {
     levels?: number;
     columns?: number;
     description?: string;
-  }) {
+  }, actorId?: string) {
     const exists = await this.prisma.rack.findUnique({
       where: { warehouseId_code: { warehouseId: dto.warehouseId, code: dto.code } },
     });
     if (exists) throw new ConflictException(`Rack code "${dto.code}" already exists in this warehouse`);
-    return this.prisma.rack.create({ data: { ...dto } });
+    const rack = await this.prisma.rack.create({ data: { ...dto } });
+    await this.audit(actorId, 'RACK_CREATED', 'Rack', rack.id, rack.code);
+    return rack;
   }
 
-  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string; isActive: boolean }>) {
+  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string; isActive: boolean }>, actorId?: string) {
     const rack = await this.prisma.rack.findUnique({ where: { id } });
     if (!rack) throw new NotFoundException('Rack not found');
-    return this.prisma.rack.update({ where: { id }, data: dto });
+    const updated = await this.prisma.rack.update({ where: { id }, data: dto });
+    await this.audit(actorId, 'RACK_UPDATED', 'Rack', id, updated.code);
+    return updated;
   }
 
-  async deleteRack(id: string) {
+  async deleteRack(id: string, actorId?: string) {
     const rack = await this.prisma.rack.findUnique({ where: { id }, include: { _count: { select: { stockItems: true } } } });
     if (!rack) throw new NotFoundException('Rack not found');
     if (rack._count.stockItems > 0) throw new ConflictException('Cannot delete rack with stock items');
-    return this.prisma.rack.update({ where: { id }, data: { isActive: false } });
+    const updated = await this.prisma.rack.update({ where: { id }, data: { isActive: false } });
+    await this.audit(actorId, 'RACK_DEACTIVATED', 'Rack', id, rack.code);
+    return updated;
   }
 
   // ─── Slot CRUD ────────────────────────────────────────────────────────────
@@ -144,12 +150,14 @@ export class WarehouseService {
     slotType?: SlotType;
     capacity?: number;
     maxWeight?: number;
-  }) {
+  }, actorId?: string) {
     const exists = await this.prisma.slot.findUnique({
       where: { rackId_code: { rackId, code: dto.code } },
     });
     if (exists) throw new ConflictException(`Slot code "${dto.code}" already exists in this rack`);
-    return this.prisma.slot.create({ data: { rackId, ...dto } });
+    const slot = await this.prisma.slot.create({ data: { rackId, ...dto } });
+    await this.audit(actorId, 'SLOT_CREATED', 'Slot', slot.id, slot.code);
+    return slot;
   }
 
   async bulkGenerateSlots(rackId: string, dto: {
@@ -199,17 +207,21 @@ export class WarehouseService {
     return { created: newSlots.length, skipped: existingCodes.size };
   }
 
-  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; status: SlotStatus; capacity: number; maxWeight: number; isActive: boolean }>) {
+  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; status: SlotStatus; capacity: number; maxWeight: number; isActive: boolean }>, actorId?: string) {
     const slot = await this.prisma.slot.findUnique({ where: { id } });
     if (!slot) throw new NotFoundException('Slot not found');
-    return this.prisma.slot.update({ where: { id }, data: dto });
+    const updated = await this.prisma.slot.update({ where: { id }, data: dto });
+    await this.audit(actorId, 'SLOT_UPDATED', 'Slot', id, updated.code);
+    return updated;
   }
 
-  async deleteSlot(id: string) {
+  async deleteSlot(id: string, actorId?: string) {
     const slot = await this.prisma.slot.findUnique({ where: { id }, include: { _count: { select: { stockItems: true } } } });
     if (!slot) throw new NotFoundException('Slot not found');
     if (slot._count.stockItems > 0) throw new ConflictException('Cannot delete slot with stock items');
-    return this.prisma.slot.update({ where: { id }, data: { isActive: false } });
+    const updated = await this.prisma.slot.update({ where: { id }, data: { isActive: false } });
+    await this.audit(actorId, 'SLOT_DEACTIVATED', 'Slot', id, slot.code);
+    return updated;
   }
 
   // ─── Legacy ───────────────────────────────────────────────────────────────
@@ -253,7 +265,11 @@ export class WarehouseService {
     return `BR-${String(maxNum + 1).padStart(4, '0')}`;
   }
 
-  async createBrand(dto: { code?: string; name: string; contact?: string }) {
+  private async audit(userId: string | undefined, action: string, entityType: string, entityId: string, detail?: string) {
+    await this.prisma.auditLog.create({ data: { userId, action, entityType, entityId, detail } });
+  }
+
+  async createBrand(dto: { code?: string; name: string; contact?: string }, actorId?: string) {
     const name = dto.name?.trim();
     if (!name) throw new ConflictException('Brand name is required');
 
@@ -271,13 +287,15 @@ export class WarehouseService {
       if (existing) throw new ConflictException(`Brand code already exists: ${code}`);
     }
 
-    return this.prisma.brand.create({ data: { code, name, contact: dto.contact?.trim() || null } });
+    const brand = await this.prisma.brand.create({ data: { code, name, contact: dto.contact?.trim() || null } });
+    await this.audit(actorId, 'BRAND_CREATED', 'Brand', brand.id, `${brand.code} · ${brand.name}`);
+    return brand;
   }
 
-  async updateBrand(id: string, dto: { name?: string; contact?: string; isActive?: boolean }) {
+  async updateBrand(id: string, dto: { name?: string; contact?: string; isActive?: boolean }, actorId?: string) {
     const brand = await this.prisma.brand.findUnique({ where: { id } });
     if (!brand) throw new NotFoundException('Brand not found');
-    return this.prisma.brand.update({
+    const updated = await this.prisma.brand.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -285,10 +303,12 @@ export class WarehouseService {
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
     });
+    await this.audit(actorId, 'BRAND_UPDATED', 'Brand', id, `${updated.code} · ${updated.name}`);
+    return updated;
   }
 
   // Soft delete: deactivate. Block if active products still reference this brand.
-  async deleteBrand(id: string) {
+  async deleteBrand(id: string, actorId?: string) {
     const brand = await this.prisma.brand.findUnique({
       where: { id },
       include: { _count: { select: { products: true } } },
@@ -297,7 +317,9 @@ export class WarehouseService {
     if (brand._count.products > 0) {
       throw new ConflictException(`Cannot deactivate brand — ${brand._count.products} product(s) still reference it`);
     }
-    return this.prisma.brand.update({ where: { id }, data: { isActive: false } });
+    const updated = await this.prisma.brand.update({ where: { id }, data: { isActive: false } });
+    await this.audit(actorId, 'BRAND_DEACTIVATED', 'Brand', id, `${brand.code} · ${brand.name}`);
+    return updated;
   }
 
   // ─── Vendor Master (CR-MASTER: Business Partners) ───────────────────────────
@@ -309,21 +331,23 @@ export class WarehouseService {
     });
   }
 
-  async createVendor(dto: { code: string; name: string; contact?: string; email?: string }) {
+  async createVendor(dto: { code: string; name: string; contact?: string; email?: string }, actorId?: string) {
     const code = dto.code?.trim();
     const name = dto.name?.trim();
     if (!code || !name) throw new ConflictException('Vendor code and name are required');
     const existing = await this.prisma.vendor.findUnique({ where: { code } });
     if (existing) throw new ConflictException(`Vendor code already exists: ${code}`);
-    return this.prisma.vendor.create({
+    const vendor = await this.prisma.vendor.create({
       data: { code, name, contact: dto.contact?.trim() || null, email: dto.email?.trim() || null },
     });
+    await this.audit(actorId, 'VENDOR_CREATED', 'Vendor', vendor.id, `${vendor.code} · ${vendor.name}`);
+    return vendor;
   }
 
-  async updateVendor(id: string, dto: { name?: string; contact?: string; email?: string; isActive?: boolean }) {
+  async updateVendor(id: string, dto: { name?: string; contact?: string; email?: string; isActive?: boolean }, actorId?: string) {
     const vendor = await this.prisma.vendor.findUnique({ where: { id } });
     if (!vendor) throw new NotFoundException('Vendor not found');
-    return this.prisma.vendor.update({
+    const updated = await this.prisma.vendor.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -332,10 +356,12 @@ export class WarehouseService {
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
     });
+    await this.audit(actorId, 'VENDOR_UPDATED', 'Vendor', id, `${updated.code} · ${updated.name}`);
+    return updated;
   }
 
   // Soft delete: deactivate. Block if RTV cases still reference this vendor.
-  async deleteVendor(id: string) {
+  async deleteVendor(id: string, actorId?: string) {
     const vendor = await this.prisma.vendor.findUnique({
       where: { id },
       include: { _count: { select: { rtvCases: true } } },
@@ -344,7 +370,9 @@ export class WarehouseService {
     if (vendor._count.rtvCases > 0) {
       throw new ConflictException(`Cannot deactivate vendor — ${vendor._count.rtvCases} RTV case(s) still reference it`);
     }
-    return this.prisma.vendor.update({ where: { id }, data: { isActive: false } });
+    const updated = await this.prisma.vendor.update({ where: { id }, data: { isActive: false } });
+    await this.audit(actorId, 'VENDOR_DEACTIVATED', 'Vendor', id, `${vendor.code} · ${vendor.name}`);
+    return updated;
   }
 
   // ─── Phase 2: Per-brand inventory rollup ────────────────────────────────────

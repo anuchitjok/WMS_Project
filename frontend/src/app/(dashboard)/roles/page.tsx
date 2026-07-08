@@ -121,8 +121,8 @@ export default function RolesPage() {
                   <th key={r.id} className="px-3 py-3 font-medium text-slate-700 text-center min-w-32">
                     <div className={r.isActive ? '' : 'opacity-40 line-through'}>{r.name}</div>
                     <div className="flex gap-1 justify-center mt-1">
-                      {r.isSystem && <Badge variant="outline" className="text-[9px]">system</Badge>}
-                      {!r.isActive && <Badge variant="outline" className="text-[9px] bg-red-100 text-red-700">disabled</Badge>}
+                      {r.isSystem && <Badge variant="outline" className="text-[11px]">system</Badge>}
+                      {!r.isActive && <Badge variant="outline" className="text-[11px] bg-red-100 text-red-700">disabled</Badge>}
                     </div>
                     <div className="flex gap-1 justify-center mt-1.5">
                       <button title="clone" onClick={() => clone(r.id)} className="p-1 hover:bg-slate-200 rounded"><Copy className="h-3 w-3" /></button>

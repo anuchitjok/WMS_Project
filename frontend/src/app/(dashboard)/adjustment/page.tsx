@@ -24,8 +24,16 @@ export default function AdjustmentPage() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Client-side guard — mirrors backend DTO (quantities >= 0) plus a "must actually change" rule.
+  const before = Number(form.quantityBefore);
+  const after = Number(form.quantityAfter);
+  const qtyValid = Number.isFinite(before) && Number.isFinite(after) && before >= 0 && after >= 0;
+  const noChange = qtyValid && before === after;
+  const formValid = !!form.productLabel.trim() && !!form.reason.trim() && qtyValid && !noChange;
+
   async function submit() {
-    try { await adjustmentApi.create({ ...form, quantityBefore: Number(form.quantityBefore), quantityAfter: Number(form.quantityAfter) }); toast.success('Adjustment requested'); setOpen(false); load(); }
+    if (!formValid) { toast.error('Enter a product, reason, and a valid quantity change'); return; }
+    try { await adjustmentApi.create({ ...form, productLabel: form.productLabel.trim(), reason: form.reason.trim(), quantityBefore: before, quantityAfter: after }); toast.success('Adjustment requested'); setOpen(false); load(); }
     catch (e: any) { toast.error(e.message); }
   }
   async function approve(id: string) {
@@ -49,11 +57,13 @@ export default function AdjustmentPage() {
                 <div className="space-y-1"><Label>Product Label</Label><Input value={form.productLabel} onChange={(e) => setForm((f) => ({ ...f, productLabel: e.target.value }))} placeholder="e.g. CAB-CAT5E — Cat5e Cable" /></div>
                 <div className="space-y-1"><Label>Reason</Label><Input value={form.reason} onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} /></div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><Label>Qty Before</Label><Input type="number" value={form.quantityBefore} onChange={(e) => setForm((f) => ({ ...f, quantityBefore: Number(e.target.value) }))} /></div>
-                  <div className="space-y-1"><Label>Qty After</Label><Input type="number" value={form.quantityAfter} onChange={(e) => setForm((f) => ({ ...f, quantityAfter: Number(e.target.value) }))} /></div>
+                  <div className="space-y-1"><Label>Qty Before</Label><Input type="number" min={0} value={form.quantityBefore} onChange={(e) => setForm((f) => ({ ...f, quantityBefore: Number(e.target.value) }))} /></div>
+                  <div className="space-y-1"><Label>Qty After</Label><Input type="number" min={0} value={form.quantityAfter} onChange={(e) => setForm((f) => ({ ...f, quantityAfter: Number(e.target.value) }))} /></div>
                 </div>
+                {!qtyValid && <p className="text-xs text-red-500">Quantities cannot be negative</p>}
+                {noChange && <p className="text-xs text-amber-600">Before and After are equal — no adjustment needed</p>}
               </div>
-              <DialogFooter><Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
+              <DialogFooter><Button onClick={submit} disabled={!formValid} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">Create</Button></DialogFooter>
             </DialogContent>
           </Dialog>
         }

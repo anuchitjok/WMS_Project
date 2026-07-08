@@ -151,7 +151,10 @@ export default function CycleCountPage() {
                   <tbody className="divide-y divide-slate-50">
                     {selected.lines?.map((l: any) => (
                       <tr key={l.id} className={l.variance !== 0 && l.countedQty !== null ? 'bg-red-50/50' : ''}>
-                        <td className="px-3 py-2 text-xs text-slate-700">{l.productId.slice(-8)}</td>
+                        <td className="px-3 py-2 text-sm text-slate-700">
+                          {l.productName ?? l.productCode ?? l.productId.slice(-8)}
+                          {l.productCode && l.productName && <span className="block text-xs text-slate-400 font-mono">{l.productCode}</span>}
+                        </td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-500">{l.locationKey || '—'}</td>
                         <td className="px-3 py-2 text-center font-medium">{l.expectedQty}</td>
                         <td className="px-3 py-2 text-center">

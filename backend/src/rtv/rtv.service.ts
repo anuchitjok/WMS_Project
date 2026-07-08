@@ -40,8 +40,8 @@ export class RtvService {
     return c;
   }
 
-  create(data: { stockItemId: string; reason: string; description?: string; vendorId?: string }, officerId: string) {
-    return this.prisma.rTVCase.create({
+  async create(data: { stockItemId: string; reason: string; description?: string; vendorId?: string }, officerId: string) {
+    const rtv = await this.prisma.rTVCase.create({
       data: {
         refNumber: this.genRef(),
         stockItemId: data.stockItemId,
@@ -51,9 +51,31 @@ export class RtvService {
         rtvOfficerId: officerId,
       },
     });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: officerId,
+        action: 'RTV_CASE_CREATED',
+        entityType: 'RTVCase',
+        entityId: rtv.id,
+        detail: `${rtv.refNumber} · ${data.reason}`,
+      },
+    });
+    return rtv;
   }
 
-  updateStatus(id: string, status: RTVStatus) {
-    return this.prisma.rTVCase.update({ where: { id }, data: { status } });
+  async updateStatus(id: string, status: RTVStatus, actorId: string) {
+    const existing = await this.prisma.rTVCase.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('RTV case not found');
+    const updated = await this.prisma.rTVCase.update({ where: { id }, data: { status } });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'RTV_STATUS_CHANGED',
+        entityType: 'RTVCase',
+        entityId: id,
+        detail: `${existing.refNumber}: ${existing.status} → ${status}`,
+      },
+    });
+    return updated;
   }
 }

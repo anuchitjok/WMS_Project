@@ -204,11 +204,11 @@ export default function DataIOPage() {
           {EXPORT_TYPES.map((t) => (
             <div key={t.value} className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
               <div className="flex items-center gap-3 mb-3">
-                <div className="rounded-lg bg-emerald-100 p-2.5"><FileSpreadsheet className="h-5 w-5 text-emerald-600" /></div>
+                <div className="rounded-lg bg-green-100 p-2.5"><FileSpreadsheet className="h-5 w-5 text-green-600" /></div>
                 <h3 className="font-semibold text-slate-800">{t.label}</h3>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => doExport(t.value, 'xlsx')}>
+                <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => doExport(t.value, 'xlsx')}>
                   <Download className="h-4 w-4 mr-1.5" />Excel
                 </Button>
                 <Button size="sm" variant="outline" onClick={() => doExport(t.value, 'csv')}>

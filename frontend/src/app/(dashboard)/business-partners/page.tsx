@@ -271,8 +271,8 @@ function RollupTab() {
             <th className="text-center px-4 py-3 font-medium text-slate-600">SKUs</th>
             <th className="text-center px-4 py-3 font-medium text-slate-600">Total Qty</th>
             <th className="text-center px-4 py-3 font-medium text-green-700">Available</th>
-            <th className="text-center px-4 py-3 font-medium text-teal-700">Reserved</th>
-            <th className="text-center px-4 py-3 font-medium text-orange-700">RTV Pending</th>
+            <th className="text-center px-4 py-3 font-medium text-slate-500">Reserved</th>
+            <th className="text-center px-4 py-3 font-medium text-amber-700">RTV Pending</th>
             <th className="text-right px-4 py-3 font-medium text-slate-600">Inventory Value</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
@@ -282,13 +282,13 @@ function RollupTab() {
                 <tr key={r.brandId || r.code} className="hover:bg-slate-50">
                   <td className="px-4 py-3">
                     <span className="font-medium text-slate-800">{r.name}</span>
-                    {!r.isActive && <Badge variant="outline" className="ml-2 bg-slate-100 text-slate-400 text-[10px]">inactive</Badge>}
+                    {!r.isActive && <Badge variant="outline" className="ml-2 bg-slate-100 text-slate-400 text-[11px]">inactive</Badge>}
                   </td>
                   <td className="px-4 py-3 text-center tabular-nums">{r.skuCount.toLocaleString()}</td>
                   <td className="px-4 py-3 text-center tabular-nums font-medium">{r.totalQty.toLocaleString()}</td>
                   <td className="px-4 py-3 text-center tabular-nums text-green-700">{r.available.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-center tabular-nums text-teal-700">{r.reserved.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-center tabular-nums text-orange-700">{r.rtvPending.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-center tabular-nums text-slate-600">{r.reserved.toLocaleString()}</td>
+                  <td className="px-4 py-3 text-center tabular-nums text-amber-700">{r.rtvPending.toLocaleString()}</td>
                   <td className="px-4 py-3 text-right tabular-nums font-medium">฿{r.inventoryValue.toLocaleString()}</td>
                 </tr>
               ))}
@@ -299,8 +299,8 @@ function RollupTab() {
               <td className="px-4 py-3 text-center tabular-nums">{totals.skuCount.toLocaleString()}</td>
               <td className="px-4 py-3 text-center tabular-nums">{totals.totalQty.toLocaleString()}</td>
               <td className="px-4 py-3 text-center tabular-nums text-green-700">{totals.available.toLocaleString()}</td>
-              <td className="px-4 py-3 text-center tabular-nums text-teal-700">{totals.reserved.toLocaleString()}</td>
-              <td className="px-4 py-3 text-center tabular-nums text-orange-700">{totals.rtvPending.toLocaleString()}</td>
+              <td className="px-4 py-3 text-center tabular-nums text-slate-600">{totals.reserved.toLocaleString()}</td>
+              <td className="px-4 py-3 text-center tabular-nums text-amber-700">{totals.rtvPending.toLocaleString()}</td>
               <td className="px-4 py-3 text-right tabular-nums">฿{totals.inventoryValue.toLocaleString()}</td>
             </tr></tfoot>
           )}
