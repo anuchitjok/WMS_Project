@@ -282,6 +282,10 @@ export const putawayApi = {
   pending: () => request<any[]>('/putaway/pending'),
   confirm: (stockItemId: string, loc: { warehouseId?: string; rackId?: string; slotId?: string }) =>
     request<any>(`/putaway/${stockItemId}/confirm`, { method: 'PATCH', body: JSON.stringify(loc) }),
+  fitCheck: (slotId: string, box: { length: number; width: number; height: number }) =>
+    request<{ hasSlotDimensions: boolean; fits: boolean | null; box: any; slot: any; occupied: number; capacity: number }>(
+      '/putaway/fit-check', { method: 'POST', body: JSON.stringify({ slotId, ...box }) },
+    ),
 };
 
 // ─── Fulfillment (Unified) ───────────────────────────────────────────────────

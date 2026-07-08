@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PutawayService } from './putaway.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -17,6 +17,13 @@ export class PutawayController {
   @Get('pending')
   pending() {
     return this.service.pending();
+  }
+
+  @Post('fit-check')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  fitCheck(@Body() body: { slotId: string; length: number; width: number; height: number }) {
+    return this.service.checkFit(body.slotId, { length: body.length, width: body.width, height: body.height });
   }
 
   @Patch(':stockItemId/confirm')

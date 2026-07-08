@@ -242,7 +242,10 @@ function DetailPanel({ sel }: { sel: Sel }) {
     ] : [
       ['Type', 'Slot'], ['Warehouse', sel.warehouse.name], ['Rack', sel.rack.code], ['Code', sel.data.code],
       ['Level · Column', `L${sel.data.level} · C${sel.data.column}`], ['Slot Type', sel.data.slotType],
-      ['Capacity', sel.data.capacity], ['Stock items', sel.data._count?.stockItems ?? 0],
+      ['Capacity', sel.data.capacity],
+      ['Dimensions (L×W×H cm)', sel.data.lengthCm != null && sel.data.widthCm != null && sel.data.heightCm != null
+        ? `${sel.data.lengthCm} × ${sel.data.widthCm} × ${sel.data.heightCm}` : '—'],
+      ['Stock items', sel.data._count?.stockItems ?? 0],
     ];
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
@@ -385,14 +388,21 @@ function RackModal({ mode, warehouseId, data, onClose, onSaved }: { mode: 'creat
 }
 
 function SlotModal({ mode, rackId, data, onClose, onSaved }: { mode: 'create' | 'edit'; rackId?: string; data?: any; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({ code: data?.code ?? '', name: data?.name ?? '', slotType: data?.slotType ?? 'STANDARD', capacity: data?.capacity ?? 1, level: data?.level ?? 1, column: data?.column ?? 1 });
+  const [form, setForm] = useState({
+    code: data?.code ?? '', name: data?.name ?? '', slotType: data?.slotType ?? 'STANDARD',
+    capacity: data?.capacity ?? 1, level: data?.level ?? 1, column: data?.column ?? 1,
+    lengthCm: data?.lengthCm ?? '', widthCm: data?.widthCm ?? '', heightCm: data?.heightCm ?? '',
+  });
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: any) => setForm({ ...form, [k]: e.target.value });
+  // Dimensions are optional — only send a field if the user actually typed a value,
+  // so leaving them blank keeps the slot exactly as before (no fit-check possible).
+  const dim = (v: string) => (v === '' ? undefined : +v);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true);
     try {
-      if (mode === 'create') await warehouseMasterApi.createSlot({ rackId, code: form.code, name: form.name || undefined, slotType: form.slotType, capacity: +form.capacity, level: +form.level, column: +form.column });
-      else await warehouseMasterApi.updateSlot(data.id, { name: form.name || undefined, slotType: form.slotType, capacity: +form.capacity });
+      if (mode === 'create') await warehouseMasterApi.createSlot({ rackId, code: form.code, name: form.name || undefined, slotType: form.slotType, capacity: +form.capacity, level: +form.level, column: +form.column, lengthCm: dim(form.lengthCm), widthCm: dim(form.widthCm), heightCm: dim(form.heightCm) });
+      else await warehouseMasterApi.updateSlot(data.id, { name: form.name || undefined, slotType: form.slotType, capacity: +form.capacity, lengthCm: dim(form.lengthCm), widthCm: dim(form.widthCm), heightCm: dim(form.heightCm) });
       toast.success(mode === 'create' ? 'Slot created' : 'Slot updated'); onSaved();
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
   }
@@ -408,6 +418,14 @@ function SlotModal({ mode, rackId, data, onClose, onSaved }: { mode: 'create' | 
           <Fld label="Capacity"><Input type="number" min={1} value={form.capacity} onChange={F('capacity')} /></Fld>
           {mode === 'create' && <Fld label="Level"><Input type="number" min={1} value={form.level} onChange={F('level')} /></Fld>}
           {mode === 'create' && <Fld label="Column"><Input type="number" min={1} value={form.column} onChange={F('column')} /></Fld>}
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Physical Size (cm) — optional, enables box-fit check at Putaway</p>
+          <div className="grid grid-cols-3 gap-3">
+            <Fld label="Length"><Input type="number" min={0} placeholder="—" value={form.lengthCm} onChange={F('lengthCm')} /></Fld>
+            <Fld label="Width"><Input type="number" min={0} placeholder="—" value={form.widthCm} onChange={F('widthCm')} /></Fld>
+            <Fld label="Height"><Input type="number" min={0} placeholder="—" value={form.heightCm} onChange={F('heightCm')} /></Fld>
+          </div>
         </div>
         <div className="flex gap-2 pt-1">
           <Button type="button" variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>

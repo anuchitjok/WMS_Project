@@ -6,7 +6,7 @@ import {
   BarChart3, AlertTriangle, RefreshCw, Shield, Clock,
   Building2, Box, CheckCircle2, Eye, History, Layers,
   MoreHorizontal, MapPin, ArrowRightLeft, FileText, SlidersHorizontal,
-  TrendingDown, Zap, Info,
+  Zap, Info,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { inventoryApi, warehouseApi } from '@/lib/api';
@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { ColumnManagerButton, useColumnPrefs, type ColumnDef } from '@/components/inventory/column-manager';
@@ -21,11 +22,13 @@ import { ColumnManagerButton, useColumnPrefs, type ColumnDef } from '@/component
 // ─── Column configuration (user-configurable: show/hide + drag reorder) ───────
 // Locked columns (sku, qty, status) cannot be hidden — they carry the row's identity/state.
 
-const GROUP_CFG: Record<string, { label: string; bg: string; border: string }> = {
-  product:      { label: 'Product Information',  bg: 'bg-slate-700',  border: 'border-slate-600/30' },
-  inventory:    { label: 'Inventory Status',      bg: 'bg-green-800',  border: 'border-green-700/30' },
-  location:     { label: 'Warehouse Location',     bg: 'bg-teal-800',   border: 'border-teal-700/30' },
-  traceability: { label: 'Traceability & Audit',  bg: 'bg-indigo-800', border: 'border-indigo-700/30' },
+// Light header bands (mockup-clean): uniform light fill, group identity carried by
+// a muted accent text color instead of heavy dark fills.
+const GROUP_CFG: Record<string, { label: string; accent: string }> = {
+  product:      { label: 'Product Information',  accent: 'text-slate-500' },
+  inventory:    { label: 'Inventory Status',      accent: 'text-green-700' },
+  location:     { label: 'Warehouse Location',     accent: 'text-teal-700' },
+  traceability: { label: 'Traceability & Audit',  accent: 'text-indigo-600' },
 };
 
 const COLUMN_DEFS: ColumnDef[] = [
@@ -62,7 +65,7 @@ const CELL_RENDERERS: Record<string, (item: any, ctx: RowCtx) => React.ReactNode
     </>
   ),
   type: (item) => (
-    <Badge variant="outline" className={cn('text-[10px]', item.product?.productType === 'SPARE_PART' ? 'bg-teal-100 text-teal-700' : 'bg-emerald-100 text-emerald-700')}>
+    <Badge variant="outline" className={cn('text-[11px]', item.product?.productType === 'SPARE_PART' ? 'bg-teal-100 text-teal-700' : 'bg-emerald-100 text-emerald-700')}>
       {item.product?.productType?.replace('_', ' ')}
     </Badge>
   ),
@@ -77,7 +80,7 @@ const CELL_RENDERERS: Record<string, (item: any, ctx: RowCtx) => React.ReactNode
   qty: (item) => item.quantity,
   status: (item) => <StatusBadge status={item.status} />,
   ownership: (item) => (
-    <span className="text-[10px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 font-medium">{OWNERSHIP_LABEL[item.ownershipType] ?? item.ownershipType}</span>
+    <span className="text-[11px] bg-slate-100 text-slate-600 rounded px-1.5 py-0.5 font-medium">{OWNERSHIP_LABEL[item.ownershipType] ?? item.ownershipType}</span>
   ),
   warehouse: (item) => item.warehouse?.code ?? '—',
   zone: (item) => item.rack?.zone ?? '—',
@@ -85,7 +88,7 @@ const CELL_RENDERERS: Record<string, (item: any, ctx: RowCtx) => React.ReactNode
   slot: (item) => item.slot?.code ?? '—',
   receiveDate: (item, ctx) => ctx.fmt(item.receivedDate),
   agingDays: (_item, ctx) => (
-    <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums',
+    <span className={cn('px-1.5 py-0.5 rounded text-[11px] font-bold tabular-nums',
       ctx.isAgingCritical ? 'bg-red-100 text-red-700' : ctx.isAging ? 'bg-yellow-100 text-yellow-700' : 'text-slate-400')}>
       {ctx.agingDays}d
     </span>
@@ -106,15 +109,15 @@ const CELL_CLASS: Record<string, string> = {
   status: 'px-3 py-2.5',
   ownership: 'px-3 py-2.5 whitespace-nowrap',
   warehouse: 'px-3 py-2.5 whitespace-nowrap font-medium',
-  zone: 'px-3 py-2.5 whitespace-nowrap text-slate-400 text-[10px]',
+  zone: 'px-3 py-2.5 whitespace-nowrap text-slate-400 text-[11px]',
   rack: 'px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600',
   slot: 'px-3 py-2.5 whitespace-nowrap font-mono text-[11px] text-slate-600',
   receiveDate: 'px-3 py-2.5 whitespace-nowrap text-slate-400',
   agingDays: 'px-3 py-2.5 whitespace-nowrap',
   recvBy: 'px-3 py-2.5 whitespace-nowrap text-slate-400',
-  awb: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
-  invoiceNo: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
-  rmaRef: 'px-3 py-2.5 font-mono text-[10px] whitespace-nowrap text-slate-500',
+  awb: 'px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500',
+  invoiceNo: 'px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500',
+  rmaRef: 'px-3 py-2.5 font-mono text-[11px] whitespace-nowrap text-slate-500',
 };
 
 // Groups columns into contiguous bands by `group`, in the user's current order —
@@ -153,7 +156,7 @@ const OWNERSHIP_LABEL: Record<string, string> = {
 function StatusBadge({ status }: { status: string }) {
   const cfg = STATUS_CFG[status] ?? { label: status, bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
   return (
-    <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap', cfg.bg, cfg.text)}>
+    <span className={cn('inline-flex items-center gap-1 text-[11px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap', cfg.bg, cfg.text)}>
       <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', cfg.dot)} />
       {cfg.label}
     </span>
@@ -172,8 +175,8 @@ function InventoryKpiBar({
   onQuickFilter: (patch: { status?: string; aging90?: boolean; aging365?: boolean }) => void;
 }) {
   const cards = [
-    { key: 'totalSku',  label: 'Total SKU',     value: kpi?.totalSku,     icon: Box,          color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: () => onQuickFilter({ status: '', aging90: false, aging365: false }) },
-    { key: 'totalQty',  label: 'Total Qty',     value: kpi?.totalQty,     icon: Layers,       color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: () => onQuickFilter({ status: '', aging90: false, aging365: false }) },
+    { key: 'totalSku',  label: 'Total SKU',     value: kpi?.totalSku,     icon: Box,          color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: undefined },
+    { key: 'totalQty',  label: 'Total Qty',     value: kpi?.totalQty,     icon: Layers,       color: 'text-slate-700',  bg: 'bg-slate-50',   border: 'border-slate-200', active: false, onClick: undefined },
     { key: 'available', label: 'Available Qty', value: kpi?.availableQty, icon: CheckCircle2, color: 'text-green-700',  bg: 'bg-green-50',   border: 'border-green-200', active: activeStatus === 'AVAILABLE', onClick: () => onQuickFilter({ status: activeStatus === 'AVAILABLE' ? '' : 'AVAILABLE' }) },
     { key: 'reserved',  label: 'Reserved Qty',  value: kpi?.reservedQty,  icon: Shield,       color: 'text-teal-700',   bg: 'bg-teal-50',    border: 'border-teal-200', active: activeStatus === 'RESERVED', onClick: () => onQuickFilter({ status: activeStatus === 'RESERVED' ? '' : 'RESERVED' }) },
     { key: 'rtv',       label: 'RTV Qty',       value: kpi?.rtvQty,       icon: RefreshCw,    color: (kpi?.rtvQty ?? 0) > 0 ? 'text-orange-700' : 'text-slate-400', bg: (kpi?.rtvQty ?? 0) > 0 ? 'bg-orange-50' : 'bg-slate-50', border: (kpi?.rtvQty ?? 0) > 0 ? 'border-orange-200' : 'border-slate-200', active: activeStatus === 'RTV_PENDING', onClick: () => onQuickFilter({ status: activeStatus === 'RTV_PENDING' ? '' : 'RTV_PENDING' }) },
@@ -183,17 +186,23 @@ function InventoryKpiBar({
 
   return (
     <div className="grid grid-cols-4 lg:grid-cols-7 gap-2 flex-shrink-0">
-      {cards.map(({ key, label, value, icon: Icon, color, bg, border, active, onClick }) => (
-        <button key={key} type="button" onClick={onClick}
-          className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm text-left transition-colors',
-            bg, active ? 'border-green-500 ring-2 ring-green-200' : border, 'hover:brightness-95')}>
-          <Icon className={cn('w-4 h-4 flex-shrink-0', color)} />
-          <div className="min-w-0">
-            {loading ? <Skeleton className="h-5 w-8" /> : <p className={cn('text-lg font-bold tabular-nums leading-none', color)}>{(value ?? 0).toLocaleString()}</p>}
-            <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{label}</p>
-          </div>
-        </button>
-      ))}
+      {cards.map(({ key, label, value, icon: Icon, color, bg, border, active, onClick }) => {
+        const cardClass = cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm text-left',
+          bg, active ? 'border-green-500 ring-2 ring-green-200' : border,
+          onClick ? 'transition-colors hover:brightness-95' : 'cursor-default');
+        const content = (
+          <>
+            <Icon className={cn('w-4 h-4 flex-shrink-0', color)} />
+            <div className="min-w-0">
+              {loading ? <Skeleton className="h-5 w-8" /> : <p className={cn('text-lg font-bold tabular-nums leading-none', color)}>{(value ?? 0).toLocaleString()}</p>}
+              <p className="text-[10px] text-slate-500 mt-0.5 leading-tight">{label}</p>
+            </div>
+          </>
+        );
+        return onClick
+          ? <button key={key} type="button" onClick={onClick} className={cardClass}>{content}</button>
+          : <div key={key} className={cardClass}>{content}</div>;
+      })}
     </div>
   );
 }
@@ -258,15 +267,15 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
 
   return (
     <div className="fixed inset-y-0 right-0 z-50 w-[460px] bg-white shadow-2xl border-l border-slate-200 flex flex-col">
-      <div className="px-5 py-4 border-b border-slate-700 flex items-start justify-between bg-slate-800 flex-shrink-0">
+      <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between bg-slate-50 flex-shrink-0">
         <div>
           <div className="flex items-center gap-2 mb-0.5">
-            <p className="font-mono font-bold text-white">{loading ? '…' : (data?.serialNumber ?? data?.batchNumber ?? data?.id?.slice(-8))}</p>
-            {cfg && !loading && <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full', cfg.bg, cfg.text)}>{cfg.label}</span>}
+            <p className="font-mono font-bold text-slate-900">{loading ? '…' : (data?.serialNumber ?? data?.batchNumber ?? data?.id?.slice(-8))}</p>
+            {cfg && !loading && <span className={cn('text-[11px] font-bold px-2 py-0.5 rounded-full', cfg.bg, cfg.text)}>{cfg.label}</span>}
           </div>
-          <p className="text-slate-400 text-xs">{loading ? '' : data?.product?.name}</p>
+          <p className="text-slate-500 text-xs">{loading ? '' : data?.product?.name}</p>
         </div>
-        <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-700"><X className="w-5 h-5" /></button>
       </div>
 
       <div className="flex overflow-x-auto border-b border-slate-100 flex-shrink-0 bg-slate-50">
@@ -412,9 +421,11 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
 
       {data && (
         <div className="border-t border-slate-100 p-3 flex gap-2 flex-shrink-0 bg-slate-50">
-          <Button size="sm" variant="outline" className="flex-1 text-xs"
+          <Button size="sm" variant="outline" className="flex-1 text-xs gap-1.5"
             onClick={() => { inventoryApi.updateStatus(data.id, data.status === 'AVAILABLE' ? 'QUARANTINE' : 'AVAILABLE').then(() => { toast.success('Status updated'); onClose(); }).catch((e: any) => toast.error(e.message)); }}>
-            {data.status === 'QUARANTINE' ? '✅ Release' : '🚫 On Hold'}
+            {data.status === 'QUARANTINE'
+              ? <><CheckCircle2 className="w-3.5 h-3.5" /> Release</>
+              : <><Shield className="w-3.5 h-3.5" /> On Hold</>}
           </Button>
           <Link href="/rtv"><Button size="sm" variant="outline" className="text-xs gap-1"><RefreshCw className="w-3.5 h-3.5" /> RTV</Button></Link>
           <Link href="/adjustment"><Button size="sm" variant="outline" className="text-xs gap-1"><SlidersHorizontal className="w-3.5 h-3.5" /> Adjust</Button></Link>
@@ -459,7 +470,20 @@ function InventoryRow({ item, isSelected, onSelect, visibleColumns, colSpan }: {
         <td className="px-3 py-2.5">
           <div className="flex gap-1">
             <button onClick={(e) => { e.stopPropagation(); onSelect(); }} className="p-1 rounded hover:bg-green-100 text-slate-400 hover:text-green-600" title="View detail"><Eye className="w-3.5 h-3.5" /></button>
-            <button className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600"><MoreHorizontal className="w-3.5 h-3.5" /></button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                onClick={(e) => e.stopPropagation()}
+                className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 outline-none"
+                title="More actions"
+              >
+                <MoreHorizontal className="w-3.5 h-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem render={<Link href="/adjustment" />}><SlidersHorizontal className="w-3.5 h-3.5" /> Adjust</DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/transfer" />}><ArrowRightLeft className="w-3.5 h-3.5" /> Transfer</DropdownMenuItem>
+                <DropdownMenuItem render={<Link href="/rtv" />}><RefreshCw className="w-3.5 h-3.5" /> RTV</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </td>
       </tr>
@@ -559,8 +583,8 @@ export default function InventoryPage() {
     <div className="flex flex-col h-full overflow-hidden bg-slate-50">
       {/* Header */}
       <div className="bg-white border-b border-slate-200 px-6 py-3 flex-shrink-0 shadow-sm">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4 flex-wrap lg:flex-nowrap">
+          <div className="flex items-center gap-3 flex-shrink-0">
             <div className="w-9 h-9 bg-teal-600 rounded-xl flex items-center justify-center flex-shrink-0">
               <Package className="w-4.5 h-4.5 text-white" />
             </div>
@@ -569,7 +593,7 @@ export default function InventoryPage() {
               <p className="text-xs text-slate-500 mt-0.5">Real-time stock visibility · Serial tracking · Audit trail</p>
             </div>
           </div>
-          <div className="flex-1 max-w-lg relative">
+          <div className="flex-1 min-w-[180px] max-w-lg relative order-3 lg:order-none basis-full lg:basis-auto">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <Input placeholder="Search SKU, serial, bin, AWB, invoice, brand, model…" className="pl-9 h-9 text-sm bg-slate-50" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
@@ -623,18 +647,19 @@ export default function InventoryPage() {
           <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
             <input type="checkbox" checked={aging365} onChange={(e) => { setAging365(e.target.checked); if (e.target.checked) setAging(false); }} className="accent-red-500" />Aging &gt;1 year
           </label>
-          <div className="flex gap-1 flex-wrap">
-            {[{ label: '🔴 On Hold', s: 'QUARANTINE' }, { label: '🟠 RTV', s: 'RTV_PENDING' }, { label: '💀 DOA', s: 'DOA' }, { label: '🔵 Reserved', s: 'RESERVED' }].map(({ label, s }) => (
-              <button key={s} onClick={() => setStatusFilter(statusFilter === s ? '' : s)}
-                className={cn('text-xs border rounded-lg px-2 py-1 font-medium transition-colors', statusFilter === s ? 'bg-green-100 border-green-400 text-green-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50')}>
-                {label}
-              </button>
-            ))}
-            {(statusFilter || whFilter || brandFilter || itemTypeFilter || serialOnly || aging || aging365) && (
-              <button onClick={() => { setStatusFilter(''); setWhFilter(''); setBrandFilter(''); setItemTypeFilter(''); setSerialOnly(false); setAging(false); setAging365(false); }} className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear</button>
-            )}
-          </div>
+          {(statusFilter || whFilter || brandFilter || itemTypeFilter || serialOnly || aging || aging365) && (
+            <button onClick={() => { setStatusFilter(''); setWhFilter(''); setBrandFilter(''); setItemTypeFilter(''); setSerialOnly(false); setAging(false); setAging365(false); }} className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear</button>
+          )}
           <div className="ml-auto text-xs text-slate-500 tabular-nums">{loading ? '…' : `${total.toLocaleString()} items`}</div>
+        </div>
+
+        {/* Legend — placed right above the table it explains, not buried at page bottom */}
+        <div className="flex flex-wrap gap-4 text-[10px] text-slate-400 flex-shrink-0">
+          {[{ c: 'border-l-red-600', l: 'DOA' }, { c: 'border-l-orange-400', l: 'RTV Pending' }, { c: 'border-l-red-400', l: 'On Hold' }, { c: 'border-l-amber-400', l: 'Aging >90d' }].map(({ c, l }) => (
+            <div key={l} className={cn('flex items-center gap-1 border-l-2 pl-1.5', c)}>{l}</div>
+          ))}
+          <span className="text-slate-300">·</span>
+          <span>Click ▶ to expand row · Click row to open detail drawer</span>
         </div>
 
         {/* Enterprise Table */}
@@ -643,18 +668,18 @@ export default function InventoryPage() {
             <table className="w-full text-xs min-w-[1500px]">
               <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="bg-slate-800 w-8" />
+                  <th className="bg-slate-100 border-b border-slate-200 w-8" />
                   {bands.map((b, i) => (
-                    <th key={i} colSpan={b.count} className={cn('text-center text-[10px] font-bold text-white py-1.5 uppercase tracking-widest border-r border-white/20', GROUP_CFG[b.group].bg)}>{GROUP_CFG[b.group].label}</th>
+                    <th key={i} colSpan={b.count} className={cn('text-center text-[10px] font-bold py-2 uppercase tracking-widest bg-slate-100 border-b border-r border-slate-200', GROUP_CFG[b.group].accent)}>{GROUP_CFG[b.group].label}</th>
                   ))}
-                  <th className="bg-slate-700" />
+                  <th className="bg-slate-100 border-b border-slate-200" />
                 </tr>
-                <tr className="bg-slate-700 text-white">
-                  <th className="w-8 bg-slate-700" />
+                <tr className="bg-slate-50">
+                  <th className="w-8 bg-slate-50 border-b border-slate-200" />
                   {visibleColumns.map((col) => (
-                    <th key={col.key} className={cn('text-left px-3 py-2 font-semibold text-[11px] whitespace-nowrap border-r', GROUP_CFG[col.group].bg, GROUP_CFG[col.group].border)}>{col.label}</th>
+                    <th key={col.key} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{col.label}</th>
                   ))}
-                  <th className="px-3 py-2 bg-slate-700 w-16 text-center text-[11px]">Act</th>
+                  <th className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 w-16 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Act</th>
                 </tr>
               </thead>
               <tbody>
@@ -677,15 +702,6 @@ export default function InventoryPage() {
               </div>
             </div>
           )}
-        </div>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-4 text-[10px] text-slate-400 flex-shrink-0">
-          {[{ c: 'border-l-red-600', l: 'DOA' }, { c: 'border-l-orange-400', l: 'RTV Pending' }, { c: 'border-l-red-400', l: 'On Hold' }, { c: 'border-l-amber-400', l: 'Aging >90d' }].map(({ c, l }) => (
-            <div key={l} className={cn('flex items-center gap-1 border-l-2 pl-1.5', c)}>{l}</div>
-          ))}
-          <span className="text-slate-300">·</span>
-          <span>Click ▶ to expand row · Click row to open detail drawer</span>
         </div>
       </div>
 
