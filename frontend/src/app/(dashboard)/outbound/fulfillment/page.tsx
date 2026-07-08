@@ -18,8 +18,13 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { cn, hasUnsavedChanges } from '@/lib/utils';
 import Link from 'next/link';
+
+const BLANK_PACK_FORM = { cartonCount: 1, totalWeight: '', notes: '' };
+const BLANK_SHIP_FORM = { carrier: '', trackingNumber: '', receiverName: '', notes: '' };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -523,9 +528,9 @@ export default function FulfillmentBoardPage() {
   const intervalRef                 = useRef<NodeJS.Timeout | null>(null);
 
   const [packTask, setPackTask]     = useState<any>(null);
-  const [packForm, setPackForm]     = useState({ cartonCount: 1, totalWeight: '', notes: '' });
+  const [packForm, setPackForm]     = useState(BLANK_PACK_FORM);
   const [shipTask, setShipTask]     = useState<any>(null);
-  const [shipForm, setShipForm]     = useState({ carrier: '', trackingNumber: '', receiverName: '', notes: '' });
+  const [shipForm, setShipForm]     = useState(BLANK_SHIP_FORM);
   const [allocOpen, setAllocOpen]   = useState(false);
   const [allocatable, setAllocatable] = useState<any[]>([]);
   const [allocLoading, setAllocLoading] = useState(false);
@@ -582,7 +587,7 @@ export default function FulfillmentBoardPage() {
         notes: packForm.notes || undefined,
       });
       await fulfillmentApi.completePacking(packTask.id);
-      toast.success('Packing completed'); setPackTask(null); load();
+      toast.success('Packing completed'); setPackTask(null); setPackForm(BLANK_PACK_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -591,7 +596,7 @@ export default function FulfillmentBoardPage() {
     try {
       const sh = await fulfillmentApi.createShipment(shipTask.id, shipForm);
       await fulfillmentApi.confirmDispatch(sh.id);
-      toast.success('Dispatched — Goods Issued!'); setShipTask(null); load();
+      toast.success('Dispatched — Goods Issued!'); setShipTask(null); setShipForm(BLANK_SHIP_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -629,6 +634,9 @@ export default function FulfillmentBoardPage() {
     if (sortField === field) setSortAsc((v) => !v);
     else { setSortField(field); setSortAsc(field === 'time'); }
   }
+
+  const packGuard = useDiscardGuard(hasUnsavedChanges(packForm, BLANK_PACK_FORM), () => { setPackTask(null); setPackForm(BLANK_PACK_FORM); });
+  const shipGuard = useDiscardGuard(hasUnsavedChanges(shipForm, BLANK_SHIP_FORM), () => { setShipTask(null); setShipForm(BLANK_SHIP_FORM); });
 
   return (
     <div className="flex flex-col h-full overflow-hidden bg-slate-50">
@@ -765,7 +773,7 @@ export default function FulfillmentBoardPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!packTask} onOpenChange={(o) => !o && setPackTask(null)}>
+      <Dialog open={!!packTask} onOpenChange={(o) => { if (!o) packGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -799,7 +807,7 @@ export default function FulfillmentBoardPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPackTask(null)}>Cancel</Button>
+            <Button variant="outline" onClick={packGuard.requestClose}>Cancel</Button>
             <Button onClick={confirmPack} className="bg-teal-600 hover:bg-teal-700 text-white">
               <Package className="w-3.5 h-3.5 mr-1" /> Complete Packing
             </Button>
@@ -807,7 +815,7 @@ export default function FulfillmentBoardPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!shipTask} onOpenChange={(o) => !o && setShipTask(null)}>
+      <Dialog open={!!shipTask} onOpenChange={(o) => { if (!o) shipGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -839,13 +847,15 @@ export default function FulfillmentBoardPage() {
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShipTask(null)}>Cancel</Button>
+            <Button variant="outline" onClick={shipGuard.requestClose}>Cancel</Button>
             <Button onClick={confirmShip} className="bg-purple-600 hover:bg-purple-700 text-white">
               <Truck className="w-3.5 h-3.5 mr-1" /> Dispatch & Issue Stock
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <DiscardChangesDialog open={packGuard.confirming} onKeepEditing={packGuard.keepEditing} onDiscard={packGuard.confirmDiscard} />
+      <DiscardChangesDialog open={shipGuard.confirming} onKeepEditing={shipGuard.keepEditing} onDiscard={shipGuard.confirmDiscard} />
     </div>
   );
 }

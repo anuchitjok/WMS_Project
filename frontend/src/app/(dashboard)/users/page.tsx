@@ -11,10 +11,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
-import { formatDate, cn } from '@/lib/utils';
+import { formatDate, cn, hasUnsavedChanges } from '@/lib/utils';
 
 const ENUM_ROLES = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF', 'REQUESTER', 'DEPT_APPROVER', 'RTV_OFFICER', 'AUDITOR'];
+
+const BLANK_USER_FORM = { username: '', fullName: '', email: '', role: 'REQUESTER', roleId: '', department: '', password: '', warehouseIds: [] as string[] };
 
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([]);
@@ -23,10 +27,11 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [editUser, setEditUser] = useState<any>(null);
+  const [editUserBaseline, setEditUserBaseline] = useState<any>(null); // snapshot at open-time, for the unsaved-changes guard
   const [assignments, setAssignments] = useState<any[]>([]);
   const [addForm, setAddForm] = useState<{ roleId: string; expiresAt: string }>({ roleId: '', expiresAt: '' });
   const [newPassword, setNewPassword] = useState('');
-  const [form, setForm] = useState<any>({ username: '', fullName: '', email: '', role: 'REQUESTER', roleId: '', department: '', password: '', warehouseIds: [] as string[] });
+  const [form, setForm] = useState<any>(BLANK_USER_FORM);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,7 +46,7 @@ export default function UsersPage() {
     try {
       await usersApi.create({ ...form, roleId: form.roleId || undefined, password: form.password || undefined });
       toast.success('User created successfully'); setCreateOpen(false);
-      setForm({ username: '', fullName: '', email: '', role: 'REQUESTER', roleId: '', department: '', password: '', warehouseIds: [] });
+      setForm(BLANK_USER_FORM);
       load();
     } catch (e: any) { toast.error(e.message); }
   }
@@ -59,7 +64,7 @@ export default function UsersPage() {
         password: newPassword || undefined,
       });
       await usersApi.setWarehouses(editUser.id, editUser.warehouseIds);
-      toast.success(newPassword ? 'Saved — password updated' : 'Saved'); setEditUser(null); load();
+      toast.success(newPassword ? 'Saved — password updated' : 'Saved'); setEditUser(null); setEditUserBaseline(null); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -71,7 +76,9 @@ export default function UsersPage() {
   async function remove(id: string) { try { await usersApi.remove(id); toast.success('Deleted'); load(); } catch (e: any) { toast.error(e.message); } }
 
   async function openEdit(u: any) {
-    setEditUser({ ...u, roleId: u.roleId ?? '', warehouseIds: (u.warehouses ?? []).map((w: any) => w.warehouse.id) });
+    const loaded = { ...u, roleId: u.roleId ?? '', warehouseIds: (u.warehouses ?? []).map((w: any) => w.warehouse.id) };
+    setEditUser(loaded);
+    setEditUserBaseline(loaded);
     setNewPassword('');
     try { setAssignments(await userRolesApi.list(u.id)); } catch { setAssignments([]); }
     setAddForm({ roleId: '', expiresAt: '' });
@@ -92,11 +99,19 @@ export default function UsersPage() {
   }
   function toggleWh(list: string[], id: string) { return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]; }
 
+  const createGuard = useDiscardGuard(hasUnsavedChanges(form, BLANK_USER_FORM), () => { setCreateOpen(false); setForm(BLANK_USER_FORM); });
+  const editGuard = useDiscardGuard(
+    hasUnsavedChanges({ ...editUser, newPassword }, { ...editUserBaseline, newPassword: '' }),
+    () => { setEditUser(null); setEditUserBaseline(null); setNewPassword(''); },
+  );
+
   return (
     <div className="p-6 space-y-5">
+      <DiscardChangesDialog open={createGuard.confirming} onKeepEditing={createGuard.keepEditing} onDiscard={createGuard.confirmDiscard} />
+      <DiscardChangesDialog open={editGuard.confirming} onKeepEditing={editGuard.keepEditing} onDiscard={editGuard.confirmDiscard} />
       <PageHeader title="User & Role Management" subtitle="Manage users, roles, and warehouse access" icon={UsersIcon}
         action={
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <Dialog open={createOpen} onOpenChange={(o) => { if (o) setCreateOpen(true); else createGuard.requestClose(); }}>
             <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>+ Create User</DialogTrigger>
             <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader><DialogTitle>Create New User</DialogTitle></DialogHeader>
@@ -180,7 +195,7 @@ export default function UsersPage() {
       </div>
 
       {/* Edit dialog */}
-      <Dialog open={!!editUser} onOpenChange={(o) => !o && setEditUser(null)}>
+      <Dialog open={!!editUser} onOpenChange={(o) => { if (!o) editGuard.requestClose(); }}>
         <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit User: {editUser?.username}</DialogTitle></DialogHeader>
           {editUser && (

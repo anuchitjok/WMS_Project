@@ -19,6 +19,12 @@ export function formatDateShort(date: string | Date | undefined) {
   return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(date));
 }
 
+// Shallow-safe dirty check for plain form objects (strings/numbers/booleans).
+// Field order is stable in all our forms (spread-then-mutate), so JSON comparison is reliable here.
+export function hasUnsavedChanges(current: unknown, baseline: unknown): boolean {
+  return JSON.stringify(current) !== JSON.stringify(baseline);
+}
+
 // Calm, restrained palette — neutral slate for normal pipeline stages,
 // green for good outcomes, amber for "needs attention", red for problems.
 // Colour carries real meaning here rather than decorating every distinct status.

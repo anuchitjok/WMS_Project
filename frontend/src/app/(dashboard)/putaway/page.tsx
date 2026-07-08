@@ -11,14 +11,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { hasUnsavedChanges } from '@/lib/utils';
 
 type FitResult = Awaited<ReturnType<typeof putawayApi.fitCheck>> | null;
+
+const BLANK_BOX_FORM = { length: '', width: '', height: '' };
 
 export default function PutawayPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [target, setTarget] = useState<any>(null); // item awaiting confirm in the dialog
-  const [box, setBox] = useState({ length: '', width: '', height: '' });
+  const [box, setBox] = useState(BLANK_BOX_FORM);
   const [fit, setFit] = useState<FitResult>(null);
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -31,7 +36,7 @@ export default function PutawayPage() {
 
   function openConfirm(item: any) {
     setTarget(item);
-    setBox({ length: '', width: '', height: '' });
+    setBox(BLANK_BOX_FORM);
     setFit(null);
   }
 
@@ -56,6 +61,7 @@ export default function PutawayPage() {
   }
 
   const hasBoxInput = box.length !== '' && box.width !== '' && box.height !== '';
+  const boxGuard = useDiscardGuard(hasUnsavedChanges(box, BLANK_BOX_FORM), () => { setTarget(null); setBox(BLANK_BOX_FORM); setFit(null); });
 
   return (
     <div className="p-6 space-y-5">
@@ -87,7 +93,7 @@ export default function PutawayPage() {
         </table>
       </div>
 
-      <Dialog open={!!target} onOpenChange={(o) => !o && setTarget(null)}>
+      <Dialog open={!!target} onOpenChange={(o) => { if (!o) boxGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirm Putaway — {target?.product?.code}</DialogTitle>
@@ -131,7 +137,7 @@ export default function PutawayPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={boxGuard.requestClose}>Cancel</Button>
             <Button
               onClick={doConfirm}
               disabled={confirming}
@@ -142,6 +148,7 @@ export default function PutawayPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <DiscardChangesDialog open={boxGuard.confirming} onKeepEditing={boxGuard.keepEditing} onDiscard={boxGuard.confirmDiscard} />
     </div>
   );
 }
