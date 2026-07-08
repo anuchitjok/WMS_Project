@@ -40,11 +40,11 @@ export class ScrapService {
     return c;
   }
 
-  create(
+  async create(
     data: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
     requestedById: string,
   ) {
-    return this.prisma.scrapCase.create({
+    const scrap = await this.prisma.scrapCase.create({
       data: {
         refNumber: this.genRef(),
         stockItemId: data.stockItemId,
@@ -55,6 +55,16 @@ export class ScrapService {
         requestedById,
       },
     });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: requestedById,
+        action: 'SCRAP_CASE_CREATED',
+        entityType: 'ScrapCase',
+        entityId: scrap.id,
+        detail: `${scrap.refNumber} · ${data.reason}`,
+      },
+    });
+    return scrap;
   }
 
   async updateStatus(id: string, status: ScrapStatus, actorId: string) {
@@ -73,6 +83,16 @@ export class ScrapService {
     if (status === 'APPROVED') { extra.approvedById = actorId; extra.approvedAt = new Date(); }
     if (status === 'DISPOSED') extra.disposedAt = new Date();
 
-    return this.prisma.scrapCase.update({ where: { id }, data: { status, ...extra } });
+    const updated = await this.prisma.scrapCase.update({ where: { id }, data: { status, ...extra } });
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'SCRAP_STATUS_CHANGED',
+        entityType: 'ScrapCase',
+        entityId: id,
+        detail: `${scrap.refNumber}: ${scrap.status} → ${status}`,
+      },
+    });
+    return updated;
   }
 }

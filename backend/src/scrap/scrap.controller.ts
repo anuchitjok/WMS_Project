@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ScrapService } from './scrap.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ScrapStatus } from '@prisma/client';
 
 @ApiTags('Scrap')
@@ -30,14 +31,14 @@ export class ScrapController {
   @ApiOperation({ summary: 'Create scrap case' })
   create(
     @Body() body: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
-    @Req() req: any,
+    @CurrentUser('id') userId: string,
   ) {
-    return this.scrap.create(body, req.user.sub);
+    return this.scrap.create(body, userId);
   }
 
   @Patch(':id/status')
   @ApiOperation({ summary: 'Advance scrap case status' })
-  updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @Req() req: any) {
-    return this.scrap.updateStatus(id, status, req.user.sub);
+  updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @CurrentUser('id') userId: string) {
+    return this.scrap.updateStatus(id, status, userId);
   }
 }

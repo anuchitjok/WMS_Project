@@ -200,11 +200,20 @@ export const userRolesApi = {
 };
 
 // Audit
+export interface AuditListResponse {
+  data: AuditLog[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  filters: { actions: string[]; entityTypes: string[] };
+}
+
 export const auditApi = {
   list: (params?: Record<string, string | number | undefined>) => {
     const q = new URLSearchParams();
-    if (params) Object.entries(params).forEach(([k, v]) => v != null && q.set(k, String(v)));
-    return request<AuditLog[]>(`/audit?${q}`);
+    if (params) Object.entries(params).forEach(([k, v]) => v != null && v !== '' && q.set(k, String(v)));
+    return request<AuditListResponse>(`/audit?${q}`);
   },
 };
 

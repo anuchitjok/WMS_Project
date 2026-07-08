@@ -13,9 +13,30 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import Link from 'next/link';
 import { REQUEST_STATUS_COLORS, formatDate } from '@/lib/utils';
-import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckCircle2, Eye, Send, X } from 'lucide-react';
+import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckCircle2, Eye, Send, X, Truck } from 'lucide-react';
 import { toast } from 'sonner';
+
+// ── Lifecycle timeline row ──────────────────────────────────────────────────────
+function TimelineRow({ label, who, at, done, tone = 'slate' }: {
+  label: string; who?: string; at?: string | null; done: boolean; tone?: 'slate' | 'green' | 'red';
+}) {
+  const dot = !done ? 'bg-slate-200' : tone === 'red' ? 'bg-red-500' : tone === 'green' ? 'bg-green-500' : 'bg-slate-400';
+  return (
+    <li className="flex items-start gap-3">
+      <span className={`mt-1 h-2.5 w-2.5 rounded-full shrink-0 ${dot}`} />
+      <div className="min-w-0">
+        <p className={`text-sm ${done ? 'text-slate-800' : 'text-slate-400'}`}>{label}</p>
+        {(who || at) && (
+          <p className="text-xs text-slate-400">
+            {who}{who && at ? ' · ' : ''}{at ? formatDate(at) : ''}
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -715,6 +736,37 @@ export default function RequestsPage() {
                   </table>
                 </div>
               </div>
+
+              {/* Progress timeline — real milestones the requester can trust */}
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Progress</p>
+                <ol className="space-y-2.5">
+                  <TimelineRow done label="Created" who={detailReq.requester?.fullName} at={detailReq.createdAt} />
+                  <TimelineRow done={detailReq.status !== 'DRAFT'} label="Submitted for approval" />
+                  {detailReq.status === 'REJECTED'
+                    ? <TimelineRow done label="Rejected" tone="red" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />
+                    : <TimelineRow done={!!detailReq.approvedAt} label="Approved" tone="green" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />}
+                  {detailReq.status !== 'REJECTED' && (
+                    <TimelineRow
+                      done={!!(detailReq as any).fulfillmentStatus || detailReq.status === 'COMPLETED'}
+                      label={(detailReq as any).fulfillmentStatus
+                        ? `Fulfillment · ${String((detailReq as any).fulfillmentStatus).replace(/_/g, ' ')}`
+                        : 'Fulfillment (allocate → pick → pack → ship)'}
+                    />
+                  )}
+                </ol>
+              </div>
+
+              {/* Next-step hint — tells the requester where the request goes after approval */}
+              {detailReq.status === 'APPROVED' && (
+                <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-2.5 text-sm text-green-800">
+                  <Truck className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>
+                    Approved — the warehouse is now preparing your items. Track progress on the{' '}
+                    <Link href="/outbound/fulfillment" className="font-semibold underline underline-offset-2">Fulfillment Board</Link>.
+                  </span>
+                </div>
+              )}
 
               {/* Status hint */}
               {detailReq.status === 'DRAFT' && (

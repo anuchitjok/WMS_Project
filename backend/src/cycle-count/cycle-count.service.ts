@@ -60,14 +60,28 @@ export class CycleCountService {
   async findOne(id: string) {
     const s = await this.prisma.cycleCountSession.findUnique({
       where: { id },
-      include: { lines: { include: { session: false } }, },
+      include: { lines: true },
     });
     if (!s) throw new NotFoundException('CycleCountSession not found');
+
+    // CycleCountLine has no product relation — resolve product code/name in one query and merge,
+    // so the UI can show a readable product instead of a raw id slice.
+    const productIds = [...new Set(s.lines.map((l) => l.productId))];
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, code: true, name: true } })
+      : [];
+    const productById = new Map(products.map((p) => [p.id, p]));
+    const lines = s.lines.map((l) => ({
+      ...l,
+      productCode: productById.get(l.productId)?.code ?? null,
+      productName: productById.get(l.productId)?.name ?? null,
+    }));
+
     // Summary stats
-    const total = s.lines.length;
-    const counted = s.lines.filter((l) => l.countedQty !== null).length;
-    const variances = s.lines.filter((l) => l.countedQty !== null && l.variance !== 0);
-    return { ...s, summary: { total, counted, remaining: total - counted, varianceCount: variances.length } };
+    const total = lines.length;
+    const counted = lines.filter((l) => l.countedQty !== null).length;
+    const variances = lines.filter((l) => l.countedQty !== null && l.variance !== 0);
+    return { ...s, lines, summary: { total, counted, remaining: total - counted, varianceCount: variances.length } };
   }
 
   // Submit a count for one line (idempotent — can recount)

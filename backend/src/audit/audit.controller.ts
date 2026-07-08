@@ -18,9 +18,14 @@ export class AuditController {
   findAll(
     @Query('userId') userId?: string,
     @Query('entityType') entityType?: string,
+    @Query('entityId') entityId?: string,
+    @Query('action') action?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('q') q?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.auditService.findAll({ userId, entityType, page, limit });
+    return this.auditService.findAll({ userId, entityType, entityId, action, from, to, q, page, limit });
   }
 }

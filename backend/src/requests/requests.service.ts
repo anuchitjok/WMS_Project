@@ -86,9 +86,35 @@ export class RequestsService {
     const taskByReq = new Map<string, string>();
     for (const t of tasks) if (!taskByReq.has(t.requestId)) taskByReq.set(t.requestId, t.status);
 
+    // Real stock validation: available AVAILABLE units per product across all listed requests.
+    // Replaces the previous hardcoded "Stock OK" badge with an honest check the approver can trust.
+    const productIds = [...new Set(data.flatMap((r) => r.items.map((i) => i.productId)))];
+    const availByProduct = new Map<string, number>();
+    if (productIds.length) {
+      const grouped = await this.prisma.stockItem.groupBy({
+        by: ['productId'],
+        where: { productId: { in: productIds }, status: 'AVAILABLE' },
+        _count: { _all: true },
+      });
+      for (const g of grouped) availByProduct.set(g.productId, g._count._all);
+    }
+
     const augmented = data.map((r) => {
       const fulfillmentStatus = taskByReq.get(r.id) ?? null;
-      return { ...r, fulfillmentStatus, stage: deriveRequestStage(r.status, fulfillmentStatus) };
+      const shortages = r.items
+        .map((i) => ({
+          productName: i.product?.name ?? i.productId,
+          requested: i.quantityRequested,
+          available: availByProduct.get(i.productId) ?? 0,
+        }))
+        .filter((s) => s.available < s.requested);
+      return {
+        ...r,
+        fulfillmentStatus,
+        stage: deriveRequestStage(r.status, fulfillmentStatus),
+        stockOk: shortages.length === 0,
+        stockShortages: shortages,
+      };
     });
 
     return { data: augmented, total, page, limit, totalPages: Math.ceil(total / limit) };

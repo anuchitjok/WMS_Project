@@ -16,7 +16,7 @@ const SCRAP_FLOW: Record<string, string[]> = {
 };
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING_REVIEW: 'bg-yellow-100 text-yellow-700',
+  PENDING_REVIEW: 'bg-amber-100 text-amber-800',
   APPROVED: 'bg-green-100 text-green-700',
   DISPOSED: 'bg-slate-100 text-slate-600',
   REJECTED: 'bg-red-100 text-red-700',

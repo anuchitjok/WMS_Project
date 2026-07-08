@@ -31,7 +31,11 @@ export class RtvController {
   }
 
   @Patch(':id/status')
-  updateStatus(@Param('id') id: string, @Body('status') status: RTVStatus) {
-    return this.rtvService.updateStatus(id, status);
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: RTVStatus,
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.rtvService.updateStatus(id, status, userId);
   }
 }

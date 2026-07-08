@@ -48,7 +48,7 @@ function SummarySection() {
           <StatCard title="Request SLA" value={`${data?.kpis.slaRate ?? 0}%`} icon={Clock} color="green" subtitle="Completed within target" />
           <StatCard title="DOA Rate" value={`${data?.kpis.doaRate ?? 0}%`} icon={AlertTriangle} color="red" subtitle="DOA / damaged ratio" />
           <StatCard title="Open RTV" value={data?.kpis.openRtv ?? 0} icon={RotateCcw} color="yellow" subtitle="Vendor return cases" />
-          <StatCard title="Low Stock" value={data?.kpis.lowStockCount ?? 0} icon={TrendingDown} color="blue" subtitle="Below safety stock" />
+          <StatCard title="Low Stock" value={data?.kpis.lowStockCount ?? 0} icon={TrendingDown} color="yellow" subtitle="Below safety stock" />
         </div>
       )}
     </>

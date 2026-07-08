@@ -68,6 +68,17 @@ export class AdjustmentService {
   async reject(id: string, userId: string) {
     const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
     if (!adj) throw new NotFoundException('Adjustment not found');
-    return this.prisma.stockAdjustment.update({ where: { id }, data: { status: 'REJECTED', approvedById: userId } });
+    if (adj.status !== 'PENDING_APPROVAL') throw new BadRequestException('Adjustment is not pending approval');
+    const updated = await this.prisma.stockAdjustment.update({ where: { id }, data: { status: 'REJECTED', approvedById: userId } });
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'ADJUSTMENT_REJECTED',
+        entityType: 'StockAdjustment',
+        entityId: id,
+        detail: `${adj.refNumber} · ${adj.quantityBefore} → ${adj.quantityAfter}`,
+      },
+    });
+    return updated;
   }
 }
