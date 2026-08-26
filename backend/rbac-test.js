@@ -78,6 +78,26 @@ async function main() {
   // cleanup
   await call('DELETE', `/users/${created.data?.id}`, admin);
 
+  // ── Warehouse Layout (Sprint 3) — read-only probe, writes nothing ──
+  console.log('\n[ Warehouse Layout API ]');
+  const whList = await call('GET', '/warehouse', admin);
+  const whId = whList.data?.[0]?.id;
+  const layoutRead = await call('GET', `/warehouse-layout/${whId}`, admin);
+  log('Admin can read layout', layoutRead.status === 200, `layout=${layoutRead.data?.layout ? 'exists' : 'none yet'}`);
+  log('Requester can READ layout (reads are open)', (await call('GET', `/warehouse-layout/${whId}`, requester)).status === 200);
+  log('Requester BLOCKED from creating layout (403)', (await call('POST', `/warehouse-layout/${whId}`, requester, {})).status === 403);
+  log('Requester BLOCKED from creating object (403)',
+    (await call('POST', `/warehouse-layout/lay_x/objects`, requester, { objectType: 'BIN', name: 'x', x: 0, y: 0, width: 1, height: 1 })).status === 403);
+  log('Unknown warehouse returns 404', (await call('GET', '/warehouse-layout/does-not-exist', admin)).status === 404);
+  // slotId is Sprint 6; the DTO must reject it (forbidNonWhitelisted → 400)
+  const linkAttempt = await call('POST', `/warehouse-layout/lay_x/objects`, admin,
+    { objectType: 'BIN', name: 'x', x: 0, y: 0, width: 1, height: 1, slotId: 'slot_1' });
+  log('slotId rejected — linking is Sprint 6 (400)', linkAttempt.status === 400, linkAttempt.data?.message);
+  // geometry guards
+  const badGeom = await call('POST', `/warehouse-layout/lay_x/objects`, admin,
+    { objectType: 'BIN', name: 'x', x: 0, y: 0, width: 0, height: 1 });
+  log('Zero-width object rejected (400)', badGeom.status === 400);
+
   const pass = results.filter((r) => r.ok).length, fail = results.length - pass;
   console.log('\n========== RESULT ==========');
   console.log(`  TOTAL: ${results.length}   PASS: ${pass}   FAIL: ${fail}`);

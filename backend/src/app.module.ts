@@ -13,6 +13,7 @@ import { UsersModule } from './users/users.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { WarehouseModule } from './warehouse/warehouse.module';
 import { WarehouseMasterModule } from './warehouse-master/warehouse-master.module';
+import { WarehouseLayoutModule } from './warehouse-layout/warehouse-layout.module';
 import { RequestsModule } from './requests/requests.module';
 import { RtvModule } from './rtv/rtv.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -57,6 +58,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     InventoryModule,
     WarehouseModule,
     WarehouseMasterModule,
+    WarehouseLayoutModule,
     RequestsModule,
     RtvModule,
     DashboardModule,
