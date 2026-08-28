@@ -9,6 +9,21 @@ import { RackType, SlotStatus, SlotType, UserRole } from '@prisma/client';
 
 const MASTER_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR] as const;
 
+// Rack and Slot writes used to carry NO @Roles at all, so any authenticated user
+// — a REQUESTER, an AUDITOR, a viewer — could create or delete warehouse
+// structure through this controller, while /warehouse-master guarded the very
+// same tables. Two policies for one table is the bug; these constants close it.
+//
+// Structure (create/delete) matches warehouse-master exactly: master data.
+const STRUCTURE_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER] as const;
+// Edits stay open to the floor roles, because the Operations Control Center uses
+// PATCH slots/:id for the everyday block / unblock action. Restricting this to
+// admins would break a working operational flow to fix a structural hole.
+const OPS_ROLES = [
+  UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER,
+  UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF,
+] as const;
+
 @ApiTags('Warehouse')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -58,31 +73,31 @@ export class WarehouseController {
 
   // ─── Rack ──────────────────────────────────────────────────────────────────
 
-  @Post('racks')
+  @Post('racks') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Create rack' })
   createRack(@Body() dto: { warehouseId: string; code: string; name?: string; zone?: string; rackType?: RackType; capacity?: number; levels?: number; columns?: number; description?: string }, @CurrentUser('id') userId: string) {
     return this.warehouseService.createRack(dto, userId);
   }
 
-  @Patch('racks/:id')
+  @Patch('racks/:id') @UseGuards(RolesGuard) @Roles(...OPS_ROLES)
   updateRack(@Param('id') id: string, @Body() dto: any, @CurrentUser('id') userId: string) {
     return this.warehouseService.updateRack(id, dto, userId);
   }
 
-  @Delete('racks/:id')
+  @Delete('racks/:id') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   deleteRack(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.warehouseService.deleteRack(id, userId);
   }
 
   // ─── Slot ──────────────────────────────────────────────────────────────────
 
-  @Post('racks/:rackId/slots')
+  @Post('racks/:rackId/slots') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Create single slot' })
   createSlot(@Param('rackId') rackId: string, @Body() dto: { code: string; name?: string; level?: number; column?: number; slotType?: SlotType; capacity?: number; maxWeight?: number }, @CurrentUser('id') userId: string) {
     return this.warehouseService.createSlot(rackId, dto, userId);
   }
 
-  @Post('racks/:rackId/slots/bulk')
+  @Post('racks/:rackId/slots/bulk') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Bulk generate slots for a rack' })
   bulkGenerateSlots(
     @Param('rackId') rackId: string,
@@ -91,12 +106,12 @@ export class WarehouseController {
     return this.warehouseService.bulkGenerateSlots(rackId, dto);
   }
 
-  @Patch('slots/:id')
+  @Patch('slots/:id') @UseGuards(RolesGuard) @Roles(...OPS_ROLES)
   updateSlot(@Param('id') id: string, @Body() dto: any, @CurrentUser('id') userId: string) {
     return this.warehouseService.updateSlot(id, dto, userId);
   }
 
-  @Delete('slots/:id')
+  @Delete('slots/:id') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   deleteSlot(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.warehouseService.deleteSlot(id, userId);
   }

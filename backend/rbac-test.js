@@ -78,6 +78,21 @@ async function main() {
   // cleanup
   await call('DELETE', `/users/${created.data?.id}`, admin);
 
+  // ── Warehouse structure writes — these once had NO role guard at all ──
+  console.log('\n[ Warehouse Structure Authorization ]');
+  const whForRack = (await call('GET', '/warehouse', admin)).data?.[0];
+  log('Requester BLOCKED from creating a rack (403)',
+    (await call('POST', '/warehouse/racks', requester, { warehouseId: whForRack?.id, code: `QA-${Date.now().toString().slice(-5)}` })).status === 403);
+  log('Requester BLOCKED from deleting a rack (403)',
+    (await call('DELETE', `/warehouse/racks/${whForRack?.racks?.[0]?.id}`, requester)).status === 403);
+  log('Requester BLOCKED from bulk-generating slots (403)',
+    (await call('POST', `/warehouse/racks/${whForRack?.racks?.[0]?.id}/slots/bulk`, requester, { levels: 1, columns: 1 })).status === 403);
+  log('Requester BLOCKED from editing a slot (403)',
+    (await call('PATCH', `/warehouse/slots/${whForRack?.racks?.[0]?.slots?.[0]?.id}`, requester, { status: 'BLOCKED' })).status === 403);
+  log('Requester BLOCKED from deleting a slot (403)',
+    (await call('DELETE', `/warehouse/slots/${whForRack?.racks?.[0]?.slots?.[0]?.id}`, requester)).status === 403);
+  log('Requester can still READ the warehouse tree', (await call('GET', '/warehouse', requester)).status === 200);
+
   // ── Warehouse Layout (Sprint 3) — read-only probe, writes nothing ──
   console.log('\n[ Warehouse Layout API ]');
   const whList = await call('GET', '/warehouse', admin);

@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn, formatDate } from '@/lib/utils';
+import { useAuthStore } from '@/store/auth.store';
+import type { UserRole } from '@/types';
 import {
   type SlotStatus, type SlotData, type RackData, type WarehouseData,
   slotItems, isOccupied, isBlocked, slotUtil,
@@ -161,7 +163,7 @@ function LocationProfile({ wh, rack, slot, detail, loadingDetail }: {
   );
 }
 
-function QuickActions({ slot, onAction }: { slot: SlotData | null; onAction: (a: string) => void }) {
+function QuickActions({ slot, onAction, canCreate = true }: { slot: SlotData | null; onAction: (a: string) => void; canCreate?: boolean }) {
   const ACTIONS = [
     { id: 'edit',     label: 'Edit Location',  icon: Pencil,        needsSlot: true },
     { id: 'move',     label: 'Move Stock',     icon: Move,          needsSlot: false },
@@ -171,7 +173,7 @@ function QuickActions({ slot, onAction }: { slot: SlotData | null; onAction: (a:
     { id: 'history',  label: 'View History',   icon: History,       needsSlot: false },
     { id: 'print',    label: 'Print Label',    icon: Printer,       needsSlot: true },
     { id: 'create',   label: 'Create Location',icon: Plus,          needsSlot: false },
-  ];
+  ].filter((a) => a.id !== 'create' || canCreate);
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-3">Quick Actions</h2>
@@ -308,10 +310,18 @@ function printLabel(wh: WarehouseData | null, rack: RackData | null, slot: SlotD
 // when the warehouse changes, which reproduces the previous reset of expanded
 // rack / selected slot / slot detail exactly.
 
+// Creating a rack is master data: the API allows SYSTEM_ADMIN and
+// WAREHOUSE_MANAGER only, matching warehouse-master. Editing and blocking a slot
+// stay open to the floor roles. The UI mirrors that so nobody is shown a button
+// that would 403.
+const STRUCTURE_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
+
 export function ControlCenter({ wh, loading, onReload }: {
   wh: WarehouseData | null; loading: boolean; onReload: () => void | Promise<void>;
 }) {
   const router = useRouter();
+  const user = useAuthStore((s) => s.user);
+  const canCreateStructure = !!user && STRUCTURE_ROLES.includes(user.role);
   const [expandedRackId, setExpandedRackId] = useState('');
   const [selectedSlot, setSelectedSlot] = useState<SlotData | null>(null);
   const [detail, setDetail] = useState<any>(null);
@@ -367,9 +377,11 @@ export function ControlCenter({ wh, loading, onReload }: {
               <div className="relative">
                 <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search rack…" className="h-8 w-40 text-xs" />
               </div>
-              <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => setModal({ type: 'createRack', whId: wh?.id ?? '' })} disabled={!wh}>
-                <Plus className="w-3.5 h-3.5" /> Create Location
-              </Button>
+              {canCreateStructure && (
+                <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => setModal({ type: 'createRack', whId: wh?.id ?? '' })} disabled={!wh}>
+                  <Plus className="w-3.5 h-3.5" /> Create Location
+                </Button>
+              )}
             </div>
           </div>
           {loading ? (
@@ -378,7 +390,7 @@ export function ControlCenter({ wh, loading, onReload }: {
             <div className="bg-white border border-slate-200 rounded-xl p-10 text-center shadow-sm">
               <Layers className="h-10 w-10 mx-auto text-slate-300" />
               <p className="mt-2 text-sm font-medium text-slate-600">{wh ? 'No racks in this warehouse yet' : 'Select a warehouse'}</p>
-              {wh && <p className="text-xs text-slate-400 mt-0.5">Use “Create Location” to add racks &amp; slots</p>}
+              {wh && canCreateStructure && <p className="text-xs text-slate-400 mt-0.5">Use “Create Location” to add racks &amp; slots</p>}
             </div>
           ) : (
             filteredRacks.map((rack) => (
@@ -392,7 +404,7 @@ export function ControlCenter({ wh, loading, onReload }: {
 
         {/* Right: fixed quick actions + location profile */}
         <div className="space-y-4 xl:sticky xl:top-4">
-          <QuickActions slot={selectedSlot} onAction={handleAction} />
+          <QuickActions slot={selectedSlot} onAction={handleAction} canCreate={canCreateStructure} />
           <LocationProfile wh={wh} rack={rackOfSelectedSlot} slot={selectedSlot} detail={detail} loadingDetail={loadingDetail} />
         </div>
       </div>
