@@ -330,6 +330,7 @@ model Warehouse {
   racks      Rack[]
   stockItems StockItem[]
   userAccess UserWarehouse[]
+  layout     WarehouseLayout? // Physical Layout (Sprint 2) — virtual, FK lives on WarehouseLayout
   createdAt  DateTime    @default(now())
 }
 
@@ -351,6 +352,7 @@ model Rack {
   warehouse   Warehouse   @relation(fields: [warehouseId], references: [id])
   slots       Slot[]
   stockItems  StockItem[]
+  layoutObjects LayoutObject[] // Physical Layout (Sprint 2) — virtual, FK lives on LayoutObject
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @default(now()) @updatedAt
 
@@ -379,6 +381,7 @@ model Slot {
   deletedBy  String?
   rack       Rack       @relation(fields: [rackId], references: [id])
   stockItems StockItem[]
+  layoutObject LayoutObject? // Physical Layout (Sprint 2) — virtual, FK lives on LayoutObject
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @default(now()) @updatedAt
 
@@ -1037,4 +1040,100 @@ model ApprovalInstanceStep {
   instance ApprovalInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
 
   @@unique([instanceId, stepOrder])
+}
+
+// ─── Physical Warehouse Layout (Sprint 2) ─────────────────────────────
+// Purely ADDITIVE. Physical Layout is the *drawing* of the warehouse floor; the
+// WMS location hierarchy (Warehouse → Rack → Slot) remains the single source of
+// truth for where inventory lives. The only contact points with the existing WMS
+// are the two nullable FKs `LayoutObject.slotId` / `LayoutObject.rackId`.
+// Nothing here stores inventory — quantities are always derived from StockItem.
+
+enum LayoutObjectType {
+  ZONE
+  RACK
+  SHELF
+  BIN
+  AISLE
+  RECEIVING_AREA
+  SHIPPING_AREA
+  STAGING_AREA
+  QC_AREA
+  WORK_AREA
+  STORAGE_AREA
+  CUSTOM_AREA
+}
+
+enum LayoutObjectStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+  PLANNED
+}
+
+model WarehouseLayout {
+  id          String    @id @default(cuid())
+  warehouseId String    @unique // 1:1 with Warehouse
+  name        String    @default("Default Layout")
+  widthUnits  Int       @default(100) // canvas extent, in grid units
+  heightUnits Int       @default(60)
+  gridSize    Int       @default(10) // px per grid unit at zoom 1
+  unitLabel   String    @default("m") // display only
+  version     Int       @default(0) // optimistic lock for batch saves (mirrors FulfillmentTask.version)
+  notes       String?   @db.Text
+  isDeleted   Boolean   @default(false)
+  deletedAt   DateTime?
+  deletedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+  objects   LayoutObject[]
+}
+
+model LayoutObject {
+  id             String           @id @default(cuid())
+  layoutId       String
+  parentObjectId String? // self-reference = the physical containment tree
+  objectType     LayoutObjectType
+  name           String
+  code           String? // operator-facing label, e.g. "A-01-01"
+
+  // Geometry — grid units, top-left origin
+  x            Float
+  y            Float
+  width        Float
+  height       Float
+  rotation     Float @default(0) // degrees
+  zIndex       Int   @default(0)
+  displayOrder Int   @default(0)
+
+  // The ONLY contact points with the existing WMS. Both nullable: physical-only
+  // objects (areas, aisles, shelves) never link to a WMS location.
+  slotId String? // BIN  → Slot (the WMS "location"/bin)
+  rackId String? // RACK → Rack
+
+  capacity Int? // physical/planning capacity — NOT a stock quantity
+  color    String? // hex override for the canvas
+  status   LayoutObjectStatus @default(ACTIVE)
+  metadata String?            @db.Text // JSON string — house convention (cf. ApprovalRule.conditions)
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
+
+  layout   WarehouseLayout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  parent   LayoutObject?   @relation("LayoutTree", fields: [parentObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  children LayoutObject[]  @relation("LayoutTree")
+  // SetNull, never Cascade: hard-deleting a Slot/Rack must not erase the drawing.
+  slot     Slot?           @relation(fields: [slotId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  rack     Rack?           @relation(fields: [rackId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([slotId]) // one physical bin per WMS slot (many NULLs allowed)
+  @@index([layoutId])
+  @@index([parentObjectId])
+  @@index([objectType])
+  @@index([rackId])
 }
