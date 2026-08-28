@@ -649,7 +649,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                     { label: 'Product Code', value: selectedProduct.code, mono: true },
                     { label: 'Product Name', value: selectedProduct.name },
                     { label: 'Model', value: selectedProduct.model },
-                    { label: 'Part Number', value: selectedProduct.partNumber, mono: true },
+                    { label: 'Internal Part Number', value: selectedProduct.partNumber, mono: true },
                     { label: 'Category', value: selectedProduct.category },
                     { label: 'UOM', value: selectedProduct.unit },
                   ].map(({ label, value, mono }) => (
@@ -668,14 +668,14 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                   )}
                   <div className="col-span-2 md:col-span-3 flex gap-3 pt-0.5">
                     {[
-                      { active: selectedProduct.serialControlled, label: 'Serial Controlled' },
-                      { active: selectedProduct.batchControlled,  label: 'Batch Controlled' },
-                    ].map(({ active, label }) => (
-                      <span key={label} className={cn(
+                      { active: selectedProduct.serialControlled, term: 'Serial number' },
+                      { active: selectedProduct.batchControlled,  term: 'Batch / lot number' },
+                    ].map(({ active, term }) => (
+                      <span key={term} className={cn(
                         'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium border',
                         active ? 'bg-green-100 text-green-700 border-green-300' : 'bg-slate-100 text-slate-400 border-slate-200',
                       )}>
-                        <ShieldCheck className="h-3 w-3" />{label}
+                        <ShieldCheck className="h-3 w-3" />{term} {active ? 'required' : 'not required'}
                       </span>
                     ))}
                   </div>

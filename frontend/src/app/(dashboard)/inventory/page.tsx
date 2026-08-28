@@ -18,6 +18,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { ColumnManagerButton, useColumnPrefs, type ColumnDef } from '@/components/inventory/column-manager';
+import { typeLabel } from '@/lib/product-terms';
 
 // ─── Column configuration (user-configurable: show/hide + drag reorder) ───────
 // Locked columns (sku, qty, status) cannot be hidden — they carry the row's identity/state.
@@ -33,7 +34,7 @@ const GROUP_CFG: Record<string, { label: string; accent: string }> = {
 
 const COLUMN_DEFS: ColumnDef[] = [
   { key: 'sku',         label: 'SKU / Part #',    group: 'product',      locked: true },
-  { key: 'type',        label: 'Type',             group: 'product' },
+  { key: 'type',        label: 'Product Type',     group: 'product' },
   { key: 'productModel',label: 'Product / Model',  group: 'product' },
   { key: 'brand',        label: 'Brand',            group: 'product' },
   { key: 'serialBatch', label: 'Serial / Batch',   group: 'inventory' },
@@ -66,7 +67,7 @@ const CELL_RENDERERS: Record<string, (item: any, ctx: RowCtx) => React.ReactNode
   ),
   type: (item) => (
     <Badge variant="outline" className={cn('text-[11px]', item.product?.productType === 'SPARE_PART' ? 'bg-teal-100 text-teal-700' : 'bg-emerald-100 text-emerald-700')}>
-      {item.product?.productType?.replace('_', ' ')}
+      {typeLabel(item.product?.productType)}
     </Badge>
   ),
   productModel: (item) => (
@@ -301,11 +302,11 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
                   { l: 'Quantity',     v: `${data.quantity} ${data.product?.unit ?? ''}` },
                   { l: 'Serial No.',   v: data.serialNumber ?? '—', m: true },
                   { l: 'Batch No.',    v: data.batchNumber ?? '—', m: true },
-                  { l: 'SKU / Code',   v: data.product?.code ?? '—', m: true },
-                  { l: 'Part #',       v: data.product?.partNumber ?? '—', m: true },
+                  { l: 'Product Code (SKU)', v: data.product?.code ?? '—', m: true },
+                  { l: 'Internal Part #',    v: data.product?.partNumber ?? '—', m: true },
                   { l: 'Brand',        v: data.product?.brand?.name ?? '—' },
                   { l: 'Model',        v: data.product?.model ?? '—' },
-                  { l: 'Type',         v: data.product?.productType?.replace('_',' ') ?? '—' },
+                  { l: 'Product Type', v: typeLabel(data.product?.productType) },
                   { l: 'Received',     v: fmt(data.receivedDate) },
                   { l: 'Expiry',       v: fmt(data.expiryDate) },
                   { l: 'Created By',   v: data.createdBy?.fullName ?? '—' },
@@ -495,7 +496,7 @@ function InventoryRow({ item, isSelected, onSelect, visibleColumns, colSpan }: {
             <div className="grid grid-cols-4 gap-4 text-xs">
               <div>
                 <p className="font-semibold text-slate-600 mb-1.5 flex items-center gap-1"><Package className="w-3 h-3" /> Product</p>
-                {[{ l: 'Name', v: item.product?.name ?? '—' }, { l: 'Manufacturer', v: item.product?.manufacturer || '—' }, { l: 'Category', v: item.product?.category || '—' }, { l: 'Unit Cost', v: item.product?.unitCost ? `฿${item.product.unitCost}` : '—' }].map(({ l, v }) => (
+                {[{ l: 'Product Name', v: item.product?.name ?? '—' }, { l: 'Manufacturer', v: item.product?.manufacturer || '—' }, { l: 'Category', v: item.product?.category || '—' }, { l: 'Standard Unit Cost', v: item.product?.unitCost ? `฿${item.product.unitCost}` : '—' }].map(({ l, v }) => (
                   <div key={l} className="flex justify-between py-0.5"><span className="text-slate-400">{l}</span><span className="font-medium truncate ml-2">{v}</span></div>
                 ))}
               </div>
