@@ -1,0 +1,461 @@
+<title>คู่มือ Floor Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@500;600;700&family=Sarabun:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --bg:        #F1F4F2;
+    --surface:   #FFFFFF;
+    --surface-2: #F7FAF8;
+    --ink:       #151B18;
+    --ink-2:     #35443D;
+    --muted:     #5E6F68;
+    --line:      #DBE2DE;
+    --line-2:    #C4CEC9;
+    --accent:    #13703D;
+    --accent-sf: #E5F1EA;
+    --warn:      #9A560B;
+    --warn-sf:   #F8EEE1;
+    --stop:      #A8281F;
+    --stop-sf:   #F8E9E7;
+    --code-bg:   #EDF1EF;
+    --shadow:    0 1px 2px rgba(21,27,24,.05), 0 6px 18px -12px rgba(21,27,24,.22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#0D1211; --surface:#141B18; --surface-2:#19221E;
+      --ink:#E8EEEA; --ink-2:#C3CFC9; --muted:#8FA199;
+      --line:#26332E; --line-2:#33443D;
+      --accent:#55D389; --accent-sf:#13261B;
+      --warn:#E3A55E; --warn-sf:#2A2016;
+      --stop:#F08A80; --stop-sf:#2C1917;
+      --code-bg:#1B2420;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 22px -14px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#0D1211; --surface:#141B18; --surface-2:#19221E;
+    --ink:#E8EEEA; --ink-2:#C3CFC9; --muted:#8FA199;
+    --line:#26332E; --line-2:#33443D;
+    --accent:#55D389; --accent-sf:#13261B;
+    --warn:#E3A55E; --warn-sf:#2A2016;
+    --stop:#F08A80; --stop-sf:#2C1917;
+    --code-bg:#1B2420;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 22px -14px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Sarabun", system-ui, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.75;
+    margin: 0;
+    padding: 0 20px 100px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+
+  h1, h2, h3, .ui {
+    font-family: "IBM Plex Sans Thai", "Sarabun", system-ui, sans-serif;
+  }
+
+  header.top {
+    border-bottom: 2px solid var(--ink);
+    padding: 52px 0 22px;
+    margin-bottom: 36px;
+  }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 12px;
+  }
+  h1 {
+    font-weight: 700; font-size: clamp(28px, 5vw, 42px);
+    line-height: 1.15; letter-spacing: -.01em; margin: 0 0 14px; text-wrap: balance;
+  }
+  .standfirst { font-size: 18px; color: var(--ink-2); margin: 0; max-width: 60ch; }
+
+  section { margin-bottom: 52px; }
+  h2 {
+    font-weight: 600; font-size: clamp(20px, 3vw, 25px);
+    margin: 0 0 8px; line-height: 1.3; text-wrap: balance;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2 .num {
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600;
+    color: var(--accent); background: var(--accent-sf);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-radius: 3px; padding: 3px 8px; line-height: 1; flex: none;
+    align-self: center;
+  }
+  h3 { font-weight: 600; font-size: 17px; margin: 28px 0 8px; }
+  .deck { color: var(--muted); font-size: 15.5px; margin: 0 0 20px; }
+  p { margin: 0 0 14px; }
+  ul, ol { margin: 0 0 14px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+
+  code {
+    font-family: "IBM Plex Mono", monospace; font-size: .85em;
+    background: var(--code-bg); border-radius: 3px; padding: 1.5px 5px; color: var(--ink-2);
+  }
+  .btn {
+    font-family: "IBM Plex Sans Thai", sans-serif; font-size: .88em; font-weight: 600;
+    background: var(--accent-sf); color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+  }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 6px; padding: 18px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+  .card > :last-child { margin-bottom: 0; }
+  .card.warn { border-left: 3px solid var(--warn); }
+  .card.stop { border-left: 3px solid var(--stop); }
+  .card.key  { border-left: 3px solid var(--accent); }
+  .tag {
+    display: inline-block; font-family: "IBM Plex Mono", monospace;
+    font-size: 10px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    padding: 3px 7px; border-radius: 3px; margin-bottom: 9px; line-height: 1.2;
+  }
+  .tag.warn { color: var(--warn); background: var(--warn-sf); }
+  .tag.stop { color: var(--stop); background: var(--stop-sf); }
+  .tag.key  { color: var(--accent); background: var(--accent-sf); }
+
+  /* Steps — a real sequence, so numbering carries meaning */
+  ol.steps { list-style: none; padding: 0; counter-reset: s; }
+  ol.steps > li {
+    counter-increment: s; position: relative;
+    padding: 0 0 22px 46px; margin: 0;
+    border-left: 2px solid var(--line); margin-left: 15px;
+  }
+  ol.steps > li:last-child { border-left-color: transparent; padding-bottom: 0; }
+  ol.steps > li::before {
+    content: counter(s);
+    position: absolute; left: -16px; top: 0;
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--accent); color: var(--accent);
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600;
+    display: grid; place-items: center;
+  }
+  ol.steps b { font-family: "IBM Plex Sans Thai", sans-serif; font-weight: 600; }
+
+  .tw { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px;
+        background: var(--surface); margin-bottom: 18px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 13px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    background: var(--surface-2); font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  .no { color: var(--muted); }
+  .yes { color: var(--accent); font-weight: 600; }
+
+  figure { margin: 24px 0; background: var(--surface); border: 1px solid var(--line);
+           border-radius: 6px; padding: 20px 18px 14px; box-shadow: var(--shadow); }
+  figure .scroll { overflow-x: auto; }
+  figure svg { display: block; width: 100%; min-width: 520px; height: auto; color: var(--ink-2); }
+  figcaption { font-size: 13.5px; color: var(--muted); margin-top: 12px;
+               padding-top: 11px; border-top: 1px solid var(--line); }
+  .svg-box { fill: var(--surface-2); stroke: currentColor; stroke-width: 1.4; }
+  .svg-real { fill: var(--accent-sf); stroke: var(--accent); stroke-width: 1.6; }
+  .svg-t { font-family: "IBM Plex Sans Thai", sans-serif; font-size: 13px; font-weight: 600; fill: var(--ink); }
+  .svg-s { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; fill: var(--muted); }
+  .svg-g { font-family: "IBM Plex Sans Thai", sans-serif; font-size: 12px; font-weight: 600; fill: var(--accent); }
+
+  .swatch { display: inline-block; width: 13px; height: 13px; border-radius: 3px;
+            border: 1px solid var(--line-2); vertical-align: -2px; margin-right: 6px; }
+
+  footer.end {
+    border-top: 2px solid var(--ink); padding-top: 16px; margin-top: 8px;
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--muted);
+  }
+  a { color: var(--accent); }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">HSNT WMS · Warehouse Operations</p>
+  <h1>คู่มือ Floor Plan</h1>
+  <p class="standfirst">วิธีสร้างผังคลังจริง ผูกเข้ากับ WMS แล้วอ่านค่าให้ออก — เขียนจากจุดที่คนติดจริง ไม่ใช่ไล่ทีละปุ่ม</p>
+</header>
+
+<!-- ── The mental model ── -->
+<section>
+  <h2><span class="num">A</span><span>เข้าใจ 2 ชั้นนี้ก่อน แล้วที่เหลือง่ายหมด</span></h2>
+  <p class="deck">ถ้ายังงงข้อความ “A rack links to a rack” — อ่านหัวข้อนี้หัวข้อเดียวพอ</p>
+
+  <div class="card key">
+    <span class="tag key">หัวใจ</span>
+    <p><b>กล่องบนผัง = รูปวาด ไม่ใช่ของจริง</b></p>
+    <p>ระบบมีของอยู่ 2 ชั้น ที่ชื่อซ้ำกันจนสับสน:</p>
+    <ul>
+      <li><b>ชั้นผัง (Floor Plan)</b> — กล่องที่คุณวาด บอกว่า “ของตั้งอยู่ตรงไหนบนพื้น”</li>
+      <li><b>ชั้น WMS</b> — Rack / Slot ของจริงที่มีสต็อกอยู่ข้างใน (สร้างที่เมนู Warehouse Master)</li>
+    </ul>
+    <p>กล่องที่วาดใหม่ ๆ มัน <b>ว่างเปล่า</b> — ไม่รู้จักสต็อกใด ๆ จนกว่าคุณจะ <b>ผูก (Link)</b> มันเข้ากับของจริง</p>
+    <p>ดังนั้นข้อความ <code>A rack links to a rack</code> จริง ๆ แปลว่า:<br>
+    “<b>กล่อง Rack ที่คุณวาด</b> ต้องผูกกับ <b>Rack จริงใน WMS</b>” — คนละ rack กัน</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 640 250" role="img" aria-label="กล่อง Bin บนผังผูกเข้ากับ Slot ใน WMS ซึ่งมี StockItem อยู่ข้างใน ตัวเลขบนผังจึงมาจาก WMS ไม่ได้เก็บไว้ในผัง">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+          </marker>
+        </defs>
+
+        <text class="svg-s" x="20" y="26">ชั้นผัง — สิ่งที่คุณวาด</text>
+        <rect class="svg-box" x="20" y="40" width="170" height="66" rx="5"></rect>
+        <text class="svg-t" x="38" y="68">กล่อง Bin A-01</text>
+        <text class="svg-s" x="38" y="88">ตำแหน่ง x, y, กว้าง, สูง</text>
+
+        <text class="svg-s" x="330" y="26">ชั้น WMS — ของจริง</text>
+        <rect class="svg-real" x="330" y="40" width="170" height="66" rx="5"></rect>
+        <text class="svg-t" x="348" y="68">Slot A-01</text>
+        <text class="svg-s" x="348" y="88">รหัส · ความจุ</text>
+
+        <rect class="svg-real" x="330" y="150" width="170" height="66" rx="5"></rect>
+        <text class="svg-t" x="348" y="178">StockItem</text>
+        <text class="svg-s" x="348" y="198">ของจริงที่วางอยู่</text>
+
+        <line class="svg-box" x1="190" y1="73" x2="322" y2="73" stroke-dasharray="5 4" marker-end="url(#ar)" fill="none"></line>
+        <text class="svg-g" x="256" y="63" text-anchor="middle">ผูก</text>
+
+        <line x1="415" y1="150" x2="415" y2="114" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ar)" fill="none"></line>
+        <text class="svg-s" x="425" y="136">อยู่ใน</text>
+
+        <path d="M 105 106 L 105 232 L 300 232" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="4 4"></path>
+        <text class="svg-s" x="115" y="226">ตัวเลข Available / Committed ที่เห็นบนผัง</text>
+        <text class="svg-s" x="310" y="236">← อ่านสดจากตรงนี้ ผังไม่ได้เก็บไว้เอง</text>
+      </svg>
+    </div>
+    <figcaption>ผังไม่เคยเก็บจำนวนของไว้เลย ทุกครั้งที่เปิดหน้ามันไปอ่านจาก WMS ใหม่ — นี่คือเหตุผลที่ตัวเลขไม่มีวันค้างไม่ตรงกับของจริง</figcaption>
+  </figure>
+</section>
+
+<!-- ── First time ── -->
+<section>
+  <h2><span class="num">B</span><span>ทำครั้งแรก ทีละขั้น</span></h2>
+  <p class="deck">เมนูซ้าย → <span class="ui">Warehouse Operations</span> → แท็บ <span class="ui">Floor Plan</span></p>
+
+  <ol class="steps">
+    <li>
+      <b>เลือกคลังก่อน</b><br>
+      กดการ์ดคลังในแถบ <span class="ui">Storage Utilization by Warehouse</span> ด้านบน ผังจะผูกกับคลังที่เลือกอยู่
+    </li>
+    <li>
+      <b>กด <span class="btn">Create floor plan</span></b><br>
+      ครั้งแรกจะยังว่าง เพราะระบบสร้างแค่ที่ว่างไว้ให้ ยังไม่มีผัง — ปุ่มนี้เห็นเฉพาะ Admin กับ Manager
+    </li>
+    <li>
+      <b>กด <span class="btn">Edit layout</span></b><br>
+      แถบเครื่องมือจะโผล่ขึ้นมา พร้อมชุดปุ่ม <span class="ui">Add object</span>
+    </li>
+    <li>
+      <b>วางกล่องจากแถบ Add object</b><br>
+      กดชื่อประเภทที่ต้องการ กล่องจะวางลงผังให้เลย แล้วค่อยลากไปตำแหน่งที่ถูก · ย่อ-ขยายด้วยจุดที่มุม
+    </li>
+    <li>
+      <b>เลือกกล่อง Rack แล้วกด <span class="btn">Link location</span></b><br>
+      เลือก Rack จริงจากรายการ — <b>ขั้นนี้แหละที่คุณติดอยู่</b> ถ้าไม่ผูก กล่องจะไม่มีตัวเลขอะไรเลยตลอดไป
+    </li>
+    <li>
+      <b>กด <span class="btn">Draw bins from slots</span></b><br>
+      ระบบจะวาด bin ให้อัตโนมัติทุกช่องที่ Rack นั้นมีอยู่จริง พร้อมผูกให้เสร็จ — ไม่ต้องวาดทีละช่อง
+    </li>
+    <li>
+      <b>กด <span class="btn">Save</span></b><br>
+      ระบบบันทึกทีเดียวทั้งชุด ไม่ได้ยิงทุกครั้งที่ลาก · ถ้ายังไม่กด จะมีคำว่า <span class="ui">Unsaved changes</span> เตือนอยู่
+    </li>
+  </ol>
+
+  <div class="card warn">
+    <span class="tag warn">ระวัง</span>
+    <p>ถ้ายังไม่ได้ผูก Rack กับของจริง ปุ่ม <span class="btn">Draw bins from slots</span> <b>จะไม่ขึ้น</b> — ทำขั้น 5 ให้เสร็จก่อนเสมอ</p>
+  </div>
+</section>
+
+<!-- ── What can link ── -->
+<section>
+  <h2><span class="num">C</span><span>อะไรผูกได้ อะไรผูกไม่ได้</span></h2>
+  <p class="deck">ผูกได้แค่ 2 ประเภท ที่เหลือคือรูปวาดล้วน ๆ — ตั้งใจให้เป็นแบบนั้น</p>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>ประเภทกล่อง</th><th>ผูกกับ</th><th>มีตัวเลขสต็อกมั้ย</th></tr></thead>
+      <tbody>
+        <tr><td><b>Bin</b></td><td>Slot ใน WMS</td><td class="yes">มี — ตัวหลักที่ใช้ดูของ</td></tr>
+        <tr><td><b>Rack</b></td><td>Rack ใน WMS</td><td class="yes">ผูกเพื่อใช้ปุ่มวาด bin อัตโนมัติ</td></tr>
+        <tr><td>Zone, Aisle, Shelf</td><td class="no">ผูกไม่ได้</td><td class="no">ไม่มี</td></tr>
+        <tr><td>Receiving, Shipping, Staging, QC, Work, Custom</td><td class="no">ผูกไม่ได้</td><td class="no">ไม่มี</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>พื้นที่รับของ พื้นที่ QC ทางเดิน — พวกนี้ไม่มีคู่ใน WMS อยู่แล้ว มันมีไว้ให้คนดูผังเข้าใจว่าอะไรอยู่ตรงไหน ไม่ได้มีไว้เก็บของในระบบ</p>
+</section>
+
+<!-- ── Reading it ── -->
+<section>
+  <h2><span class="num">D</span><span>อ่านสีกับตัวเลขให้ออก</span></h2>
+
+  <h3>สีของ bin = ความแน่น</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>สี</th><th>ความแน่น</th><th>หมายถึง</th></tr></thead>
+      <tbody>
+        <tr><td><span class="swatch" style="background:#ecfdf5"></span>เขียวอ่อน</td><td>ว่าง</td><td>ไม่มีของเลย</td></tr>
+        <tr><td><span class="swatch" style="background:#22c55e"></span>เขียว</td><td>ต่ำกว่า 30%</td><td>ยังรับได้อีกเยอะ</td></tr>
+        <tr><td><span class="swatch" style="background:#facc15"></span>เหลือง</td><td>30–59%</td><td>ปกติ</td></tr>
+        <tr><td><span class="swatch" style="background:#f97316"></span>ส้ม</td><td>60–89%</td><td>เริ่มแน่น</td></tr>
+        <tr><td><span class="swatch" style="background:#ef4444"></span>แดง</td><td>90% ขึ้นไป</td><td>เต็ม</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>ใช้มาตรฐานเดียวกับ heatmap ในแท็บ <span class="ui">Control Center</span> — สีเดียวกันแปลว่าเหมือนกัน</p>
+
+  <h3>ตัวเลขในแผงขวา</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>ช่อง</th><th>ความหมาย</th></tr></thead>
+      <tbody>
+        <tr><td><b>Available</b></td><td>ของที่หยิบไปใช้ได้จริงตอนนี้</td></tr>
+        <tr><td><b>Committed</b></td><td>ของที่ยังอยู่ในช่อง แต่ถูกจองไว้แล้ว (กำลังจัด / แพ็ค / รอส่ง)</td></tr>
+        <tr><td><b>Total Quantity</b></td><td>รวมทั้งหมดในช่อง</td></tr>
+        <tr><td><b>SKU Count</b></td><td>จำนวนรหัสสินค้าที่ต่างกันในช่องนั้น</td></tr>
+        <tr><td><b>Utilization</b></td><td>จำนวนชิ้น ÷ ความจุของช่อง</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card stop">
+    <span class="tag stop">ยังไม่ยืนยัน</span>
+    <p><b>ช่วยเช็คให้หน่อยตอนใช้ครั้งแรก</b></p>
+    <p><b>Available</b> กับ <b>Committed</b> ยังไม่เคยถูกตรวจกับข้อมูลจริง ระบบไม่มีคอลัมน์เก็บค่านี้ไว้ตรง ๆ ต้องคำนวณจากสถานะของสต็อก</p>
+    <p>เปิด bin ที่ผูกแล้ว จำเลขไว้ → ไปแท็บ <span class="ui">Control Center</span> ดูช่องเดียวกัน → <b>ตรงกันมั้ย</b> ถ้าไม่ตรง บอกได้เลย</p>
+  </div>
+</section>
+
+<!-- ── Live ── -->
+<section>
+  <h2><span class="num">E</span><span>ข้อมูลอัปเดตเองแค่ไหน</span></h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>อะไร</th><th>อัปเดตเอง?</th></tr></thead>
+      <tbody>
+        <tr><td>ตัวเลขสต็อก + สีของ bin</td><td class="yes">อัตโนมัติ ไม่ต้องกดอะไร</td></tr>
+        <tr><td>เพิ่ม Rack ใหม่ใน Warehouse Master</td><td class="no">ไม่ขึ้นเอง ต้องมาวาด + ผูกเอง</td></tr>
+        <tr><td>เพิ่ม Slot ใน Rack ที่ผูกแล้ว</td><td class="no">กด <span class="btn">Draw bins from slots</span> ซ้ำ (ข้ามอันเดิมให้)</td></tr>
+        <tr><td>ลบ Slot ทิ้ง</td><td class="no">bin จะโดนขีดฆ่า + ขึ้นแถบเตือน ไม่หายเอง</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><b>สรุป:</b> ของข้างในกล่อง sync เอง · ตัวกล่องต้องจัดการเอง</p>
+
+  <div class="card">
+    <p><b>เช็คว่า realtime ทำงานมั้ย:</b> ให้คนอื่นทำ putaway หรือรับของเข้า bin ที่เปิดดูอยู่</p>
+    <ul>
+      <li>สีเปลี่ยนใน <b>1–2 วินาที</b> → ต่อ realtime ติด</li>
+      <li>สีเปลี่ยนภายใน <b>1 นาที</b> → realtime ไม่ติด กำลังใช้ตัวสำรอง (ยังถูกต้อง แค่ช้ากว่า)</li>
+    </ul>
+    <p class="ui" style="color:var(--muted);font-size:14px;margin-top:10px">หมายเหตุ: ตอนนี้ยังไม่มีไฟบอกสถานะบนหน้าจอ ต้องดูจากอาการเอา</p>
+  </div>
+</section>
+
+<!-- ── Troubleshooting ── -->
+<section>
+  <h2><span class="num">F</span><span>เจอปัญหาแบบนี้ ทำยังไง</span></h2>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>อาการ</th><th>สาเหตุ / วิธีแก้</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>Not linked. A rack links to a rack…</code></td>
+          <td>กล่องยังไม่ได้ผูก — กด <span class="btn">Link location</span> ในแผงเดียวกันแล้วเลือก Rack จริง</td>
+        </tr>
+        <tr>
+          <td>เลือก bin แล้วไม่มีตัวเลขสต็อก</td>
+          <td>bin ยังไม่ผูก Slot · ถ้าวาดเองต้องผูกเอง หรือใช้ <span class="btn">Draw bins from slots</span> ซึ่งผูกให้อัตโนมัติ</td>
+        </tr>
+        <tr>
+          <td>รายการ Slot ขึ้นว่า <span class="ui">already drawn</span> กดไม่ได้</td>
+          <td>Slot นั้นมีกล่องอื่นบนผังจับจองไว้แล้ว — 1 Slot ผูกได้กล่องเดียว หาอันเดิมแล้ว unlink ก่อน</td>
+        </tr>
+        <tr>
+          <td>bin มีเส้นขีดทับ + แถบเหลืองเตือน</td>
+          <td>Slot ที่ผูกไว้ถูกลบไปแล้วใน Warehouse Master — ผูกใหม่กับ Slot อื่น หรือลบกล่องทิ้ง</td>
+        </tr>
+        <tr>
+          <td>กด Save แล้วขึ้น <span class="ui">changed elsewhere</span></td>
+          <td>มีคนอื่นบันทึกผังนี้ระหว่างที่คุณแก้อยู่ ระบบไม่ทับของเขาให้ — กด <span class="btn">Refresh</span> แล้วแก้ใหม่</td>
+        </tr>
+        <tr>
+          <td>ไม่เห็นปุ่ม <span class="ui">Edit layout</span> / <span class="ui">Create floor plan</span></td>
+          <td>สิทธิ์ไม่ถึง — แก้ผังได้เฉพาะ Admin กับ Manager · ถ้าเปิดบนมือถือก็จะไม่มีเช่นกัน (มือถือดูอย่างเดียว)</td>
+        </tr>
+        <tr>
+          <td>Supervisor / Staff สร้าง Rack ไม่ได้แล้ว</td>
+          <td>ตั้งใจแก้ — เมื่อก่อน API ไม่เช็คสิทธิ์เลย ใครก็สร้าง/ลบ rack ได้ ตอนนี้ปิดช่องโหว่แล้ว ให้ Manager เป็นคนสร้าง</td>
+        </tr>
+        <tr>
+          <td>ลากแล้วกล่องกระโดดเป็นช่อง ๆ</td>
+          <td>Snap เปิดอยู่ (ตั้งใจ) — กดปุ่ม <span class="btn">Snap</span> ในแถบเครื่องมือเพื่อปิด ถ้าอยากวางอิสระ</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ── Shortcuts ── -->
+<section>
+  <h2><span class="num">G</span><span>ทางลัดตอนแก้ผัง</span></h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>ปุ่ม</th><th>ทำอะไร</th></tr></thead>
+      <tbody>
+        <tr><td><code>Ctrl</code> + <code>Z</code></td><td>ย้อนกลับ</td></tr>
+        <tr><td><code>Ctrl</code> + <code>Shift</code> + <code>Z</code></td><td>ทำซ้ำ</td></tr>
+        <tr><td><code>Ctrl</code> + <code>D</code></td><td>ทำสำเนากล่องที่เลือก</td></tr>
+        <tr><td><code>Ctrl</code> + <code>S</code></td><td>บันทึก</td></tr>
+        <tr><td><code>Delete</code></td><td>ลบกล่องที่เลือก</td></tr>
+        <tr><td><code>Esc</code></td><td>ยกเลิกการเลือก</td></tr>
+        <tr><td><code>Shift</code> + ลากบนพื้นที่ว่าง</td><td>ลากคลุมเลือกหลายกล่อง</td></tr>
+        <tr><td><code>Shift</code> + คลิกกล่อง</td><td>เพิ่ม/เอาออกจากที่เลือกไว้</td></tr>
+        <tr><td>ลากพื้นที่ว่าง</td><td>เลื่อนผัง · หมุนล้อเมาส์ = ซูม</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>สำเนาที่ได้จาก <code>Ctrl</code>+<code>D</code> <b>จะไม่ติดการผูกมาด้วย</b> เพราะ 1 Slot ผูกได้กล่องเดียว ต้องผูกใหม่เอง</p>
+</section>
+
+<!-- ── Not yet ── -->
+<section>
+  <h2><span class="num">H</span><span>สิ่งที่ยังทำไม่ได้</span></h2>
+  <p class="deck">บอกไว้ก่อน จะได้ไม่เสียเวลาหา</p>
+  <ul>
+    <li><b>สั่งงานจากผังไม่ได้</b> — ย้ายของ บล็อกช่อง สั่งนับ ยังต้องทำที่ Control Center / Inventory / Transfer เหมือนเดิม ผังนี้ดูอย่างเดียว</li>
+    <li><b>หมุนกล่องไม่ได้</b> — ยังไม่มีปุ่ม (ค่าหมุนรองรับแล้วในระบบ แค่ยังไม่มีที่ให้กด)</li>
+    <li><b>ไม่มีไฟบอกว่าข้อมูลสดหรือค้าง</b></li>
+    <li><b>ผังไม่ดึงโครงสร้างใหม่มาให้เอง</b> — เพิ่ม Rack แล้วต้องมาวาดเอง</li>
+  </ul>
+  <p>อยากได้อันไหนเพิ่ม บอกได้ครับ</p>
+</section>
+
+<footer class="end">
+  HSNT WMS · Floor Plan · เขียนจากระบบเวอร์ชันบน master
+</footer>
+
+</div>
