@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/store/auth.store';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { useRealtime } from '@/hooks/use-realtime';
 import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
 import type { UserRole } from '@/types';
 import { cn } from '@/lib/utils';
@@ -144,6 +145,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
 
   const ed = useLayoutEditor();
 
+  // Refreshes ONLY the live rollup — never the layout. This is what realtime
+  // and the fallback poll call, and it must not touch `ed`: reloading objects
+  // mid-edit would discard unsaved work.
+  const refreshOccupancy = useCallback(async () => {
+    if (!warehouseId) return;
+    try {
+      setOccupancy(await layoutApi.occupancy(warehouseId));
+    } catch {
+      // A failed refresh leaves the previous numbers on screen rather than
+      // blanking the plan; the next signal or poll will try again.
+    }
+  }, [warehouseId]);
+
   const load = useCallback(async () => {
     if (!warehouseId) return;
     setLoading(true); setError(null);
@@ -164,6 +178,18 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   }, [warehouseId]); // eslint-disable-line
 
   useEffect(() => { setEditing(false); load(); }, [load]);
+
+  // Keep the bins current. `inventory:update` covers receiving, putaway, status
+  // changes and picking; `request:update` covers allocation, which flips stock to
+  // RESERVED and therefore moves the Committed figure. Both are treated purely as
+  // a "re-read" signal — see use-realtime for why the payloads aren't trusted.
+  //
+  // The poll is not belt-and-braces here: inventory.updateLocation and
+  // transfer.complete emit no event at all, so relocating stock between bins is
+  // ONLY caught by this timer.
+  useRealtime(['inventory:update', 'request:update'], refreshOccupancy, {
+    enabled: !!data?.layout,
+  });
 
   // ── Save / discard ─────────────────────────────────────────────────────────
 
