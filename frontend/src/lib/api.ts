@@ -269,6 +269,64 @@ export const warehouseMasterApi = {
   deleteSlot: (id: string) => request<any>(`/warehouse-master/slots/${id}`, { method: 'DELETE' }),
 };
 
+// Physical Warehouse Layout (Sprint 3 API). Read-only surface is all the Floor
+// Plan tab needs today; the write calls exist for the Sprint 5 editor.
+export type LayoutObjectType =
+  | 'ZONE' | 'RACK' | 'SHELF' | 'BIN' | 'AISLE'
+  | 'RECEIVING_AREA' | 'SHIPPING_AREA' | 'STAGING_AREA'
+  | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA';
+export type LayoutObjectStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED' | 'PLANNED';
+
+export interface LayoutObject {
+  id: string;
+  layoutId: string;
+  parentObjectId: string | null;
+  objectType: LayoutObjectType;
+  name: string;
+  code: string | null;
+  x: number; y: number; width: number; height: number;
+  rotation: number; zIndex: number; displayOrder: number;
+  slotId: string | null;
+  rackId: string | null;
+  capacity: number | null;
+  color: string | null;
+  status: LayoutObjectStatus;
+  metadata: string | null;
+  updatedAt: string;
+}
+
+export interface WarehouseLayout {
+  id: string;
+  warehouseId: string;
+  name: string;
+  widthUnits: number;
+  heightUnits: number;
+  gridSize: number;
+  unitLabel: string;
+  version: number;
+  notes: string | null;
+}
+
+export interface LayoutResponse {
+  warehouse: { id: string; code: string; name: string; isActive: boolean };
+  layout: WarehouseLayout | null; // null = this warehouse has no layout yet
+  objects: LayoutObject[];
+}
+
+export const layoutApi = {
+  get: (warehouseId: string) => request<LayoutResponse>(`/warehouse-layout/${warehouseId}`),
+  create: (warehouseId: string, dto: Partial<WarehouseLayout> = {}) =>
+    request<WarehouseLayout>(`/warehouse-layout/${warehouseId}`, { method: 'POST', body: JSON.stringify(dto) }),
+  updateCanvas: (layoutId: string, dto: Partial<WarehouseLayout>) =>
+    request<WarehouseLayout>(`/warehouse-layout/${layoutId}/canvas`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  createObject: (layoutId: string, dto: Partial<LayoutObject>) =>
+    request<LayoutObject>(`/warehouse-layout/${layoutId}/objects`, { method: 'POST', body: JSON.stringify(dto) }),
+  updateObject: (id: string, dto: Partial<LayoutObject>) =>
+    request<LayoutObject>(`/warehouse-layout/objects/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteObject: (id: string, cascade = false) =>
+    request<{ success: boolean; deletedIds: string[] }>(`/warehouse-layout/objects/${id}${cascade ? '?cascade=true' : ''}`, { method: 'DELETE' }),
+};
+
 // Receiving
 export interface ReceivingImportRow { rowNumber: number; data: Record<string, any>; errors: string[]; valid: boolean }
 export interface ReceivingImportPreview { columns: string[]; rows: ReceivingImportRow[]; summary: { total: number; valid: number; invalid: number } }

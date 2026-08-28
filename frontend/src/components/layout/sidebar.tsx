@@ -53,7 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     group: 'Warehouse',
     items: [
-      { href: '/warehouse-layout', label: 'Warehouse Layout', icon: Warehouse, roles: WH },
+      { href: '/warehouse-layout', label: 'Warehouse Operations', icon: Warehouse, roles: WH },
       { href: '/receiving', label: 'Goods Receiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'Putaway', icon: MapPin, roles: WH },
       { href: '/inventory', label: 'Inventory', icon: Package },
