@@ -247,7 +247,8 @@ export function LayoutCanvas({
         <span className="px-1.5 text-[11px] font-medium tabular-nums text-slate-400 select-none">{zoomPct}%</span>
       </div>
 
-      <div ref={wrapRef} className="h-[560px] w-full">
+      {/* Shorter on phones so the plan and the panels below it both stay usable. */}
+      <div ref={wrapRef} className="h-[340px] sm:h-[440px] lg:h-[560px] w-full">
         <svg
           ref={svgRef}
           viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}

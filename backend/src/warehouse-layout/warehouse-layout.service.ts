@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException,
+} from '@nestjs/common';
 import { StockStatus, LayoutObjectType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -32,6 +34,13 @@ const LINKABLE: Partial<Record<LayoutObjectType, 'slot' | 'rack'>> = {
   RACK: 'rack',
 };
 
+// Per-user warehouse scope, taken from the JWT (UserWarehouse rows plus any
+// warehouse-scoped role assignments — see jwt.strategy.ts).
+export interface LayoutScope {
+  roleKey?: string;
+  warehouseIds?: string[];
+}
+
 @Injectable()
 export class WarehouseLayoutService {
   constructor(private prisma: PrismaService) {}
@@ -52,6 +61,31 @@ export class WarehouseLayoutService {
     }
   }
 
+  // Warehouse scoping (Sprint 7).
+  //
+  // Semantics are copied verbatim from inventory.service.findAll, the only other
+  // place this is enforced today: SUPER_ADMIN bypasses, and a user with NO
+  // assigned warehouses is unrestricted. That second rule looks odd in isolation
+  // but it is the existing house behaviour — tightening it here would silently
+  // lock out every user who has no UserWarehouse row, which is most of them.
+  private assertWarehouseInScope(warehouseId: string, scope?: LayoutScope) {
+    if (!scope) return; // no scope supplied (internal call / tests) = unrestricted
+    if (scope.roleKey === 'SUPER_ADMIN') return;
+    const ids = scope.warehouseIds ?? [];
+    if (ids.length === 0) return;
+    if (!ids.includes(warehouseId)) {
+      throw new ForbiddenException('You do not have access to this warehouse');
+    }
+  }
+
+  // Object- and layout-addressed endpoints resolve up to the warehouse before
+  // the scope check, so a scoped user cannot reach another warehouse's objects
+  // by id.
+  private async assertLayoutInScope(layoutId: string, scope?: LayoutScope) {
+    if (!scope) return;
+    this.assertWarehouseInScope(await this.warehouseIdOfLayout(layoutId), scope);
+  }
+
   private async getLayoutOrThrow(layoutId: string) {
     const layout = await this.prisma.warehouseLayout.findFirst({ where: { id: layoutId, isDeleted: false } });
     if (!layout) throw new NotFoundException('Layout not found');
@@ -69,7 +103,8 @@ export class WarehouseLayoutService {
   // Returns the canvas plus a FLAT array of objects; the client assembles the
   // tree. `layout: null` means this warehouse has no layout yet — that is a
   // normal first-visit state, not an error.
-  async getByWarehouse(warehouseId: string) {
+  async getByWarehouse(warehouseId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
     const warehouse = await this.prisma.warehouse.findFirst({
       where: { id: warehouseId, isDeleted: false },
       select: { id: true, code: true, name: true, isActive: true },
@@ -90,7 +125,8 @@ export class WarehouseLayoutService {
 
   // ── Layout (canvas) ─────────────────────────────────────────────────────────
 
-  async createLayout(warehouseId: string, dto: CreateLayoutDto, userId: string) {
+  async createLayout(warehouseId: string, dto: CreateLayoutDto, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
     const warehouse = await this.prisma.warehouse.findFirst({ where: { id: warehouseId, isDeleted: false } });
     if (!warehouse) throw new NotFoundException('Warehouse not found');
 
@@ -112,8 +148,9 @@ export class WarehouseLayoutService {
     return layout;
   }
 
-  async updateCanvas(layoutId: string, dto: UpdateLayoutCanvasDto, userId: string) {
+  async updateCanvas(layoutId: string, dto: UpdateLayoutCanvasDto, userId: string, scope?: LayoutScope) {
     const before = await this.getLayoutOrThrow(layoutId);
+    await this.assertLayoutInScope(layoutId, scope);
     const after = await this.prisma.warehouseLayout.update({ where: { id: layoutId }, data: { ...dto } });
     await this.audit(userId, 'LAYOUT_UPDATED', 'WarehouseLayout', layoutId, before, after);
     return after;
@@ -171,8 +208,9 @@ export class WarehouseLayoutService {
 
   // ── Layout objects ──────────────────────────────────────────────────────────
 
-  async createObject(layoutId: string, dto: CreateLayoutObjectDto, userId: string) {
+  async createObject(layoutId: string, dto: CreateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
+    await this.assertLayoutInScope(layoutId, scope);
     this.assertValidJson(dto.metadata);
     if (dto.parentObjectId) await this.validateParent(dto.parentObjectId, layout.id);
 
@@ -186,8 +224,9 @@ export class WarehouseLayoutService {
     return obj;
   }
 
-  async updateObject(id: string, dto: UpdateLayoutObjectDto, userId: string) {
+  async updateObject(id: string, dto: UpdateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(before.layoutId, scope);
     this.assertValidJson(dto.metadata);
 
     if (dto.parentObjectId !== undefined && dto.parentObjectId !== null) {
@@ -206,8 +245,9 @@ export class WarehouseLayoutService {
   // Soft delete only — consistent with warehouse-master. A parent with live
   // children is refused unless `cascade` is set, so the tree can never be left
   // with dangling references.
-  async deleteObject(id: string, cascade: boolean, userId: string) {
+  async deleteObject(id: string, cascade: boolean, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(before.layoutId, scope);
 
     const childCount = await this.prisma.layoutObject.count({
       where: { parentObjectId: id, isDeleted: false },
@@ -242,8 +282,9 @@ export class WarehouseLayoutService {
   //
   // Optimistic locking: the client sends the version it last read. A mismatch
   // means someone else saved in between, so we refuse rather than clobber.
-  async batchSave(layoutId: string, dto: BatchSaveDto, userId: string) {
+  async batchSave(layoutId: string, dto: BatchSaveDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
+    await this.assertLayoutInScope(layoutId, scope);
     if (layout.version !== dto.version) {
       throw new ConflictException(
         `This layout changed elsewhere (your version ${dto.version}, current ${layout.version}). Reload before saving.`,
@@ -340,8 +381,9 @@ export class WarehouseLayoutService {
   // ─── Sprint 5: duplicate ────────────────────────────────────────────────────
   // Copies drop slotId/rackId and code: a WMS slot has exactly one physical bin,
   // so a duplicate must never inherit the original's link or its location code.
-  async duplicateObject(id: string, dto: DuplicateObjectDto, userId: string) {
+  async duplicateObject(id: string, dto: DuplicateObjectDto, userId: string, scope?: LayoutScope) {
     const source = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(source.layoutId, scope);
     const dx = dto.offsetX ?? 2;
     const dy = dto.offsetY ?? 2;
 
@@ -395,8 +437,9 @@ export class WarehouseLayoutService {
     return layout.warehouseId;
   }
 
-  async linkObject(id: string, dto: { slotId?: string; rackId?: string }, userId: string) {
+  async linkObject(id: string, dto: { slotId?: string; rackId?: string }, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(before.layoutId, scope);
     const wantSlot = !!dto.slotId;
     const wantRack = !!dto.rackId;
 
@@ -457,8 +500,9 @@ export class WarehouseLayoutService {
 
   // Unlink clears the FK on the drawing. It never touches the Slot or Rack —
   // the WMS location goes on existing exactly as it was.
-  async unlinkObject(id: string, userId: string) {
+  async unlinkObject(id: string, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(before.layoutId, scope);
     if (!before.slotId && !before.rackId) return before;
     const after = await this.prisma.layoutObject.update({
       where: { id },
@@ -475,7 +519,8 @@ export class WarehouseLayoutService {
   // because that would be the second inventory system this feature exists to
   // avoid. Occupancy is derived from actual PLACEMENT (StockItem.slotId), never
   // from Slot.status, which no write path keeps in sync.
-  async occupancy(warehouseId: string) {
+  async occupancy(warehouseId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
     const layout = await this.prisma.warehouseLayout.findFirst({
       where: { warehouseId, isDeleted: false },
       select: { id: true },
@@ -551,8 +596,9 @@ export class WarehouseLayoutService {
   // Reads the Slot rows that already exist and draws one BIN per slot, laid out
   // by the slot's own level/column. It creates drawings only — no Slot is
   // created, renamed or moved.
-  async generateBinsFromRack(id: string, userId: string) {
+  async generateBinsFromRack(id: string, userId: string, scope?: LayoutScope) {
     const parent = await this.getObjectOrThrow(id);
+    await this.assertLayoutInScope(parent.layoutId, scope);
     if (parent.objectType !== LayoutObjectType.RACK) {
       throw new ConflictException('Only a rack object can generate bins');
     }

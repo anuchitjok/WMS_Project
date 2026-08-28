@@ -8,10 +8,10 @@
 // Editing is local and flushed in ONE batch request per save. The app is behind
 // a global 100 req/min throttle, so a request per drag is not an option.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // `Map` is aliased: the bare name would shadow the global Map constructor,
 // which this file uses for the occupancy lookup.
-import { Map as MapIcon, AlertTriangle, RefreshCw, Link2Off, Info, Pencil, Eye, Plus, Link2, Unlink, Rows3 } from 'lucide-react';
+import { Map as MapIcon, AlertTriangle, RefreshCw, Link2Off, Info, Pencil, Eye, Plus, Link2, Unlink, Rows3, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   layoutApi, type LayoutResponse, type LayoutObject, type LayoutObjectType, type LayoutOccupancy,
@@ -30,6 +30,7 @@ import { PropertyPanel } from './property-panel';
 import { useLayoutEditor } from './use-layout-editor';
 import { LinkSlotDialog } from './link-slot-dialog';
 import { LocationInventoryPanel } from './location-inventory-panel';
+import { printFloorPlan } from './print-floor-plan';
 
 const EDIT_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
 const TYPE_LABEL = (t: string) => t.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
@@ -139,6 +140,7 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   const [creating, setCreating] = useState(false);
   const [occupancy, setOccupancy] = useState<LayoutOccupancy[]>([]);
   const [linkOpen, setLinkOpen] = useState(false);
+  const planRef = useRef<HTMLDivElement>(null);
 
   const ed = useLayoutEditor();
 
@@ -261,6 +263,18 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
     }
   }, [warehouseId, load]);
 
+  const printPlan = useCallback(() => {
+    if (!data?.layout) return;
+    const ok = printFloorPlan({
+      svg: planRef.current?.querySelector('svg') ?? null,
+      layout: data.layout,
+      warehouseName: data.warehouse.name,
+      objects: ed.objects,
+      occupancy,
+    });
+    if (!ok) toast.error('Pop-up blocked — allow pop-ups to print the floor plan');
+  }, [data, ed.objects, occupancy]);
+
   const soleSelected = useMemo(
     () => (ed.selectedObjects.length === 1 ? ed.selectedObjects[0] : null),
     [ed.selectedObjects],
@@ -356,13 +370,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             {!editing && (
               <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-slate-100 text-slate-500">Read-only</span>
             )}
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs" onClick={printPlan}
+              title="Print or save the whole floor plan as PDF">
+              <Printer className="w-3.5 h-3.5" /> Print
+            </Button>
+            {/* Editing is hidden below lg: dragging a floor plan on a phone is
+                not a usable gesture, so mobile is deliberately read-only. */}
             {canEdit && (
               editing ? (
-                <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs" onClick={exitEditing}>
+                <Button variant="outline" size="sm" className="hidden lg:inline-flex h-8 gap-1.5 bg-white text-xs" onClick={exitEditing}>
                   <Eye className="w-3.5 h-3.5" /> Done editing
                 </Button>
               ) : (
-                <Button size="sm" className="h-8 gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs"
+                <Button size="sm" className="hidden lg:inline-flex h-8 gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs"
                   onClick={() => setEditing(true)}>
                   <Pencil className="w-3.5 h-3.5" /> Edit layout
                 </Button>
@@ -410,17 +430,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             </p>
           </div>
         ) : (
-          <LayoutCanvas
-            layout={layout}
-            objects={ed.objects}
-            selectedIds={ed.state.selection}
-            onSelect={ed.select}
-            editable={editing}
-            snapEnabled={snapEnabled}
-            onCheckpoint={ed.checkpoint}
-            onPatch={ed.patch}
-            occupancyByObject={occByObject}
-          />
+          <div ref={planRef}>
+            <LayoutCanvas
+              layout={layout}
+              objects={ed.objects}
+              selectedIds={ed.state.selection}
+              onSelect={ed.select}
+              editable={editing}
+              snapEnabled={snapEnabled}
+              onCheckpoint={ed.checkpoint}
+              onPatch={ed.patch}
+              occupancyByObject={occByObject}
+            />
+          </div>
         )}
       </div>
 

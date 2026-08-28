@@ -14,10 +14,15 @@ let currentRole: UserRole = UserRole.SYSTEM_ADMIN;
 
 class StubAuthGuard implements CanActivate {
   canActivate(ctx: ExecutionContext) {
-    ctx.switchToHttp().getRequest().user = { id: 'u1', role: currentRole };
+    ctx.switchToHttp().getRequest().user = {
+      id: 'u1', role: currentRole, roleKey: 'ADMIN', warehouseIds: ['wh_1'],
+    };
     return true;
   }
 }
+
+// Sprint 7: handlers forward the caller's warehouse scope to the service.
+const SCOPE = { roleKey: 'ADMIN', warehouseIds: ['wh_1'] };
 
 describe('WarehouseLayoutController (HTTP)', () => {
   let app: INestApplication;
@@ -57,27 +62,27 @@ describe('WarehouseLayoutController (HTTP)', () => {
   describe('route resolution', () => {
     it('PATCH /objects/:id hits updateObject, not the :warehouseId routes', async () => {
       await request(app.getHttpServer()).patch('/warehouse-layout/objects/obj_1').send({ name: 'X' }).expect(200);
-      expect(service.updateObject).toHaveBeenCalledWith('obj_1', { name: 'X' }, 'u1');
+      expect(service.updateObject).toHaveBeenCalledWith('obj_1', { name: 'X' }, 'u1', SCOPE);
     });
 
     it('DELETE /objects/:id passes cascade through as a boolean', async () => {
       await request(app.getHttpServer()).delete('/warehouse-layout/objects/obj_1?cascade=true').expect(200);
-      expect(service.deleteObject).toHaveBeenCalledWith('obj_1', true, 'u1');
+      expect(service.deleteObject).toHaveBeenCalledWith('obj_1', true, 'u1', SCOPE);
     });
 
     it('DELETE without cascade defaults to false', async () => {
       await request(app.getHttpServer()).delete('/warehouse-layout/objects/obj_1').expect(200);
-      expect(service.deleteObject).toHaveBeenCalledWith('obj_1', false, 'u1');
+      expect(service.deleteObject).toHaveBeenCalledWith('obj_1', false, 'u1', SCOPE);
     });
 
     it('GET /:warehouseId resolves to the warehouse read', async () => {
       await request(app.getHttpServer()).get('/warehouse-layout/wh_1').expect(200);
-      expect(service.getByWarehouse).toHaveBeenCalledWith('wh_1');
+      expect(service.getByWarehouse).toHaveBeenCalledWith('wh_1', SCOPE);
     });
 
     it('POST /:layoutId/objects resolves to createObject', async () => {
       await request(app.getHttpServer()).post('/warehouse-layout/lay_1/objects').send(validObject).expect(201);
-      expect(service.createObject).toHaveBeenCalledWith('lay_1', expect.objectContaining({ name: 'Bin A-01-01' }), 'u1');
+      expect(service.createObject).toHaveBeenCalledWith('lay_1', expect.objectContaining({ name: 'Bin A-01-01' }), 'u1', SCOPE);
     });
   });
 
