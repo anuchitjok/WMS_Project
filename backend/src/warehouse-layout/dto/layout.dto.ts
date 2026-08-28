@@ -1,6 +1,8 @@
 import {
   IsString, IsOptional, IsInt, IsNumber, IsEnum, Min, Max, MaxLength, IsNotEmpty, Matches,
+  IsArray, IsBoolean, ArrayMaxSize, ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LayoutObjectType, LayoutObjectStatus } from '@prisma/client';
 
@@ -167,4 +169,45 @@ export class UpdateLayoutObjectDto {
   @ApiPropertyOptional()
   @IsOptional() @IsString() @MaxLength(20_000)
   metadata?: string | null;
+}
+
+// ─── Sprint 5: batch save + duplicate ────────────────────────────────────────
+
+// One entry in a batch save. An `id` means "update this object"; no `id` means
+// "create it". Every other field is required either way: an upsert carries the
+// COMPLETE desired state of the object, which keeps the operation idempotent and
+// lets the editor replay a failed flush without reconstructing a partial diff.
+export class BatchUpsertDto extends CreateLayoutObjectDto {
+  @ApiPropertyOptional({ description: 'Omit to create; supply to update' })
+  @IsOptional() @IsString()
+  id?: string;
+}
+
+export class BatchSaveDto {
+  @ApiProperty({ description: 'Layout version the client last read; rejected with 409 if stale' })
+  @IsInt() @Min(0)
+  version: number;
+
+  @ApiPropertyOptional({ type: [BatchUpsertDto] })
+  @IsOptional() @IsArray() @ArrayMaxSize(500)
+  @ValidateNested({ each: true }) @Type(() => BatchUpsertDto)
+  upserts?: BatchUpsertDto[];
+
+  @ApiPropertyOptional({ description: 'Object ids to soft-delete, with their descendants' })
+  @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true })
+  deletes?: string[];
+}
+
+export class DuplicateObjectDto {
+  @ApiPropertyOptional({ default: 2, description: 'Grid units to offset the copy' })
+  @IsOptional() @IsNumber()
+  offsetX?: number;
+
+  @ApiPropertyOptional({ default: 2 })
+  @IsOptional() @IsNumber()
+  offsetY?: number;
+
+  @ApiPropertyOptional({ default: false, description: 'Copy the whole subtree' })
+  @IsOptional() @IsBoolean()
+  includeChildren?: boolean;
 }

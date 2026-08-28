@@ -325,6 +325,14 @@ export const layoutApi = {
     request<LayoutObject>(`/warehouse-layout/objects/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
   deleteObject: (id: string, cascade = false) =>
     request<{ success: boolean; deletedIds: string[] }>(`/warehouse-layout/objects/${id}${cascade ? '?cascade=true' : ''}`, { method: 'DELETE' }),
+  // The editor's primary write: one transaction per save, guarded by `version`.
+  // A 409 means someone else saved in the meantime.
+  batchSave: (layoutId: string, payload: { version: number; upserts: unknown[]; deletes: string[] }) =>
+    request<{ version: number; objects: LayoutObject[] }>(`/warehouse-layout/${layoutId}/objects/batch`, {
+      method: 'PATCH', body: JSON.stringify(payload),
+    }),
+  duplicateObject: (id: string, dto: { offsetX?: number; offsetY?: number; includeChildren?: boolean } = {}) =>
+    request<LayoutObject[]>(`/warehouse-layout/objects/${id}/duplicate`, { method: 'POST', body: JSON.stringify(dto) }),
 };
 
 // Receiving

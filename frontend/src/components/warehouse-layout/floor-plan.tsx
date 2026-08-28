@@ -1,20 +1,41 @@
 'use client';
 
-// Warehouse Operations — Floor Plan tab (Sprint 4, read-only).
-// Renders the physical layout for the selected warehouse and lets an operator
-// inspect an object. Creating and editing objects is Sprint 5; showing live
-// inventory for a linked bin is Sprint 6.
+// Warehouse Operations — Floor Plan tab.
+// Sprint 4 shipped the read-only view; Sprint 5 adds the editor behind a mode
+// toggle that only SYSTEM_ADMIN / WAREHOUSE_MANAGER can reach (the API enforces
+// the same roles — this only avoids offering a control that would 403).
+//
+// Editing is local and flushed in ONE batch request per save. The app is behind
+// a global 100 req/min throttle, so a request per drag is not an option.
 
-import { useCallback, useEffect, useState } from 'react';
-import { Map, AlertTriangle, RefreshCw, Link2Off, Info } from 'lucide-react';
-import { layoutApi, type LayoutResponse, type LayoutObject } from '@/lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Map, AlertTriangle, RefreshCw, Link2Off, Info, Pencil, Eye, Plus } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  layoutApi, type LayoutResponse, type LayoutObject, type LayoutObjectType,
+} from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAuthStore } from '@/store/auth.store';
+import { useDiscardGuard } from '@/hooks/use-discard-guard';
+import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import type { UserRole } from '@/types';
 import { cn } from '@/lib/utils';
 import { LayoutCanvas } from './layout-canvas';
 import { OBJECT_STYLES } from './layout-object';
+import { LayoutToolbar } from './layout-toolbar';
+import { PropertyPanel } from './property-panel';
+import { useLayoutEditor } from './use-layout-editor';
 
+const EDIT_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
 const TYPE_LABEL = (t: string) => t.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+
+// Sensible starting footprints, in grid units, per object type.
+const DEFAULT_SIZE: Partial<Record<LayoutObjectType, [number, number]>> = {
+  ZONE: [20, 14], RACK: [12, 4], SHELF: [6, 2], BIN: [2, 2], AISLE: [16, 2.5],
+  STORAGE_AREA: [16, 10], RECEIVING_AREA: [12, 5], SHIPPING_AREA: [12, 5],
+  STAGING_AREA: [10, 6], QC_AREA: [8, 5], WORK_AREA: [8, 5], CUSTOM_AREA: [8, 5],
+};
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -35,10 +56,8 @@ function ObjectInspector({ obj, unitLabel }: { obj: LayoutObject | null; unitLab
       </div>
     );
   }
-
   const style = OBJECT_STYLES[obj.objectType];
   const linked = obj.slotId ?? obj.rackId;
-
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
       <div className="flex items-center gap-2 mb-3">
@@ -55,12 +74,9 @@ function ObjectInspector({ obj, unitLabel }: { obj: LayoutObject | null; unitLab
         {obj.rotation > 0 && <Row k="Rotation" v={`${obj.rotation}°`} />}
         {obj.capacity != null && <Row k="Capacity" v={obj.capacity} />}
       </dl>
-
       <div className="mt-4 pt-3 border-t border-slate-100">
         {linked ? (
-          <p className="text-xs text-slate-500">
-            Linked to a WMS location. Live inventory for this bin arrives in a later sprint.
-          </p>
+          <p className="text-xs text-slate-500">Linked to a WMS location. Live inventory for this bin arrives in a later sprint.</p>
         ) : (
           <p className="flex items-start gap-2 text-xs text-slate-400">
             <Link2Off className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
@@ -91,8 +107,7 @@ function Legend() {
               {types.map((t) => {
                 const s = OBJECT_STYLES[t as keyof typeof OBJECT_STYLES];
                 return (
-                  <span key={t} title={TYPE_LABEL(t)}
-                    className="h-3 w-3 rounded-sm border"
+                  <span key={t} title={TYPE_LABEL(t)} className="h-3 w-3 rounded-sm border"
                     style={{ background: s.fill === 'transparent' ? '#fff' : s.fill, borderColor: s.stroke,
                              borderStyle: s.dashed ? 'dashed' : 'solid' }} />
                 );
@@ -107,32 +122,142 @@ function Legend() {
 }
 
 export function FloorPlan({ warehouseId }: { warehouseId: string }) {
+  const user = useAuthStore((s) => s.user);
+  const canEdit = !!user && EDIT_ROLES.includes(user.role);
+
   const [data, setData] = useState<LayoutResponse | null>(null);
+  const [version, setVersion] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<LayoutObject | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [creating, setCreating] = useState(false);
+
+  const ed = useLayoutEditor();
 
   const load = useCallback(async () => {
     if (!warehouseId) return;
     setLoading(true); setError(null);
     try {
-      setData(await layoutApi.get(warehouseId));
+      const res = await layoutApi.get(warehouseId);
+      setData(res);
+      setVersion(res.layout?.version ?? 0);
+      ed.reset(res.objects);
     } catch (e: any) {
       setData(null);
       setError(e?.message ?? 'Failed to load the floor plan');
     } finally {
       setLoading(false);
     }
-  }, [warehouseId]);
+  }, [warehouseId]); // eslint-disable-line
 
-  useEffect(() => { setSelected(null); load(); }, [load]);
+  useEffect(() => { setEditing(false); load(); }, [load]);
 
-  // Keep the inspector in sync if the underlying object list is replaced.
+  // ── Save / discard ─────────────────────────────────────────────────────────
+
+  const save = useCallback(async () => {
+    if (!data?.layout || !ed.isDirty) return;
+    setSaving(true);
+    try {
+      const res = await layoutApi.batchSave(data.layout.id, ed.buildPayload(version));
+      setVersion(res.version);
+      ed.saved(res.objects);
+      setData((d) => (d && d.layout ? { ...d, layout: { ...d.layout, version: res.version }, objects: res.objects } : d));
+      toast.success('Floor plan saved');
+    } catch (e: any) {
+      // A version clash means someone else saved while we were editing. Never
+      // overwrite silently — tell the user and let them reload.
+      toast.error(e?.message ?? 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }, [data, ed, version]);
+
+  const discardAll = useCallback(() => {
+    ed.reset(data?.objects ?? []);
+    toast.info('Changes discarded');
+  }, [data, ed]);
+
+  const guard = useDiscardGuard(ed.isDirty, () => { discardAll(); setEditing(false); });
+
+  const exitEditing = useCallback(() => {
+    if (ed.isDirty) guard.requestClose();
+    else setEditing(false);
+  }, [ed.isDirty, guard]);
+
+  // ── Editing actions ────────────────────────────────────────────────────────
+
+  const addObject = useCallback((type: LayoutObjectType) => {
+    const [w, h] = DEFAULT_SIZE[type] ?? [6, 4];
+    // Drop new objects at a free-ish spot near the origin rather than on top of
+    // whatever is already selected.
+    const n = ed.objects.length;
+    ed.add({
+      objectType: type,
+      name: TYPE_LABEL(type),
+      x: Math.min(2 + (n % 5) * 3, Math.max(0, (data?.layout?.widthUnits ?? 60) - w)),
+      y: Math.min(2 + Math.floor(n / 5) * 3, Math.max(0, (data?.layout?.heightUnits ?? 36) - h)),
+      width: w, height: h,
+    });
+  }, [ed, data]);
+
+  const deleteSelected = useCallback(() => {
+    if (!ed.state.selection.length) return;
+    ed.remove(ed.state.selection);
+  }, [ed]);
+
+  const duplicateSelected = useCallback(() => {
+    if (!ed.state.selection.length) return;
+    ed.duplicate(ed.state.selection);
+  }, [ed]);
+
+  // Keyboard shortcuts, active only while editing and not typing in a field.
   useEffect(() => {
-    if (!selected) return;
-    const fresh = data?.objects.find((o) => o.id === selected.id) ?? null;
-    if (fresh !== selected) setSelected(fresh);
-  }, [data]); // eslint-disable-line
+    if (!editing) return;
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? ed.redo() : ed.undo(); return; }
+      if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); ed.redo(); return; }
+      if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); return; }
+      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
+      if (e.key === 'Escape') ed.select([]);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, ed, duplicateSelected, deleteSelected, save]);
+
+  // Native beforeunload as a last line of defence for a browser-level close.
+  useEffect(() => {
+    if (!ed.isDirty) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [ed.isDirty]);
+
+  const createLayout = useCallback(async () => {
+    setCreating(true);
+    try {
+      await layoutApi.create(warehouseId, {});
+      toast.success('Floor plan created');
+      await load();
+      setEditing(true);
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Could not create the floor plan');
+    } finally {
+      setCreating(false);
+    }
+  }, [warehouseId, load]);
+
+  const soleSelected = useMemo(
+    () => (ed.selectedObjects.length === 1 ? ed.selectedObjects[0] : null),
+    [ed.selectedObjects],
+  );
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -162,13 +287,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
         <Map className="h-10 w-10 mx-auto text-slate-300" />
         <p className="mt-2 text-sm font-medium text-slate-600">No floor plan for this warehouse yet</p>
         <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-          The physical layout is separate from the Warehouse → Rack → Slot structure. Drawing tools arrive in the next sprint.
+          The physical layout is separate from the Warehouse → Rack → Slot structure.
         </p>
+        {canEdit && (
+          <Button size="sm" className="mt-4 gap-1.5 bg-green-600 hover:bg-green-700 text-white"
+            onClick={createLayout} disabled={creating}>
+            <Plus className="w-4 h-4" /> {creating ? 'Creating…' : 'Create floor plan'}
+          </Button>
+        )}
       </div>
     );
   }
 
-  const { layout, objects } = data;
+  const { layout } = data;
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
@@ -178,15 +309,44 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             {data.warehouse.name} · Floor Plan
           </h2>
           <div className="flex items-center gap-2">
-            <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',
-              'bg-slate-100 text-slate-500')}>Read-only</span>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs" onClick={load}>
+            {!editing && (
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-slate-100 text-slate-500">Read-only</span>
+            )}
+            {canEdit && (
+              editing ? (
+                <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs" onClick={exitEditing}>
+                  <Eye className="w-3.5 h-3.5" /> Done editing
+                </Button>
+              ) : (
+                <Button size="sm" className="h-8 gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs"
+                  onClick={() => setEditing(true)}>
+                  <Pencil className="w-3.5 h-3.5" /> Edit layout
+                </Button>
+              )
+            )}
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs"
+              onClick={load} disabled={ed.isDirty}
+              title={ed.isDirty ? 'Save or discard your changes first' : 'Reload'}>
               <RefreshCw className="w-3.5 h-3.5" /> Refresh
             </Button>
           </div>
         </div>
 
-        {objects.length === 0 ? (
+        {editing && (
+          <LayoutToolbar
+            onAdd={addObject}
+            onUndo={ed.undo} onRedo={ed.redo}
+            onDuplicate={duplicateSelected} onDelete={deleteSelected}
+            onSave={save} onDiscard={discardAll}
+            canUndo={ed.canUndo} canRedo={ed.canRedo}
+            hasSelection={ed.state.selection.length > 0}
+            isDirty={ed.isDirty} saving={saving}
+            snapEnabled={snapEnabled} onToggleSnap={() => setSnapEnabled((v) => !v)}
+            unitLabel={layout.unitLabel}
+          />
+        )}
+
+        {ed.objects.length === 0 && !editing ? (
           <div className="bg-white border border-slate-200 rounded-xl p-10 text-center shadow-sm">
             <Map className="h-10 w-10 mx-auto text-slate-300" />
             <p className="mt-2 text-sm font-medium text-slate-600">This floor plan is empty</p>
@@ -195,18 +355,37 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             </p>
           </div>
         ) : (
-          <LayoutCanvas layout={layout} objects={objects} selectedId={selected?.id ?? null} onSelect={setSelected} />
+          <LayoutCanvas
+            layout={layout}
+            objects={ed.objects}
+            selectedIds={ed.state.selection}
+            onSelect={ed.select}
+            editable={editing}
+            snapEnabled={snapEnabled}
+            onCheckpoint={ed.checkpoint}
+            onPatch={ed.patch}
+          />
         )}
       </div>
 
       <div className="space-y-4 xl:sticky xl:top-4">
-        <ObjectInspector obj={selected} unitLabel={layout.unitLabel} />
+        {editing ? (
+          <PropertyPanel objects={ed.selectedObjects} unitLabel={layout.unitLabel} onPatch={ed.patch} />
+        ) : (
+          <ObjectInspector obj={soleSelected} unitLabel={layout.unitLabel} />
+        )}
         <Legend />
-        <p className="flex items-start gap-2 px-1 text-[11px] leading-relaxed text-slate-400">
+        <p className={cn('flex items-start gap-2 px-1 text-[11px] leading-relaxed text-slate-400')}>
           <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
           The floor plan shows where things physically sit. Stock quantities always come from the WMS location on the Control Center tab.
         </p>
       </div>
+
+      <DiscardChangesDialog
+        open={guard.confirming}
+        onKeepEditing={guard.keepEditing}
+        onDiscard={guard.confirmDiscard}
+      />
     </div>
   );
 }

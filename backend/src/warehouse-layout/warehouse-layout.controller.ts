@@ -8,6 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
+  BatchSaveDto, DuplicateObjectDto,
 } from './dto/layout.dto';
 
 // Write access: SYSTEM_ADMIN + WAREHOUSE_MANAGER — identical to warehouse-master.
@@ -27,6 +28,12 @@ export class WarehouseLayoutController {
   @ApiOperation({ summary: 'Update a single layout object' })
   updateObject(@Param('id') id: string, @Body() dto: UpdateLayoutObjectDto, @CurrentUser('id') userId: string) {
     return this.service.updateObject(id, dto, userId);
+  }
+
+  @Post('objects/:id/duplicate') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Duplicate an object (and optionally its subtree); copies never inherit a WMS link' })
+  duplicateObject(@Param('id') id: string, @Body() dto: DuplicateObjectDto, @CurrentUser('id') userId: string) {
+    return this.service.duplicateObject(id, dto, userId);
   }
 
   @Delete('objects/:id') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
@@ -60,5 +67,11 @@ export class WarehouseLayoutController {
   @ApiOperation({ summary: 'Create a layout object' })
   createObject(@Param('layoutId') layoutId: string, @Body() dto: CreateLayoutObjectDto, @CurrentUser('id') userId: string) {
     return this.service.createObject(layoutId, dto, userId);
+  }
+
+  @Patch(':layoutId/objects/batch') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Apply a whole editing flush in one transaction, guarded by the layout version' })
+  batchSave(@Param('layoutId') layoutId: string, @Body() dto: BatchSaveDto, @CurrentUser('id') userId: string) {
+    return this.service.batchSave(layoutId, dto, userId);
   }
 }

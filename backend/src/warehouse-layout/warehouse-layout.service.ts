@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
+  BatchSaveDto, DuplicateObjectDto,
 } from './dto/layout.dto';
 
 // Physical Layout is the *drawing* of the warehouse floor. It never owns
@@ -212,5 +213,150 @@ export class WarehouseLayoutService {
       isDeleted: true, deletedAt: now, deletedBy: userId, cascadedIds: ids,
     });
     return { success: true, deletedIds: ids };
+  }
+
+  // ─── Sprint 5: batch save ───────────────────────────────────────────────────
+  // The editor's primary write: one transaction per flush, not per drag. The app
+  // sits behind a global 100 req/min throttle, so a per-object API would be
+  // exhausted in under a minute of editing.
+  //
+  // Optimistic locking: the client sends the version it last read. A mismatch
+  // means someone else saved in between, so we refuse rather than clobber.
+  async batchSave(layoutId: string, dto: BatchSaveDto, userId: string) {
+    const layout = await this.getLayoutOrThrow(layoutId);
+    if (layout.version !== dto.version) {
+      throw new ConflictException(
+        `This layout changed elsewhere (your version ${dto.version}, current ${layout.version}). Reload before saving.`,
+      );
+    }
+
+    const upserts = dto.upserts ?? [];
+    const deletes = dto.deletes ?? [];
+    for (const u of upserts) this.assertValidJson(u.metadata, 'upserts[].metadata');
+
+    // Every referenced id must already belong to this layout.
+    const referenced = [...upserts.filter((u) => u.id).map((u) => u.id as string), ...deletes];
+    if (referenced.length) {
+      const owned = await this.prisma.layoutObject.findMany({
+        where: { id: { in: referenced }, layoutId, isDeleted: false },
+        select: { id: true },
+      });
+      const ownedIds = new Set(owned.map((o) => o.id));
+      const stray = referenced.find((rid) => !ownedIds.has(rid));
+      if (stray) throw new NotFoundException(`Object ${stray} does not belong to this layout`);
+    }
+
+    // Deleting a parent removes its subtree, so the tree is never left with a
+    // live object pointing at a dead parent.
+    const deleteIds = new Set<string>();
+    for (const did of deletes) (await this.collectSubtree(did)).forEach((d) => deleteIds.add(d));
+
+    const now = new Date();
+    const result = await this.prisma.$transaction(async (tx) => {
+      const created: string[] = [];
+      for (const u of upserts) {
+        if (u.id && deleteIds.has(u.id)) continue; // a delete in the same batch wins
+        const { id: uid, ...data } = u;
+        if (uid) {
+          await tx.layoutObject.update({ where: { id: uid }, data });
+        } else {
+          const row = await tx.layoutObject.create({ data: { layoutId, ...data } });
+          created.push(row.id);
+        }
+      }
+
+      if (deleteIds.size) {
+        await tx.layoutObject.updateMany({
+          where: { id: { in: [...deleteIds] } },
+          data: { isDeleted: true, deletedAt: now, deletedBy: userId },
+        });
+      }
+
+      // Validate the RESULTING tree rather than each edit: a batch can move
+      // several objects at once, and only the end state can be judged. Anything
+      // wrong here rolls the whole flush back.
+      const all = await tx.layoutObject.findMany({
+        where: { layoutId, isDeleted: false },
+        select: { id: true, parentObjectId: true },
+      });
+      const parentOf = new Map(all.map((o) => [o.id, o.parentObjectId]));
+      for (const o of all) {
+        if (o.parentObjectId && !parentOf.has(o.parentObjectId)) {
+          throw new ConflictException(`Object ${o.id} references a parent outside this layout`);
+        }
+        let cursor = o.parentObjectId;
+        for (let depth = 0; cursor; depth++) {
+          if (cursor === o.id) throw new ConflictException(`Batch would create a cycle at object ${o.id}`);
+          if (depth > MAX_TREE_DEPTH) throw new ConflictException('Layout tree is nested too deeply');
+          cursor = parentOf.get(cursor) ?? null;
+        }
+      }
+
+      const after = await tx.warehouseLayout.update({
+        where: { id: layoutId },
+        data: { version: { increment: 1 } },
+      });
+      const objects = await tx.layoutObject.findMany({
+        where: { layoutId, isDeleted: false },
+        orderBy: [{ zIndex: 'asc' }, { displayOrder: 'asc' }, { createdAt: 'asc' }],
+      });
+      return { version: after.version, objects, created, deleted: [...deleteIds] };
+    });
+
+    await this.audit(
+      userId, 'LAYOUT_BATCH_SAVED', 'WarehouseLayout', layoutId,
+      { version: dto.version },
+      {
+        version: result.version,
+        created: result.created.length,
+        updated: upserts.filter((u) => u.id).length,
+        deleted: result.deleted.length,
+      },
+    );
+
+    return { version: result.version, objects: result.objects };
+  }
+
+  // ─── Sprint 5: duplicate ────────────────────────────────────────────────────
+  // Copies drop slotId/rackId and code: a WMS slot has exactly one physical bin,
+  // so a duplicate must never inherit the original's link or its location code.
+  async duplicateObject(id: string, dto: DuplicateObjectDto, userId: string) {
+    const source = await this.getObjectOrThrow(id);
+    const dx = dto.offsetX ?? 2;
+    const dy = dto.offsetY ?? 2;
+
+    const ids = dto.includeChildren ? await this.collectSubtree(id) : [id];
+    const rows = await this.prisma.layoutObject.findMany({ where: { id: { in: ids }, isDeleted: false } });
+    // collectSubtree returns breadth-first, so parents precede their children.
+    const ordered = [...rows].sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const idMap = new Map<string, string>();
+      const out: any[] = [];
+      for (const r of ordered) {
+        const isRoot = r.id === source.id;
+        const row = await tx.layoutObject.create({
+          data: {
+            layoutId: r.layoutId,
+            parentObjectId: isRoot ? r.parentObjectId : (idMap.get(r.parentObjectId ?? '') ?? null),
+            objectType: r.objectType,
+            name: isRoot ? `${r.name} copy` : r.name,
+            code: null,
+            x: Math.max(0, r.x + dx), y: Math.max(0, r.y + dy),
+            width: r.width, height: r.height,
+            rotation: r.rotation, zIndex: r.zIndex, displayOrder: r.displayOrder,
+            slotId: null, rackId: null,
+            capacity: r.capacity, color: r.color, status: r.status, metadata: r.metadata,
+          },
+        });
+        idMap.set(r.id, row.id);
+        out.push(row);
+      }
+      await tx.warehouseLayout.update({ where: { id: source.layoutId }, data: { version: { increment: 1 } } });
+      return out;
+    });
+
+    await this.audit(userId, 'LAYOUT_OBJECT_DUPLICATED', 'LayoutObject', id, source, { copies: created.length });
+    return created;
   }
 }

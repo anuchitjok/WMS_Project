@@ -34,11 +34,14 @@ export const OBJECT_STYLES = STYLES;
 // Objects taking up less than this many pixels on screen don't get a label.
 const LABEL_MIN_PX = 34;
 
-export function LayoutObjectShape({ obj, selected, pxPerUnit, onSelect }: {
+export function LayoutObjectShape({ obj, selected, pxPerUnit, onSelect, onPointerDown }: {
   obj: LayoutObject;
   selected: boolean;
   pxPerUnit: number;
   onSelect: (obj: LayoutObject) => void;
+  // Supplied by the canvas in edit mode so a press can begin a drag; the canvas
+  // also handles selection there, so this replaces the plain select-on-press.
+  onPointerDown?: (e: React.PointerEvent) => void;
 }) {
   const style = STYLES[obj.objectType] ?? STYLES.CUSTOM_AREA;
   const fill = obj.color ?? style.fill;
@@ -59,7 +62,11 @@ export function LayoutObjectShape({ obj, selected, pxPerUnit, onSelect }: {
   return (
     <g
       transform={obj.rotation ? `rotate(${obj.rotation} ${cx} ${cy})` : undefined}
-      onPointerDown={(e) => { e.stopPropagation(); onSelect(obj); }}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        if (onPointerDown) onPointerDown(e);
+        else onSelect(obj);
+      }}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(obj); } }}
       tabIndex={0}
       role="button"
