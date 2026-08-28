@@ -333,7 +333,35 @@ export const layoutApi = {
     }),
   duplicateObject: (id: string, dto: { offsetX?: number; offsetY?: number; includeChildren?: boolean } = {}) =>
     request<LayoutObject[]>(`/warehouse-layout/objects/${id}/duplicate`, { method: 'POST', body: JSON.stringify(dto) }),
+  // Sprint 6 — the only place the drawing and the WMS touch.
+  link: (id: string, dto: { slotId?: string; rackId?: string }) =>
+    request<LayoutObject>(`/warehouse-layout/objects/${id}/link`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  unlink: (id: string) =>
+    request<LayoutObject>(`/warehouse-layout/objects/${id}/link`, { method: 'DELETE' }),
+  generateBins: (id: string) =>
+    request<{ created: number; skipped: number }>(`/warehouse-layout/objects/${id}/generate-bins`, { method: 'POST' }),
+  occupancy: (warehouseId: string) =>
+    request<LayoutOccupancy[]>(`/warehouse-layout/${warehouseId}/occupancy`),
 };
+
+// Live per-bin rollup, derived from StockItem at read time. Nothing here is
+// stored on the layout — the WMS remains the only inventory system.
+export interface LayoutOccupancy {
+  objectId: string;
+  slotId: string;
+  orphaned: boolean; // the linked slot was soft-deleted out from under the drawing
+  code: string | null;
+  name: string | null;
+  slotStatus: string | null;
+  capacity: number;
+  items: number;
+  quantity: number;
+  available: number;
+  committed: number;
+  skuCount: number;
+  utilizationPct: number;
+  lastActivityAt: string | null;
+}
 
 // Receiving
 export interface ReceivingImportRow { rowNumber: number; data: Record<string, any>; errors: string[]; valid: boolean }

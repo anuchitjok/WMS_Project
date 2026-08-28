@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { StockStatus, LayoutObjectType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
@@ -11,6 +12,25 @@ import {
 // Linking an object to a WMS Slot/Rack is Sprint 6.
 
 const MAX_TREE_DEPTH = 64; // cycle/runaway guard for parent-chain walks
+
+// Stock that has left the building is not occupying a bin. Matches the set used
+// by warehouse.service.inventoryByBrand so both surfaces agree.
+const GONE: StockStatus[] = [
+  StockStatus.SHIPPED, StockStatus.CLOSED, StockStatus.CANCELLED, StockStatus.CONSUMED,
+];
+// There is no committedQty column anywhere in the schema — "committed" has to be
+// derived by bucketing StockStatus. See the Sprint 1 blueprint.
+const COMMITTED: StockStatus[] = [
+  StockStatus.RESERVED, StockStatus.PICKING, StockStatus.PICKED,
+  StockStatus.PACKED, StockStatus.READY_FOR_PICKUP,
+];
+
+// Which layout object types may hold a WMS link, and to what. Everything else is
+// physical-only: an aisle or a QC bench has no logical counterpart.
+const LINKABLE: Partial<Record<LayoutObjectType, 'slot' | 'rack'>> = {
+  BIN: 'slot',
+  RACK: 'rack',
+};
 
 @Injectable()
 export class WarehouseLayoutService {
@@ -358,5 +378,239 @@ export class WarehouseLayoutService {
 
     await this.audit(userId, 'LAYOUT_OBJECT_DUPLICATED', 'LayoutObject', id, source, { copies: created.length });
     return created;
+  }
+
+  // ─── Sprint 6: linking a drawn object to a WMS location ─────────────────────
+  //
+  // This is the ONLY place the two systems touch. Linking writes a foreign key
+  // on LayoutObject and nothing else — Slot, Rack and StockItem are read to
+  // validate the target and are never modified by this module.
+
+  private async warehouseIdOfLayout(layoutId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({
+      where: { id: layoutId, isDeleted: false },
+      select: { warehouseId: true },
+    });
+    if (!layout) throw new NotFoundException('Layout not found');
+    return layout.warehouseId;
+  }
+
+  async linkObject(id: string, dto: { slotId?: string; rackId?: string }, userId: string) {
+    const before = await this.getObjectOrThrow(id);
+    const wantSlot = !!dto.slotId;
+    const wantRack = !!dto.rackId;
+
+    if (wantSlot === wantRack) {
+      throw new BadRequestException('Provide exactly one of slotId or rackId');
+    }
+
+    const expects = LINKABLE[before.objectType];
+    if (!expects) {
+      throw new ConflictException(
+        `A ${before.objectType.replace(/_/g, ' ').toLowerCase()} is physical-only and cannot link to a WMS location`,
+      );
+    }
+    if ((expects === 'slot') !== wantSlot) {
+      throw new ConflictException(
+        expects === 'slot'
+          ? 'A bin links to a Slot, not a Rack'
+          : 'A rack links to a Rack, not a Slot',
+      );
+    }
+
+    const warehouseId = await this.warehouseIdOfLayout(before.layoutId);
+
+    if (wantSlot) {
+      const slot = await this.prisma.slot.findFirst({
+        where: { id: dto.slotId, isDeleted: false },
+        select: { id: true, code: true, rack: { select: { warehouseId: true } } },
+      });
+      if (!slot) throw new NotFoundException('Slot not found');
+      if (slot.rack.warehouseId !== warehouseId) {
+        throw new ConflictException('That slot belongs to a different warehouse');
+      }
+      // The schema enforces one physical bin per slot; surface it as a clear
+      // message rather than a raw unique-constraint error.
+      const taken = await this.prisma.layoutObject.findFirst({
+        where: { slotId: dto.slotId, isDeleted: false, NOT: { id } },
+        select: { id: true, name: true },
+      });
+      if (taken) throw new ConflictException(`Slot ${slot.code} is already drawn as "${taken.name}"`);
+    } else {
+      const rack = await this.prisma.rack.findFirst({
+        where: { id: dto.rackId, isDeleted: false },
+        select: { id: true, warehouseId: true },
+      });
+      if (!rack) throw new NotFoundException('Rack not found');
+      if (rack.warehouseId !== warehouseId) {
+        throw new ConflictException('That rack belongs to a different warehouse');
+      }
+    }
+
+    const after = await this.prisma.layoutObject.update({
+      where: { id },
+      data: wantSlot ? { slotId: dto.slotId, rackId: null } : { rackId: dto.rackId, slotId: null },
+    });
+    await this.audit(userId, 'LAYOUT_OBJECT_LINKED', 'LayoutObject', id, before, after);
+    return after;
+  }
+
+  // Unlink clears the FK on the drawing. It never touches the Slot or Rack —
+  // the WMS location goes on existing exactly as it was.
+  async unlinkObject(id: string, userId: string) {
+    const before = await this.getObjectOrThrow(id);
+    if (!before.slotId && !before.rackId) return before;
+    const after = await this.prisma.layoutObject.update({
+      where: { id },
+      data: { slotId: null, rackId: null },
+    });
+    await this.audit(userId, 'LAYOUT_OBJECT_UNLINKED', 'LayoutObject', id, before, after);
+    return after;
+  }
+
+  // ─── Sprint 6: live occupancy for linked bins ───────────────────────────────
+  //
+  // One derived read that colours the whole canvas. Every number here is
+  // computed from StockItem at read time — nothing is stored on LayoutObject,
+  // because that would be the second inventory system this feature exists to
+  // avoid. Occupancy is derived from actual PLACEMENT (StockItem.slotId), never
+  // from Slot.status, which no write path keeps in sync.
+  async occupancy(warehouseId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({
+      where: { warehouseId, isDeleted: false },
+      select: { id: true },
+    });
+    if (!layout) return [];
+
+    const linked = await this.prisma.layoutObject.findMany({
+      where: { layoutId: layout.id, isDeleted: false, slotId: { not: null } },
+      select: { id: true, slotId: true },
+    });
+    if (!linked.length) return [];
+
+    const slotIds = linked.map((l) => l.slotId as string);
+
+    const [slots, items] = await Promise.all([
+      this.prisma.slot.findMany({
+        where: { id: { in: slotIds } },
+        select: { id: true, code: true, name: true, capacity: true, status: true, isDeleted: true },
+      }),
+      this.prisma.stockItem.findMany({
+        where: { slotId: { in: slotIds }, status: { notIn: GONE } },
+        select: { slotId: true, productId: true, quantity: true, status: true, updatedAt: true },
+      }),
+    ]);
+
+    const slotById = new Map(slots.map((s) => [s.id, s]));
+    type Acc = { items: number; qty: number; available: number; committed: number; skus: Set<string>; last: Date | null };
+    const acc = new Map<string, Acc>();
+    const ensure = (sid: string) => {
+      if (!acc.has(sid)) acc.set(sid, { items: 0, qty: 0, available: 0, committed: 0, skus: new Set(), last: null });
+      return acc.get(sid) as Acc;
+    };
+
+    for (const it of items) {
+      const a = ensure(it.slotId as string);
+      a.items += 1;
+      a.qty += it.quantity;
+      a.skus.add(it.productId);
+      if (it.status === StockStatus.AVAILABLE) a.available += it.quantity;
+      else if (COMMITTED.includes(it.status)) a.committed += it.quantity;
+      if (!a.last || it.updatedAt > a.last) a.last = it.updatedAt;
+    }
+
+    return linked.map((l) => {
+      const sid = l.slotId as string;
+      const slot = slotById.get(sid);
+      const a = acc.get(sid);
+      const capacity = slot?.capacity ?? 0;
+      const itemCount = a?.items ?? 0;
+      return {
+        objectId: l.id,
+        slotId: sid,
+        // A link pointing at a soft-deleted slot is an orphan; the UI warns.
+        orphaned: !slot || slot.isDeleted,
+        code: slot?.code ?? null,
+        name: slot?.name ?? null,
+        slotStatus: slot?.status ?? null,
+        capacity,
+        items: itemCount,
+        quantity: a?.qty ?? 0,
+        available: a?.available ?? 0,
+        committed: a?.committed ?? 0,
+        skuCount: a?.skus.size ?? 0,
+        utilizationPct: capacity > 0
+          ? Math.min(100, Math.round((itemCount / capacity) * 100))
+          : (itemCount > 0 ? 100 : 0),
+        lastActivityAt: a?.last ?? null,
+      };
+    });
+  }
+
+  // ─── Sprint 6: draw bins from a rack's existing slots ───────────────────────
+  // Reads the Slot rows that already exist and draws one BIN per slot, laid out
+  // by the slot's own level/column. It creates drawings only — no Slot is
+  // created, renamed or moved.
+  async generateBinsFromRack(id: string, userId: string) {
+    const parent = await this.getObjectOrThrow(id);
+    if (parent.objectType !== LayoutObjectType.RACK) {
+      throw new ConflictException('Only a rack object can generate bins');
+    }
+    if (!parent.rackId) {
+      throw new ConflictException('Link this object to a rack first');
+    }
+
+    const slots = await this.prisma.slot.findMany({
+      where: { rackId: parent.rackId, isDeleted: false, isActive: true },
+      select: { id: true, code: true, name: true, level: true, column: true, capacity: true },
+      orderBy: [{ level: 'asc' }, { column: 'asc' }],
+    });
+    if (!slots.length) throw new ConflictException('That rack has no active slots');
+
+    const already = await this.prisma.layoutObject.findMany({
+      where: { slotId: { in: slots.map((s) => s.id) }, isDeleted: false },
+      select: { slotId: true },
+    });
+    const taken = new Set(already.map((a) => a.slotId));
+    const todo = slots.filter((s) => !taken.has(s.id));
+    if (!todo.length) return { created: 0, skipped: slots.length };
+
+    // Lay the bins out inside the parent rack's own footprint, using each slot's
+    // level as the row and column as the column.
+    const maxLevel = Math.max(...slots.map((s) => s.level));
+    const maxCol = Math.max(...slots.map((s) => s.column));
+    const cellW = parent.width / maxCol;
+    const cellH = parent.height / maxLevel;
+    const inset = Math.min(cellW, cellH) * 0.08;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const out: any[] = [];
+      for (const s of todo) {
+        out.push(await tx.layoutObject.create({
+          data: {
+            layoutId: parent.layoutId,
+            parentObjectId: parent.id,
+            objectType: LayoutObjectType.BIN,
+            name: s.name ?? s.code,
+            code: s.code,
+            // Level 1 is the bottom of a rack, so draw it at the bottom.
+            x: parent.x + (s.column - 1) * cellW + inset,
+            y: parent.y + (maxLevel - s.level) * cellH + inset,
+            width: Math.max(0.2, cellW - inset * 2),
+            height: Math.max(0.2, cellH - inset * 2),
+            zIndex: parent.zIndex + 1,
+            displayOrder: (s.level - 1) * maxCol + s.column,
+            slotId: s.id,
+            capacity: s.capacity,
+          },
+        }));
+      }
+      await tx.warehouseLayout.update({ where: { id: parent.layoutId }, data: { version: { increment: 1 } } });
+      return out;
+    });
+
+    await this.audit(userId, 'LAYOUT_BINS_GENERATED', 'LayoutObject', id, parent,
+      { created: created.length, skipped: slots.length - todo.length });
+    return { created: created.length, skipped: slots.length - todo.length, objects: created };
   }
 }

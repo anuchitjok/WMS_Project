@@ -209,9 +209,11 @@ describe('WarehouseLayoutService', () => {
     });
   });
 
-  it('never writes Slot, Rack or StockItem', () => {
-    // The mock exposes no stockItem/slot/rack write surface at all; if the
-    // service ever reached for one these tests would throw on an undefined call.
+  it('touches no Slot, Rack or StockItem at all in the CRUD paths', () => {
+    // The mock exposes no stockItem/slot/rack surface whatsoever, so any access
+    // from the methods above would have thrown. (Sprint 6 adds read-only access
+    // for linking and occupancy — see warehouse-layout-linking.service.spec.ts,
+    // which asserts those models are readable but never written.)
     expect((prisma as any).stockItem).toBeUndefined();
     expect((prisma as any).slot).toBeUndefined();
     expect((prisma as any).rack).toBeUndefined();

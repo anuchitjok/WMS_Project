@@ -198,6 +198,18 @@ export class BatchSaveDto {
   deletes?: string[];
 }
 
+// Exactly one of the two must be supplied; the service enforces that, and that
+// the type of the object matches the kind of target.
+export class LinkObjectDto {
+  @ApiPropertyOptional({ description: 'Target WMS Slot — for a BIN object' })
+  @IsOptional() @IsString()
+  slotId?: string;
+
+  @ApiPropertyOptional({ description: 'Target WMS Rack — for a RACK object' })
+  @IsOptional() @IsString()
+  rackId?: string;
+}
+
 export class DuplicateObjectDto {
   @ApiPropertyOptional({ default: 2, description: 'Grid units to offset the copy' })
   @IsOptional() @IsNumber()

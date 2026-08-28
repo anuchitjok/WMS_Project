@@ -8,7 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
-  BatchSaveDto, DuplicateObjectDto,
+  BatchSaveDto, DuplicateObjectDto, LinkObjectDto,
 } from './dto/layout.dto';
 
 // Write access: SYSTEM_ADMIN + WAREHOUSE_MANAGER — identical to warehouse-master.
@@ -30,6 +30,24 @@ export class WarehouseLayoutController {
     return this.service.updateObject(id, dto, userId);
   }
 
+  @Patch('objects/:id/link') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Link a drawn object to a WMS Slot or Rack (same warehouse, type-compatible)' })
+  linkObject(@Param('id') id: string, @Body() dto: LinkObjectDto, @CurrentUser('id') userId: string) {
+    return this.service.linkObject(id, dto, userId);
+  }
+
+  @Delete('objects/:id/link') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Unlink an object. Never modifies the Slot or Rack itself.' })
+  unlinkObject(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.service.unlinkObject(id, userId);
+  }
+
+  @Post('objects/:id/generate-bins') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: "Draw one bin per active slot of this object's linked rack. Creates drawings only." })
+  generateBins(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.service.generateBinsFromRack(id, userId);
+  }
+
   @Post('objects/:id/duplicate') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
   @ApiOperation({ summary: 'Duplicate an object (and optionally its subtree); copies never inherit a WMS link' })
   duplicateObject(@Param('id') id: string, @Body() dto: DuplicateObjectDto, @CurrentUser('id') userId: string) {
@@ -44,6 +62,12 @@ export class WarehouseLayoutController {
   }
 
   // ── Layout (canvas) ─────────────────────────────────────────────────────────
+
+  @Get(':warehouseId/occupancy')
+  @ApiOperation({ summary: 'Live per-bin rollup derived from StockItem. Reads only — never writes inventory.' })
+  occupancy(@Param('warehouseId') warehouseId: string) {
+    return this.service.occupancy(warehouseId);
+  }
 
   @Get(':warehouseId')
   @ApiOperation({ summary: 'Layout canvas + flat object list for a warehouse (layout: null when none exists yet)' })

@@ -81,3 +81,14 @@ export const SLOT_CFG: Record<SlotStatus, { label: string; pill: string }> = {
   RTV:        { label: 'RTV',        pill: 'bg-orange-100 text-orange-700' },
   BLOCKED:    { label: 'Blocked',    pill: 'bg-red-100 text-red-700' },
 };
+
+// SVG-friendly twin of heatCell above, for the Floor Plan canvas. The
+// thresholds are duplicated deliberately close to their source so the two
+// surfaces cannot drift: a bin must read the same on the heatmap and the map.
+export function heatFill(util: number, occupied: boolean): { fill: string; stroke: string } {
+  if (!occupied) return { fill: '#ecfdf5', stroke: '#6ee7b7' };
+  if (util >= 90) return { fill: '#ef4444', stroke: '#dc2626' };
+  if (util >= 60) return { fill: '#f97316', stroke: '#ea580c' };
+  if (util >= 30) return { fill: '#facc15', stroke: '#ca8a04' };
+  return { fill: '#22c55e', stroke: '#16a34a' };
+}

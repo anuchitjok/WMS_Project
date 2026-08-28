@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
-import type { LayoutObject, WarehouseLayout } from '@/lib/api';
+import type { LayoutObject, WarehouseLayout, LayoutOccupancy } from '@/lib/api';
 import { LayoutObjectShape } from './layout-object';
 import { cn } from '@/lib/utils';
 
@@ -38,7 +38,7 @@ const HANDLES: { id: HandleId; fx: number; fy: number; cursor: string }[] = [
 
 export function LayoutCanvas({
   layout, objects, selectedIds, onSelect,
-  editable = false, snapEnabled = true, onCheckpoint, onPatch,
+  editable = false, snapEnabled = true, onCheckpoint, onPatch, occupancyByObject,
 }: {
   layout: WarehouseLayout;
   objects: LayoutObject[];
@@ -48,6 +48,7 @@ export function LayoutCanvas({
   snapEnabled?: boolean;
   onCheckpoint?: () => void;
   onPatch?: (ids: string[], patch: Partial<LayoutObject>, history?: boolean) => void;
+  occupancyByObject?: Map<string, LayoutOccupancy>;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -281,6 +282,7 @@ export function LayoutCanvas({
               obj={obj}
               selected={selectedIds.includes(obj.id)}
               pxPerUnit={pxPerUnit}
+              occupancy={occupancyByObject?.get(obj.id)}
               onPointerDown={(e) => startObjectDrag(e, obj)}
               onSelect={() => onSelect([obj.id])}
             />
