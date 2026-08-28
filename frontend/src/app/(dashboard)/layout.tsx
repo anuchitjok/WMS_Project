@@ -15,13 +15,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  // Wait for React's hydration before enforcing the auth guard.
+  //
+  // The pages are prerendered (output: "export"), so during the hydration render
+  // useSyncExternalStore returns the SERVER snapshot to stay consistent with the
+  // prerendered HTML — `isAuthenticated` reads false on the first pass even
+  // though the store was already rehydrated from localStorage. Redirecting on
+  // that stale value is what used to bounce a signed-in user to /login on every
+  // refresh and every deep link.
+  //
+  // Note this is React's hydration, not the store's: zustand's
+  // persist.hasHydrated() already returns true on that first render, so gating
+  // on it looks correct and does not work. One commit is what we actually need.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => { setHydrated(true); }, []);
+
   useEffect(() => {
-    if (!isAuthenticated) router.replace('/login');
-  }, [isAuthenticated, router]);
+    if (hydrated && !isAuthenticated) router.replace('/login');
+  }, [hydrated, isAuthenticated, router]);
 
   // Close the mobile drawer whenever the route changes
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
+  if (!hydrated) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-green-600" />
+        <span className="sr-only">Loading…</span>
+      </div>
+    );
+  }
   if (!isAuthenticated) return null;
 
   return (
