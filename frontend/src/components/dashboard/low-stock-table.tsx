@@ -40,7 +40,7 @@ export function LowStockTable({ items, loading, limit = 6 }: { items?: LowStockI
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                 <th className="pb-2 pr-2 font-semibold">SKU / Product</th>
                 <th className="pb-2 px-2 text-right font-semibold">Avail</th>
-                <th className="pb-2 px-2 text-right font-semibold">Min</th>
+                <th className="pb-2 px-2 text-right font-semibold" title="Minimum Stock Level set on the product">Min</th>
                 <th className="pb-2 pl-2 text-right font-semibold">Gap</th>
               </tr>
             </thead>

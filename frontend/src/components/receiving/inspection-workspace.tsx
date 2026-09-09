@@ -227,15 +227,15 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                   )}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1.5">
-                  <PF label="Code"    value={product?.code}     mono />
-                  <PF label="Name"    value={product?.name} />
+                  <PF label="Product Code" value={product?.code} mono />
+                  <PF label="Product Name" value={product?.name} />
                   <PF label="Model"   value={product?.model} />
                   <PF label="Category" value={product?.category} />
                   <PF label="UOM"     value={product?.unit} />
-                  <PF label="Part No" value={product?.partNumber} mono />
+                  <PF label="Internal Part No" value={product?.partNumber} mono />
                   <div className="col-span-2 flex gap-2 pt-0.5">
-                    <ControlBadge active={isSerial} label="Serial" />
-                    <ControlBadge active={isBatch}  label="Batch" />
+                    <ControlBadge active={isSerial} label={isSerial ? 'Serial no. required' : 'Serial no. not required'} />
+                    <ControlBadge active={isBatch}  label={isBatch ? 'Batch no. required' : 'Batch no. not required'} />
                   </div>
                 </div>
               </div>

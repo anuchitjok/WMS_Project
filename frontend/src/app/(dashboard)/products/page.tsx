@@ -22,6 +22,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { cn, hasUnsavedChanges } from '@/lib/utils';
+import { typeLabel } from '@/lib/product-terms';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,18 @@ const PRODUCT_STATUSES = ['ACTIVE','INACTIVE','DISCONTINUED'];
 const TYPE_BADGE: Record<string, string> = {
   SPARE_PART:     'bg-teal-100 text-teal-700 border-teal-200',
   FINISHED_GOODS: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+};
+
+// Plain-language hints for the abbreviated column headers in the enterprise grid.
+const HEADER_HINTS: Record<string, string> = {
+  'SKU / Part #':  'Product Code (SKU), then Internal Part Number and Vendor Part Number',
+  'Type':          'Product Type — Spare Part or Finished Goods',
+  'Status':        'Product Status — Active, Inactive or Discontinued',
+  'UOM':           'Unit of Measure the product is counted in',
+  'Category':      'Free-text product group used for filtering and reporting',
+  'Ctrl':          'S = serial number required · B = batch / lot number required',
+  'Condition':     'Stock condition breakdown of the units on hand',
+  'Bin / Rack':    'Storage location of the most recent stock item',
 };
 const STATUS_BADGE: Record<string, string> = {
   AVAILABLE:   'bg-green-100 text-green-700',
@@ -56,6 +69,11 @@ const BLANK = {
   productStatus:'ACTIVE', brandId:'',
 };
 
+// One-line guidance shown under a form field: what the user should type, not how it is stored.
+function Hint({ children }: { children: React.ReactNode }) {
+  return <p className="text-[11px] leading-snug text-slate-500">{children}</p>;
+}
+
 function ProductStatusBadge({ status }: { status?: string }) {
   const cfg = PRODUCT_STATUS_CFG[status ?? ''] ?? { label: status || '—', bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
   return (
@@ -70,12 +88,12 @@ function ProductStatusBadge({ status }: { status?: string }) {
 
 function KpiBar({ kpi, loading }: { kpi: any; loading: boolean }) {
   const cards = [
-    { label: 'Total SKU',       value: kpi?.totalSku,              icon: Tag,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
+    { label: 'Total SKU',       value: kpi?.totalSku,              icon: Tag,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200', hint: 'Products in the Product Master, all statuses' },
     { label: 'Active',          value: kpi?.activeCount,           icon: CircleDot,    color: 'text-green-700',   bg: 'bg-green-50',    border: 'border-green-200' },
     { label: 'Inactive',        value: kpi?.inactiveCount,         icon: PauseCircle,  color: kpi?.inactiveCount > 0 ? 'text-slate-600' : 'text-slate-400', bg: 'bg-slate-50', border: 'border-slate-200' },
     { label: 'Discontinued',    value: kpi?.discontinuedCount,     icon: Ban,          color: kpi?.discontinuedCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.discontinuedCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.discontinuedCount > 0 ? 'border-red-200' : 'border-slate-200' },
-    { label: 'Serial Ctrl',     value: kpi?.serializedItems,       icon: Shield,       color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
-    { label: 'Batch Ctrl',      value: kpi?.batchControlledCount,  icon: Zap,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200' },
+    { label: 'Serial Tracked',  value: kpi?.serializedItems,       icon: Shield,       color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200', hint: 'Products that require a serial number on receiving' },
+    { label: 'Batch Tracked',   value: kpi?.batchControlledCount,  icon: Zap,          color: 'text-slate-700',   bg: 'bg-slate-50',    border: 'border-slate-200', hint: 'Products that require a batch / lot number on receiving' },
     { label: 'Low Stock',       value: kpi?.lowStock,              icon: TrendingDown, color: kpi?.lowStock > 0 ? 'text-amber-700' : 'text-slate-400', bg: kpi?.lowStock > 0 ? 'bg-amber-50' : 'bg-slate-50', border: kpi?.lowStock > 0 ? 'border-amber-200' : 'border-slate-200' },
     { label: 'On Hold',         value: kpi?.quarantineCount,       icon: AlertTriangle,color: kpi?.quarantineCount > 0 ? 'text-red-700' : 'text-slate-400', bg: kpi?.quarantineCount > 0 ? 'bg-red-50' : 'bg-slate-50', border: kpi?.quarantineCount > 0 ? 'border-red-200' : 'border-slate-200' },
     { label: 'RTV Pending',     value: kpi?.rtvPendingCount,       icon: RefreshCw,    color: kpi?.rtvPendingCount > 0 ? 'text-orange-700' : 'text-slate-400', bg: kpi?.rtvPendingCount > 0 ? 'bg-orange-50' : 'bg-slate-50', border: kpi?.rtvPendingCount > 0 ? 'border-orange-200' : 'border-slate-200' },
@@ -85,8 +103,8 @@ function KpiBar({ kpi, loading }: { kpi: any; loading: boolean }) {
   ];
   return (
     <div className="grid grid-cols-4 lg:grid-cols-6 xl:grid-cols-12 gap-2">
-      {cards.map(({ label, value, icon: Icon, color, bg, border }) => (
-        <div key={label} className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm', bg, border)}>
+      {cards.map(({ label, value, icon: Icon, color, bg, border, hint }: any) => (
+        <div key={label} title={hint} className={cn('flex items-center gap-2 px-3 py-2.5 rounded-xl border shadow-sm', bg, border)}>
           <Icon className={cn('w-4 h-4 flex-shrink-0', color)} />
           <div className="min-w-0">
             {loading ? <Skeleton className="h-5 w-10" /> : <p className={cn('text-lg font-bold tabular-nums leading-none', color)}>{value ?? 0}</p>}
@@ -230,19 +248,19 @@ function ProductDetailDrawer({ productId, onClose, onEdit }: { productId: string
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   {[
-                    { label: 'SKU / Code', value: data.code, mono: true },
-                    { label: 'Part Number', value: data.partNumber || '—', mono: true },
-                    { label: 'Vendor P/N', value: data.vendorPartNumber || '—', mono: true },
+                    { label: 'Product Code (SKU)', value: data.code, mono: true },
+                    { label: 'Internal Part Number', value: data.partNumber || '—', mono: true },
+                    { label: 'Vendor Part Number', value: data.vendorPartNumber || '—', mono: true },
                     { label: 'Brand', value: data.brand?.name || '—' },
                     { label: 'Manufacturer', value: data.manufacturer || '—' },
                     { label: 'Model', value: data.model || '—' },
-                    { label: 'Type', value: data.productType?.replace('_',' ') || '—' },
+                    { label: 'Product Type', value: typeLabel(data.productType) },
                     { label: 'Category', value: data.category || '—' },
-                    { label: 'Unit', value: data.unit || '—' },
-                    { label: 'Unit Cost', value: data.unitCost ? `฿${data.unitCost.toLocaleString()}` : '—' },
-                    { label: 'Min Stock', value: String(data.minStock) },
-                    { label: 'Serial Controlled', value: data.serialControlled ? 'Yes' : 'No' },
-                    { label: 'Batch Controlled', value: data.batchControlled ? 'Yes' : 'No' },
+                    { label: 'Unit of Measure', value: data.unit || '—' },
+                    { label: 'Standard Unit Cost', value: data.unitCost ? `฿${data.unitCost.toLocaleString()}` : '—' },
+                    { label: 'Minimum Stock Level', value: String(data.minStock) },
+                    { label: 'Serial Number Required', value: data.serialControlled ? 'Yes' : 'No' },
+                    { label: 'Batch / Lot Number Required', value: data.batchControlled ? 'Yes' : 'No' },
                     { label: 'Product Status', value: PRODUCT_STATUS_CFG[data.productStatus]?.label ?? data.productStatus ?? '—' },
                   ].map(({ label, value, mono }) => (
                     <div key={label} className="bg-slate-50 rounded-lg p-2">
@@ -442,7 +460,7 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
           {row.model && <p className="text-[10px] text-slate-400">{row.manufacturer ? `${row.manufacturer} · ` : ''}{row.model}</p>}
         </td>
         <td className="px-3 py-2.5">
-          <Badge variant="outline" className={cn('text-[11px] whitespace-nowrap', TYPE_BADGE[row.productType])}>{row.productType?.replace('_',' ')}</Badge>
+          <Badge variant="outline" className={cn('text-[11px] whitespace-nowrap', TYPE_BADGE[row.productType])}>{typeLabel(row.productType)}</Badge>
         </td>
         <td className="px-3 py-2.5 max-w-[160px]"><p className="truncate text-slate-500">{row.description || '—'}</p></td>
 
@@ -458,8 +476,10 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
         {/* CONTROLS (S/B badges) */}
         <td className="px-3 py-2.5">
           <div className="flex gap-1">
-            <span className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.serialControlled ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>S</span>
-            <span className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.batchControlled ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>B</span>
+            <span title={row.serialControlled ? 'Serial number required on receiving' : 'Serial number not required'}
+              className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.serialControlled ? 'bg-indigo-100 text-indigo-700 border-indigo-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>S</span>
+            <span title={row.batchControlled ? 'Batch / lot number required on receiving' : 'Batch / lot number not required'}
+              className={cn('text-[10px] px-1 py-0.5 rounded font-bold border', row.batchControlled ? 'bg-violet-100 text-violet-700 border-violet-200' : 'bg-slate-50 text-slate-300 border-slate-200')}>B</span>
           </div>
         </td>
 
@@ -702,9 +722,9 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
         <Button variant="outline" size="sm" className={cn('h-8 gap-1.5 text-xs', showFilters && 'bg-green-50 border-green-300 text-green-700')} onClick={() => setShowFilters((v) => !v)}>
           <Filter className="w-3.5 h-3.5" /> Filters {showFilters ? '▲' : '▼'}
         </Button>
-        <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+        <label className="flex items-center gap-1.5 text-xs cursor-pointer" title="Count only stock that carries a serial number">
           <input type="checkbox" checked={serialOnly} onChange={(e) => setSerialOnly(e.target.checked)} className="accent-green-600" />
-          Serialized Only
+          Serialised Stock Only
         </label>
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => fileRef.current?.click()}>
@@ -727,7 +747,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           <div className="flex flex-wrap gap-2 w-full">
             <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white font-medium" value={productStatusFilter} onChange={(e) => setProductStatusFilter(e.target.value)}>
               <option value="">All Product Status</option>
-              {PRODUCT_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {PRODUCT_STATUSES.map((s) => <option key={s} value={s}>{PRODUCT_STATUS_CFG[s]?.label ?? s}</option>)}
             </select>
             <input
               className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white min-w-[140px]"
@@ -736,8 +756,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
               onChange={(e) => setCategoryFilter(e.target.value)}
             />
             <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-              <option value="">All Types</option>
-              {PRODUCT_TYPES.map((t) => <option key={t} value={t}>{t.replace('_',' ')}</option>)}
+              <option value="">All Product Types</option>
+              {PRODUCT_TYPES.map((t) => <option key={t} value={t}>{typeLabel(t)}</option>)}
             </select>
             <select className="border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs bg-white" value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)}>
               <option value="">All Brands</option>
@@ -787,19 +807,19 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                 <th className="w-8 bg-slate-50 border-b border-slate-200" />
                 {/* Identity */}
                 {['SKU / Part #','Brand','Product / Model','Type','Description','Status','UOM','Category','Ctrl'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
+                  <th key={h} title={HEADER_HINTS[h]} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Inventory */}
                 {['Warehouse','Bin / Rack','Qty','Condition','Source'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
+                  <th key={h} title={HEADER_HINTS[h]} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Traceability */}
                 {['Serial','AWB','Invoice No.','RMA Ref'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
+                  <th key={h} title={HEADER_HINTS[h]} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 {/* Audit */}
                 {['Created','Received'].map((h) => (
-                  <th key={h} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
+                  <th key={h} title={HEADER_HINTS[h]} className="text-left px-3 py-2.5 font-semibold text-[11px] uppercase tracking-wide whitespace-nowrap text-slate-500 border-b border-r border-slate-200">{h}</th>
                 ))}
                 <th className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 w-16 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Act</th>
               </tr>
@@ -848,17 +868,34 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{editId ? 'Edit Product' : 'New Product'}</DialogTitle></DialogHeader>
           <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1"><Label>Code *</Label><Input value={form.code} onChange={F('code')} disabled={!!editId} /></div>
-            <div className="space-y-1"><Label>Name *</Label><Input value={form.name} onChange={F('name')} /></div>
-            <div className="space-y-1"><Label>Manufacturer</Label><Input value={form.manufacturer} onChange={F('manufacturer')} /></div>
-            <div className="space-y-1"><Label>Model</Label><Input value={form.model} onChange={F('model')} /></div>
-            <div className="space-y-1"><Label>Part Number</Label><Input value={form.partNumber} onChange={F('partNumber')} /></div>
-            <div className="space-y-1"><Label>Vendor P/N</Label><Input value={form.vendorPartNumber} onChange={F('vendorPartNumber')} /></div>
+            <div className="space-y-1"><Label>Product Code (SKU) *</Label><Input value={form.code} onChange={F('code')} disabled={!!editId} />
+              <Hint>{editId
+                ? 'The permanent code for this product. It is printed on labels and scanned, so it cannot be changed after creation.'
+                : 'Your own unique code for this product (e.g. SW-C2960X). It is printed on labels and scanned in the warehouse, and cannot be changed later.'}</Hint>
+            </div>
+            <div className="space-y-1"><Label>Product Name *</Label><Input value={form.name} onChange={F('name')} />
+              <Hint>The name staff will recognise on picking and receiving lists.</Hint>
+            </div>
+            <div className="space-y-1"><Label>Manufacturer</Label><Input value={form.manufacturer} onChange={F('manufacturer')} />
+              <Hint>The company that actually made the item. Leave blank if it is the same as the Brand.</Hint>
+            </div>
+            <div className="space-y-1"><Label>Model</Label><Input value={form.model} onChange={F('model')} />
+              <Hint>The manufacturer&apos;s model name or number as printed on the item (e.g. TC52).</Hint>
+            </div>
+            <div className="space-y-1"><Label>Internal Part Number</Label><Input value={form.partNumber} onChange={F('partNumber')} />
+              <Hint>Your company&apos;s own part number. Must be unique across all products; leave blank if you do not use one.</Hint>
+            </div>
+            <div className="space-y-1"><Label>Vendor Part Number</Label><Input value={form.vendorPartNumber} onChange={F('vendorPartNumber')} />
+              <Hint>The part number the supplier uses on their quotations and invoices. Reference and search only.</Hint>
+            </div>
             <div className="space-y-1"><Label>Product Type</Label>
               <Select value={form.productType} onValueChange={(v) => setForm((f: any) => ({ ...f, productType: v ?? 'SPARE_PART' }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{t.replace('_',' ')}</SelectItem>)}</SelectContent>
+                <SelectTrigger>
+                  <span className="flex flex-1 text-left text-sm">{typeLabel(form.productType)}</span>
+                </SelectTrigger>
+                <SelectContent>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}</SelectContent>
               </Select>
+              <Hint>How the warehouse handles the item: a service part, or a complete sellable unit.</Hint>
             </div>
             <div className="space-y-1"><Label>Brand</Label>
               <Select
@@ -869,10 +906,15 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                 <SelectTrigger><SelectValue placeholder="Select brand" /></SelectTrigger>
                 <SelectContent className="max-h-48">{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
               </Select>
+              <Hint>Pick the brand this stock belongs to. Inventory is reported per brand, so choose carefully.</Hint>
             </div>
-            <div className="space-y-1"><Label>Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} /></div>
-            <div className="space-y-1"><Label>Min Stock</Label><Input type="number" value={form.minStock} onChange={F('minStock')} /></div>
-            <div className="space-y-1"><Label>Serial Controlled</Label>
+            <div className="space-y-1"><Label>Standard Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} />
+              <Hint>Fixed cost of one unit, used to value stock on hand. It is not updated automatically when goods are received.</Hint>
+            </div>
+            <div className="space-y-1"><Label>Minimum Stock Level</Label><Input type="number" value={form.minStock} onChange={F('minStock')} />
+              <Hint>The lowest quantity you want to keep on hand. A low-stock alert is raised below it. Enter 0 for no alert.</Hint>
+            </div>
+            <div className="space-y-1"><Label>Serial Number Required</Label>
               <div className="flex items-center gap-2 pt-1">
                 <button type="button" onClick={() => setForm((f: any) => ({ ...f, serialControlled: !f.serialControlled }))}
                   className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.serialControlled ? 'bg-indigo-600' : 'bg-slate-300')}>
@@ -880,8 +922,9 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                 </button>
                 <span className="text-sm text-slate-600">{form.serialControlled ? 'Required' : 'Not required'}</span>
               </div>
+              <Hint>Turn on when every unit must be tracked by its own serial number. Receiving will then refuse an item without one.</Hint>
             </div>
-            <div className="space-y-1"><Label>Batch Controlled</Label>
+            <div className="space-y-1"><Label>Batch / Lot Number Required</Label>
               <div className="flex items-center gap-2 pt-1">
                 <button type="button" onClick={() => setForm((f: any) => ({ ...f, batchControlled: !f.batchControlled }))}
                   className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.batchControlled ? 'bg-violet-600' : 'bg-slate-300')}>
@@ -889,6 +932,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                 </button>
                 <span className="text-sm text-slate-600">{form.batchControlled ? 'Required' : 'Not required'}</span>
               </div>
+              <Hint>Turn on when stock is tracked by batch or lot instead of per unit. Receiving will then refuse an item without one.</Hint>
             </div>
             <div className="space-y-1"><Label>Product Status</Label>
               <Select value={form.productStatus} onValueChange={(v) => setForm((f: any) => ({ ...f, productStatus: v ?? 'ACTIVE' }))}>
@@ -898,14 +942,16 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                   </span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ACTIVE">Active — orderable &amp; receivable</SelectItem>
-                  <SelectItem value="INACTIVE">Inactive — hidden from receiving</SelectItem>
-                  {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life</SelectItem>}
+                  <SelectItem value="ACTIVE">Active — can be received and requested</SelectItem>
+                  <SelectItem value="INACTIVE">Inactive — temporarily not offered for receiving or requests</SelectItem>
+                  {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life, no longer offered</SelectItem>}
                 </SelectContent>
               </Select>
+              <Hint>Controls whether staff can pick this product when receiving goods or raising a request. Stock already on hand is not affected.</Hint>
             </div>
             <div className="col-span-2 space-y-1"><Label>Description</Label>
               <Textarea value={form.description} onChange={F('description')} rows={3} className="resize-y" />
+              <Hint>Extra detail that helps staff identify the item — specification, size, colour. Searchable.</Hint>
             </div>
           </div>
           <DialogFooter>
@@ -973,11 +1019,11 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
     { key: 'awbNumber',        label: 'AWB',         render: (r: any) => <span className="font-mono text-xs">{r.awbNumber || '—'}</span> },
     { key: 'invoiceNumber',    label: 'Invoice No.', render: (r: any) => <span className="font-mono text-xs">{r.invoiceNumber || '—'}</span> },
     { key: 'gswNumber',        label: 'Customer Case',     render: (r: any) => <span className="font-mono text-xs">{r.gswNumber || '—'}</span> },
-    { key: 'productType',      label: 'Type',        render: (r: any) => <Badge variant="outline" className={cn('text-[11px]', TYPE_BADGE[r.productType])}>{r.productType?.replace('_',' ')}</Badge> },
+    { key: 'productType',      label: 'Product Type', render: (r: any) => <Badge variant="outline" className={cn('text-[11px]', TYPE_BADGE[r.productType])}>{typeLabel(r.productType)}</Badge> },
     { key: 'productName',      label: 'Product',     render: (r: any) => <span className="font-medium">{r.productName}</span> },
     { key: 'model',            label: 'Model',       render: (r: any) => r.model || '—' },
-    { key: 'vendorPartNumber', label: 'Vendor P/N',  render: (r: any) => <span className="font-mono text-xs">{r.vendorPartNumber || '—'}</span> },
-    { key: 'partNumber',       label: 'Part',        render: (r: any) => <span className="font-mono text-xs">{r.partNumber || '—'}</span> },
+    { key: 'vendorPartNumber', label: 'Vendor Part #', render: (r: any) => <span className="font-mono text-xs">{r.vendorPartNumber || '—'}</span> },
+    { key: 'partNumber',       label: 'Internal Part #', render: (r: any) => <span className="font-mono text-xs">{r.partNumber || '—'}</span> },
     { key: 'serialNumber',     label: 'Serial No.',  render: (r: any) => <span className="font-mono text-xs">{r.serialNumber || '—'}</span> },
     { key: 'description',      label: 'Description', render: (r: any) => <span className="max-w-[120px] truncate block text-xs text-slate-500">{r.description || '—'}</span> },
     { key: 'warehouse',        label: 'WH',          render: (r: any) => r.warehouse || '—' },
@@ -997,7 +1043,7 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
           {[
             { label: 'Warehouse', value: whFilter, onChange: setWhFilter, options: warehouses.map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` })) },
             { label: 'Brand', value: brandFilter, onChange: setBrandFilter, options: brands.map((b) => ({ value: b.id, label: b.name })) },
-            { label: 'Type', value: typeFilter, onChange: setTypeFilter, options: PRODUCT_TYPES.map((t) => ({ value: t, label: t.replace('_',' ') })) },
+            { label: 'Product Type', value: typeFilter, onChange: setTypeFilter, options: PRODUCT_TYPES.map((t) => ({ value: t, label: typeLabel(t) })) },
           ].map(({ label, value, onChange, options }) => (
             <div key={label} className="space-y-1">
               <label className="text-xs text-slate-500">{label}</label>
@@ -1073,11 +1119,11 @@ function StockRegisterTab({ warehouses, brands }: { warehouses: any[]; brands: a
             </div>
             <div className="p-4 space-y-3">
               <div className="flex items-center gap-2">
-                <Badge variant="outline" className={cn('text-xs', TYPE_BADGE[selected.productType])}>{selected.productType?.replace('_',' ')}</Badge>
+                <Badge variant="outline" className={cn('text-xs', TYPE_BADGE[selected.productType])}>{typeLabel(selected.productType)}</Badge>
                 <Badge variant="outline" className={cn('text-xs', STATUS_BADGE[selected.status] ?? 'bg-slate-100 text-slate-600')}>{selected.status}</Badge>
               </div>
               {[{ label: 'Receiving', rows: [{ l: 'Date', v: selected.receiveDate ? new Date(selected.receiveDate).toLocaleDateString('th-TH') : '—' }, { l: 'AWB', v: selected.awbNumber || '—', m: true }, { l: 'Invoice', v: selected.invoiceNumber || '—', m: true }, { l: 'Customer Case', v: selected.gswNumber || '—', m: true }] },
-                { label: 'Product', rows: [{ l: 'Brand', v: selected.brand || '—' }, { l: 'Model', v: selected.model || '—' }, { l: 'Vendor P/N', v: selected.vendorPartNumber || '—', m: true }, { l: 'Part #', v: selected.partNumber || '—', m: true }, { l: 'Serial', v: selected.serialNumber || '—', m: true }] },
+                { label: 'Product', rows: [{ l: 'Brand', v: selected.brand || '—' }, { l: 'Model', v: selected.model || '—' }, { l: 'Vendor Part #', v: selected.vendorPartNumber || '—', m: true }, { l: 'Internal Part #', v: selected.partNumber || '—', m: true }, { l: 'Serial', v: selected.serialNumber || '—', m: true }] },
                 { label: 'Location', rows: [{ l: 'WH', v: selected.warehouse || '—' }, { l: 'Rack', v: selected.rack || '—' }, { l: 'Slot', v: selected.slot || '—' }, { l: 'Qty', v: String(selected.qty) }] },
               ].map(({ label, rows: rs }) => (
                 <div key={label}>
