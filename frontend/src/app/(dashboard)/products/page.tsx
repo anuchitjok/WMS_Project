@@ -865,99 +865,98 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
 
       {/* Create/Edit Dialog */}
       <Dialog open={open} onOpenChange={(o) => { if (o) setOpen(true); else formGuard.requestClose(); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>{editId ? 'Edit Product' : 'New Product'}</DialogTitle></DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1"><Label>Product Code (SKU) *</Label><Input value={form.code} onChange={F('code')} disabled={!!editId} />
-              <Hint>{editId
-                ? 'The permanent code for this product. It is printed on labels and scanned, so it cannot be changed after creation.'
-                : 'Your own unique code for this product (e.g. SW-C2960X). It is printed on labels and scanned in the warehouse, and cannot be changed later.'}</Hint>
-            </div>
-            <div className="space-y-1"><Label>Product Name *</Label><Input value={form.name} onChange={F('name')} />
-              <Hint>The name staff will recognise on picking and receiving lists.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Manufacturer</Label><Input value={form.manufacturer} onChange={F('manufacturer')} />
-              <Hint>The company that actually made the item. Leave blank if it is the same as the Brand.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Model</Label><Input value={form.model} onChange={F('model')} />
-              <Hint>The manufacturer&apos;s model name or number as printed on the item (e.g. TC52).</Hint>
-            </div>
-            <div className="space-y-1"><Label>Internal Part Number</Label><Input value={form.partNumber} onChange={F('partNumber')} />
-              <Hint>Your company&apos;s own part number. Must be unique across all products; leave blank if you do not use one.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Vendor Part Number</Label><Input value={form.vendorPartNumber} onChange={F('vendorPartNumber')} />
-              <Hint>The part number the supplier uses on their quotations and invoices. Reference and search only.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Product Type</Label>
-              <Select value={form.productType} onValueChange={(v) => setForm((f: any) => ({ ...f, productType: v ?? 'SPARE_PART' }))}>
-                <SelectTrigger>
-                  <span className="flex flex-1 text-left text-sm">{typeLabel(form.productType)}</span>
-                </SelectTrigger>
-                <SelectContent>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}</SelectContent>
-              </Select>
-              <Hint>How the warehouse handles the item: a service part, or a complete sellable unit.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Brand</Label>
-              <Select
-                items={brands.map((b) => ({ value: b.id, label: b.name }))}
-                value={form.brandId}
-                onValueChange={(v) => setForm((f: any) => ({ ...f, brandId: v ?? '' }))}
-              >
-                <SelectTrigger><SelectValue placeholder="Select brand" /></SelectTrigger>
-                <SelectContent className="max-h-48">{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
-              </Select>
-              <Hint>Pick the brand this stock belongs to. Inventory is reported per brand, so choose carefully.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Standard Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} />
-              <Hint>Fixed cost of one unit, used to value stock on hand. It is not updated automatically when goods are received.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Minimum Stock Level</Label><Input type="number" value={form.minStock} onChange={F('minStock')} />
-              <Hint>The lowest quantity you want to keep on hand. A low-stock alert is raised below it. Enter 0 for no alert.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Serial Number Required</Label>
-              <div className="flex items-center gap-2 pt-1">
-                <button type="button" onClick={() => setForm((f: any) => ({ ...f, serialControlled: !f.serialControlled }))}
-                  className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.serialControlled ? 'bg-indigo-600' : 'bg-slate-300')}>
-                  <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.serialControlled ? 'translate-x-6' : 'translate-x-1')} />
-                </button>
-                <span className="text-sm text-slate-600">{form.serialControlled ? 'Required' : 'Not required'}</span>
+        {/* sm:max-w-3xl (768px) gives the two columns room to breathe; the body scrolls so the actions stay put */}
+        <DialogContent className="w-full sm:max-w-3xl max-h-[85vh] overflow-hidden flex flex-col p-0 gap-0">
+          <DialogHeader className="shrink-0 px-6 pt-5 pb-4 border-b">
+            <DialogTitle>{editId ? 'Edit Product' : 'New Product'}</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto px-6 py-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-5 gap-y-4">
+              <div className="space-y-1"><Label>Product Code (SKU) *</Label><Input value={form.code} onChange={F('code')} disabled={!!editId} />
+                <Hint>{editId
+                  ? 'The permanent code for this product. It is printed on labels and scanned, so it cannot be changed after creation.'
+                  : 'Your own unique code for this product (e.g. SW-C2960X). It is printed on labels and scanned in the warehouse, and cannot be changed later.'}</Hint>
               </div>
-              <Hint>Turn on when every unit must be tracked by its own serial number. Receiving will then refuse an item without one.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Batch / Lot Number Required</Label>
-              <div className="flex items-center gap-2 pt-1">
-                <button type="button" onClick={() => setForm((f: any) => ({ ...f, batchControlled: !f.batchControlled }))}
-                  className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.batchControlled ? 'bg-violet-600' : 'bg-slate-300')}>
-                  <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.batchControlled ? 'translate-x-6' : 'translate-x-1')} />
-                </button>
-                <span className="text-sm text-slate-600">{form.batchControlled ? 'Required' : 'Not required'}</span>
+              <div className="space-y-1"><Label>Product Name *</Label><Input value={form.name} onChange={F('name')} /></div>
+              <div className="space-y-1"><Label>Manufacturer</Label><Input value={form.manufacturer} onChange={F('manufacturer')} />
+                <Hint>The company that actually made the item. Leave blank if it is the same as the Brand.</Hint>
               </div>
-              <Hint>Turn on when stock is tracked by batch or lot instead of per unit. Receiving will then refuse an item without one.</Hint>
-            </div>
-            <div className="space-y-1"><Label>Product Status</Label>
-              <Select value={form.productStatus} onValueChange={(v) => setForm((f: any) => ({ ...f, productStatus: v ?? 'ACTIVE' }))}>
-                <SelectTrigger>
-                  <span className={cn('flex flex-1 text-left text-sm', !form.productStatus && 'text-muted-foreground')}>
-                    {form.productStatus ? PRODUCT_STATUS_CFG[form.productStatus]?.label ?? form.productStatus : 'Select status'}
-                  </span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ACTIVE">Active — can be received and requested</SelectItem>
-                  <SelectItem value="INACTIVE">Inactive — temporarily not offered for receiving or requests</SelectItem>
-                  {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life, no longer offered</SelectItem>}
-                </SelectContent>
-              </Select>
-              <Hint>Controls whether staff can pick this product when receiving goods or raising a request. Stock already on hand is not affected.</Hint>
-            </div>
-            <div className="col-span-2 space-y-1"><Label>Description</Label>
-              <Textarea value={form.description} onChange={F('description')} rows={3} className="resize-y" />
-              <Hint>Extra detail that helps staff identify the item — specification, size, colour. Searchable.</Hint>
+              <div className="space-y-1"><Label>Model</Label><Input value={form.model} onChange={F('model')} /></div>
+              <div className="space-y-1"><Label>Internal Part Number</Label><Input value={form.partNumber} onChange={F('partNumber')} />
+                <Hint>Your company&apos;s own part number. Must be unique across all products; leave blank if you do not use one.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Vendor Part Number</Label><Input value={form.vendorPartNumber} onChange={F('vendorPartNumber')} />
+                <Hint>The part number the supplier uses on their quotations and invoices. Reference and search only.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Product Type</Label>
+                <Select value={form.productType} onValueChange={(v) => setForm((f: any) => ({ ...f, productType: v ?? 'SPARE_PART' }))}>
+                  <SelectTrigger>
+                    <span className="flex flex-1 text-left text-sm">{typeLabel(form.productType)}</span>
+                  </SelectTrigger>
+                  <SelectContent>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1"><Label>Brand</Label>
+                <Select
+                  items={brands.map((b) => ({ value: b.id, label: b.name }))}
+                  value={form.brandId}
+                  onValueChange={(v) => setForm((f: any) => ({ ...f, brandId: v ?? '' }))}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select brand" /></SelectTrigger>
+                  <SelectContent className="max-h-48">{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1"><Label>Standard Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} />
+                <Hint>Fixed cost of one unit, used to value stock on hand. It is not updated automatically when goods are received.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Minimum Stock Level</Label><Input type="number" value={form.minStock} onChange={F('minStock')} />
+                <Hint>The lowest quantity you want to keep on hand. A low-stock alert is raised below it. Enter 0 for no alert.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Serial Number Required</Label>
+                <div className="flex items-center gap-2 pt-1">
+                  <button type="button" onClick={() => setForm((f: any) => ({ ...f, serialControlled: !f.serialControlled }))}
+                    className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.serialControlled ? 'bg-indigo-600' : 'bg-slate-300')}>
+                    <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.serialControlled ? 'translate-x-6' : 'translate-x-1')} />
+                  </button>
+                  <span className="text-sm text-slate-600">{form.serialControlled ? 'Required' : 'Not required'}</span>
+                </div>
+                <Hint>Turn on when every unit must be tracked by its own serial number. Receiving will then refuse an item without one.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Batch / Lot Number Required</Label>
+                <div className="flex items-center gap-2 pt-1">
+                  <button type="button" onClick={() => setForm((f: any) => ({ ...f, batchControlled: !f.batchControlled }))}
+                    className={cn('relative inline-flex h-6 w-11 items-center rounded-full transition-colors', form.batchControlled ? 'bg-violet-600' : 'bg-slate-300')}>
+                    <span className={cn('inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform', form.batchControlled ? 'translate-x-6' : 'translate-x-1')} />
+                  </button>
+                  <span className="text-sm text-slate-600">{form.batchControlled ? 'Required' : 'Not required'}</span>
+                </div>
+                <Hint>Turn on when stock is tracked by batch or lot instead of per unit. Receiving will then refuse an item without one.</Hint>
+              </div>
+              <div className="space-y-1"><Label>Product Status</Label>
+                <Select value={form.productStatus} onValueChange={(v) => setForm((f: any) => ({ ...f, productStatus: v ?? 'ACTIVE' }))}>
+                  <SelectTrigger>
+                    <span className={cn('flex flex-1 text-left text-sm', !form.productStatus && 'text-muted-foreground')}>
+                      {form.productStatus ? PRODUCT_STATUS_CFG[form.productStatus]?.label ?? form.productStatus : 'Select status'}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ACTIVE">Active — can be received and requested</SelectItem>
+                    <SelectItem value="INACTIVE">Inactive — temporarily not offered for receiving or requests</SelectItem>
+                    {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life, no longer offered</SelectItem>}
+                  </SelectContent>
+                </Select>
+                <Hint>Stock already on hand is not affected.</Hint>
+              </div>
+              <div className="md:col-span-2 space-y-1"><Label>Description</Label>
+                <Textarea value={form.description} onChange={F('description')} rows={3} className="resize-y" />
+              </div>
             </div>
           </div>
-          <DialogFooter>
+          {/* Plain div, not DialogFooter — that carries -mx-4 -mb-4, which assumes the dialog's default p-4 */}
+          <div className="shrink-0 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 px-6 py-4 sm:flex-row sm:justify-end">
             <Button variant="outline" onClick={formGuard.requestClose}>Cancel</Button>
             <Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
       <DiscardChangesDialog open={formGuard.confirming} onKeepEditing={formGuard.keepEditing} onDiscard={formGuard.confirmDiscard} />
