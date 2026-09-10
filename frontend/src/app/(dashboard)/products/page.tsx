@@ -74,6 +74,10 @@ function Hint({ children }: { children: React.ReactNode }) {
   return <p className="text-[11px] leading-snug text-slate-500">{children}</p>;
 }
 
+// A select popup is sized to its trigger by default, and clips whatever does not fit.
+// These options are sentences, so let the popup grow to its content instead.
+const SELECT_POPUP_FITS_CONTENT = 'w-auto min-w-(--anchor-width) max-w-(--available-width)';
+
 function ProductStatusBadge({ status }: { status?: string }) {
   const cfg = PRODUCT_STATUS_CFG[status ?? ''] ?? { label: status || '—', bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
   return (
@@ -893,7 +897,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                   <SelectTrigger>
                     <span className="flex flex-1 text-left text-sm">{typeLabel(form.productType)}</span>
                   </SelectTrigger>
-                  <SelectContent>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}</SelectContent>
+                  <SelectContent align="start" className={SELECT_POPUP_FITS_CONTENT}>{PRODUCT_TYPES.map((t) => <SelectItem key={t} value={t}>{typeLabel(t)}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-1"><Label>Brand</Label>
@@ -903,7 +907,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                   onValueChange={(v) => setForm((f: any) => ({ ...f, brandId: v ?? '' }))}
                 >
                   <SelectTrigger><SelectValue placeholder="Select brand" /></SelectTrigger>
-                  <SelectContent className="max-h-48">{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
+                  <SelectContent align="start" className={`max-h-48 ${SELECT_POPUP_FITS_CONTENT}`}>{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div className="space-y-1"><Label>Standard Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} />
@@ -939,7 +943,7 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                       {form.productStatus ? PRODUCT_STATUS_CFG[form.productStatus]?.label ?? form.productStatus : 'Select status'}
                     </span>
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent align="start" className={SELECT_POPUP_FITS_CONTENT}>
                     <SelectItem value="ACTIVE">Active — can be received and requested</SelectItem>
                     <SelectItem value="INACTIVE">Inactive — temporarily not offered for receiving or requests</SelectItem>
                     {editId && <SelectItem value="DISCONTINUED">Discontinued — end of life, no longer offered</SelectItem>}
