@@ -6,10 +6,12 @@ import { InventoryService } from './inventory.service';
 import { CreateStockItemDto } from './dto/create-stock-item.dto';
 import { StockFilterDto } from './dto/stock-filter.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
+import { LocationDto } from '../common/location.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { UserRole, StockStatus } from '@prisma/client';
+import { StockStatus } from '@prisma/client';
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
@@ -70,16 +72,16 @@ export class InventoryController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.stockCreate)
   @ApiOperation({ summary: 'Create stock item' })
   create(@Body() dto: CreateStockItemDto, @CurrentUser('id') userId: string) {
     return this.inventoryService.create(dto, userId);
   }
 
   @Patch(':id/status')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.stockStatus)
   @ApiOperation({ summary: 'Update stock item status' })
   updateStatus(
     @Param('id') id: string,
@@ -90,12 +92,12 @@ export class InventoryController {
   }
 
   @Patch(':id/location')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.stockRelocate)
   @ApiOperation({ summary: 'Update stock item location' })
   updateLocation(
     @Param('id') id: string,
-    @Body() location: { warehouseId?: string; rackId?: string; slotId?: string },
+    @Body() location: LocationDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.inventoryService.updateLocation(id, location, userId);

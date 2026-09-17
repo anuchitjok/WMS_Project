@@ -1,8 +1,9 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
+import { createValidationPipe } from './common/validation';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: false });
@@ -34,16 +35,7 @@ async function bootstrap() {
   });
 
   // ── Input validation + sanitization ──────────────────────────────────────
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true, // strip unknown properties
-      forbidNonWhitelisted: true, // reject unknown properties
-      transform: true, // auto-cast types
-      transformOptions: { enableImplicitConversion: true },
-      forbidUnknownValues: true,
-      validationError: { target: false, value: false }, // don't echo input back
-    }),
-  );
+  app.useGlobalPipes(createValidationPipe());
 
   app.setGlobalPrefix('api');
 

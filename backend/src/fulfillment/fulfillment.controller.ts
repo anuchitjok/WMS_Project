@@ -3,6 +3,9 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { FulfillmentStatus } from '@prisma/client';
 
@@ -15,7 +18,7 @@ import { HandoverService }     from './services/handover.service';
 
 @ApiTags('Fulfillment')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AccessGuard)
 @Controller('fulfillment')
 export class FulfillmentController {
   constructor(
@@ -68,6 +71,7 @@ export class FulfillmentController {
 
   // ── ORCHESTRATION ───────────────────────────────────────────────────────────
 
+  @Access(ACCESS.fulfillment)
   @Post('allocate/:requestId')
   @ApiOperation({ summary: 'Allocate FulfillmentTask from approved request (FIFO + stock reservation)' })
   allocate(
@@ -77,6 +81,7 @@ export class FulfillmentController {
     return this.allocation.allocate(requestId, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/advance')
   @ApiOperation({ summary: 'Advance status one step in the pipeline' })
   advance(
@@ -87,6 +92,7 @@ export class FulfillmentController {
     return this.svc.advance(id, userId, body);
   }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/exception')
   @ApiOperation({ summary: 'Set exception status (SHORT_PICK / DAMAGED / HOLD / CANCELLED)' })
   setException(
@@ -99,6 +105,7 @@ export class FulfillmentController {
 
   // ── PICKING EXECUTION ───────────────────────────────────────────────────────
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/items/:itemId/pick')
   @ApiOperation({ summary: 'Confirm pick for one item (double-pick prevention + inventory transaction)' })
   confirmPick(
@@ -112,12 +119,14 @@ export class FulfillmentController {
 
   // ── PACKING EXECUTION ───────────────────────────────────────────────────────
 
+  @Access(ACCESS.fulfillment)
   @Post(':id/packing/start')
   @ApiOperation({ summary: 'Start packing session' })
   startPacking(@Param('id') taskId: string, @CurrentUser('id') userId: string) {
     return this.packing.startPacking(taskId, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/packing')
   @ApiOperation({ summary: 'Update packing session (cartons, weight, notes)' })
   updatePacking(
@@ -128,6 +137,7 @@ export class FulfillmentController {
     return this.packing.updatePacking(taskId, dto, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Post(':id/packing/complete')
   @ApiOperation({ summary: 'Complete packing → status PACKED' })
   completePacking(@Param('id') taskId: string, @CurrentUser('id') userId: string) {
@@ -136,6 +146,7 @@ export class FulfillmentController {
 
   // ── DISPATCH (GOODS ISSUE) ──────────────────────────────────────────────────
 
+  @Access(ACCESS.fulfillment)
   @Post(':id/shipment')
   @ApiOperation({ summary: 'Create shipment for a PACKED task' })
   createShipment(
@@ -146,6 +157,7 @@ export class FulfillmentController {
     return this.dispatch.createShipment(taskId, dto, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Post('shipments/:shipmentId/dispatch')
   @ApiOperation({ summary: 'Confirm dispatch — triggers Goods Issue (stock deduction)' })
   confirmDispatch(
@@ -157,6 +169,7 @@ export class FulfillmentController {
 
   // ── HANDOVER & DELIVERY ─────────────────────────────────────────────────────
 
+  @Access(ACCESS.fulfillment)
   @Post('shipments/:shipmentId/deliver')
   @ApiOperation({ summary: 'Confirm delivery with optional POD reference' })
   confirmDelivery(
@@ -167,6 +180,7 @@ export class FulfillmentController {
     return this.handover.confirmDelivery(shipmentId, dto, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Post(':id/handover/rma')
   @ApiOperation({ summary: 'Issue to RMA — confirms physical handover to requester' })
   issueToRma(
@@ -177,6 +191,7 @@ export class FulfillmentController {
     return this.handover.issueToRma(taskId, body, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Post(':id/cancel')
   @ApiOperation({ summary: 'Cancel task and release stock reservations' })
   cancel(

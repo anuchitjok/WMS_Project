@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Param, Query, UploadedFile, UseInterceptors, UseGuards, Res, BadRequestException,
+  Controller, Get, Post, Param, Query, UploadedFile, UseInterceptors, UseGuards, Res, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiConsumes, ApiOperation } from '@nestjs/swagger';
@@ -7,10 +7,11 @@ import type { Response } from 'express';
 import { DataioService } from './dataio.service';
 import { ImportService } from './import.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
+import { hasAccess } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { UserRole } from '@prisma/client';
 import { ImportType, ExportType, IMPORT_SCHEMAS } from './import-schemas';
 
 const UPLOAD_OPTS = { limits: { fileSize: 10 * 1024 * 1024 } }; // 10 MB cap
@@ -43,8 +44,8 @@ export class DataioController {
   }
 
   @Post('import/:type/preview')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.dataImport)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Parse + validate upload, return preview (no save)' })
@@ -53,8 +54,8 @@ export class DataioController {
   }
 
   @Post('import/:type/commit')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.dataImport)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Import valid rows (partial), rollback on critical failure' })
@@ -72,9 +73,12 @@ export class DataioController {
     @Param('type') type: string,
     @Query('format') format: string,
     @Res() res: Response,
+    @CurrentUser() user: any,
   ) {
     const valid: ExportType[] = ['inventory', 'audit', 'requests', 'reports'];
     if (!valid.includes(type as ExportType)) throw new BadRequestException(`Unknown export type: ${type}`);
+    // The audit trail (users, IPs, every action) needs the same rights as /audit.
+    if (type === 'audit' && !hasAccess(user, ACCESS.auditExport)) throw new ForbiddenException('Insufficient permissions');
     const fmt = format === 'csv' ? 'csv' : 'xlsx';
     const buf = await this.dataio.export(type as ExportType, fmt);
     const mime = fmt === 'csv'

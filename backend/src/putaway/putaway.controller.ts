@@ -3,6 +3,10 @@ import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { PutawayService } from './putaway.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
+import { LocationDto } from '../common/location.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
@@ -27,11 +31,11 @@ export class PutawayController {
   }
 
   @Patch(':stockItemId/confirm')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.putaway)
   confirm(
     @Param('stockItemId') stockItemId: string,
-    @Body() location: { warehouseId?: string; rackId?: string; slotId?: string },
+    @Body() location: LocationDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.service.confirm(stockItemId, location, userId);

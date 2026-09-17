@@ -1,13 +1,16 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { FulfillmentStatus } from '@prisma/client';
+import { claimTaskStatus } from './task-state';
+import { PickingService } from './picking.service';
 
 @Injectable()
 export class PackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
+    private readonly picking: PickingService,
   ) {}
 
   async startPacking(taskId: string, userId: string) {
@@ -21,16 +24,13 @@ export class PackingService {
     if (existing) return existing; // idempotent
 
     const session = await this.prisma.$transaction(async (tx) => {
+      if (task.status === FulfillmentStatus.PICKED) {
+        await claimTaskStatus(tx, taskId, [FulfillmentStatus.PICKED], FulfillmentStatus.PACKING, {
+          packedById: userId,
+        });
+      }
       const s = await tx.packingSession.create({
         data: { taskId, packedById: userId, cartonCount: 1 },
-      });
-      await tx.fulfillmentTask.update({
-        where: { id: taskId },
-        data: {
-          status: FulfillmentStatus.PACKING,
-          packedById: userId,
-          version: { increment: 1 },
-        },
       });
       await tx.fulfillmentTimeline.create({
         data: {
@@ -56,7 +56,9 @@ export class PackingService {
   ) {
     const session = await this.prisma.packingSession.findUnique({ where: { taskId } });
     if (!session) throw new NotFoundException('Packing session not found');
-    return this.prisma.packingSession.update({ where: { taskId }, data: dto });
+    if (session.completedAt) throw new ConflictException('Packing is already completed');
+    const { cartonCount, totalWeight, notes } = dto;
+    return this.prisma.packingSession.update({ where: { taskId }, data: { cartonCount, totalWeight, notes } });
   }
 
   async completePacking(taskId: string, userId: string) {
@@ -64,6 +66,20 @@ export class PackingService {
     if (!session) throw new NotFoundException('Packing session not found');
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Tasks advanced before pick tracking reach PACKING with unpicked lines. The
+      // goods are physically packed, so confirm those picks now (audited) rather
+      // than leaving the reserved stock unaccounted for.
+      const unpicked = await tx.fulfillmentTaskItem.findMany({ where: { taskId, pickedAt: null } });
+      for (const it of unpicked) {
+        await this.picking.pickInTx(tx, taskId, it.id, it.qtyRequested, userId, {
+          note: 'Pick confirmed at packing (task advanced without item picks)',
+          allowStatuses: [FulfillmentStatus.PACKING],
+        });
+      }
+
+      await claimTaskStatus(tx, taskId, [FulfillmentStatus.PACKING], FulfillmentStatus.PACKED, {
+        packedAt: new Date(),
+      });
       const s = await tx.packingSession.update({
         where: { taskId },
         data: {
@@ -72,14 +88,7 @@ export class PackingService {
           labelPrintedAt: new Date(),
         },
       });
-      const t = await tx.fulfillmentTask.update({
-        where: { id: taskId },
-        data: {
-          status: FulfillmentStatus.PACKED,
-          packedAt: new Date(),
-          version: { increment: 1 },
-        },
-      });
+      const t = await tx.fulfillmentTask.findUniqueOrThrow({ where: { id: taskId } });
       await tx.fulfillmentTimeline.create({
         data: {
           taskId,

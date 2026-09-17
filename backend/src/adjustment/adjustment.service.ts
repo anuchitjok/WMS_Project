@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { ON_HAND_UNCOMMITTED } from '../common/stock-state';
 import { PrismaService } from '../prisma/prisma.service';
 import { nanoid } from 'nanoid';
 
@@ -36,7 +37,9 @@ export class AdjustmentService {
     return adj;
   }
 
-  // Approve adjustment and apply quantity change to linked stock item
+  // Approve adjustment and apply quantity change to linked stock item.
+  // The change applies only if the stock still holds `quantityBefore` and is on
+  // hand; otherwise the stock moved since the request and the approval is refused.
   async approve(id: string, userId: string) {
     const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
     if (!adj) throw new NotFoundException('Adjustment not found');
@@ -44,13 +47,25 @@ export class AdjustmentService {
 
     // Atomic: apply quantity change + mark completed + audit in one transaction
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (adj.stockItemId) {
-        await tx.stockItem.update({ where: { id: adj.stockItemId }, data: { quantity: adj.quantityAfter } });
-      }
-      const result = await tx.stockAdjustment.update({
-        where: { id },
+      const claimed = await tx.stockAdjustment.updateMany({
+        where: { id, status: 'PENDING_APPROVAL' },
         data: { status: 'COMPLETED', approvedById: userId, approvedAt: new Date() },
       });
+      if (claimed.count === 0) throw new ConflictException('Adjustment has already been decided');
+
+      if (adj.stockItemId) {
+        const applied = await tx.stockItem.updateMany({
+          where: { id: adj.stockItemId, quantity: adj.quantityBefore, status: { in: ON_HAND_UNCOMMITTED } },
+          data: { quantity: adj.quantityAfter },
+        });
+        if (applied.count === 0) {
+          const stock = await tx.stockItem.findUnique({ where: { id: adj.stockItemId }, select: { quantity: true, status: true } });
+          if (!stock) throw new NotFoundException('Stock item not found');
+          throw new ConflictException(
+            `Stock changed since the adjustment was requested (now ${stock.quantity}, ${stock.status}; expected ${adj.quantityBefore}) — submit a new adjustment`,
+          );
+        }
+      }
       await tx.auditLog.create({
         data: {
           userId,
@@ -60,7 +75,7 @@ export class AdjustmentService {
           detail: `${adj.quantityBefore} → ${adj.quantityAfter}`,
         },
       });
-      return result;
+      return tx.stockAdjustment.findUniqueOrThrow({ where: { id } });
     });
     return updated;
   }
@@ -69,7 +84,11 @@ export class AdjustmentService {
     const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
     if (!adj) throw new NotFoundException('Adjustment not found');
     if (adj.status !== 'PENDING_APPROVAL') throw new BadRequestException('Adjustment is not pending approval');
-    const updated = await this.prisma.stockAdjustment.update({ where: { id }, data: { status: 'REJECTED', approvedById: userId } });
+    const claimed = await this.prisma.stockAdjustment.updateMany({
+      where: { id, status: 'PENDING_APPROVAL' },
+      data: { status: 'REJECTED', approvedById: userId },
+    });
+    if (claimed.count === 0) throw new ConflictException('Adjustment has already been decided');
     await this.prisma.auditLog.create({
       data: {
         userId,
@@ -79,6 +98,6 @@ export class AdjustmentService {
         detail: `${adj.refNumber} · ${adj.quantityBefore} → ${adj.quantityAfter}`,
       },
     });
-    return updated;
+    return this.prisma.stockAdjustment.findUniqueOrThrow({ where: { id } });
   }
 }

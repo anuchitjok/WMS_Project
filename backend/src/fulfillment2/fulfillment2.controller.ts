@@ -6,12 +6,15 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { Fulfillment2Service } from './fulfillment2.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { FulfillmentStatus } from '@prisma/client';
 
 @ApiTags('Fulfillment v2')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AccessGuard)
 @Controller('fulfillment2')
 export class Fulfillment2Controller {
   constructor(private readonly svc: Fulfillment2Service) {}
@@ -33,12 +36,14 @@ export class Fulfillment2Controller {
   @Get(':id')
   findOne(@Param('id') id: string) { return this.svc.findOne(id); }
 
+  @Access(ACCESS.fulfillment)
   @Post('allocate/:requestId')
   @ApiOperation({ summary: 'Allocate a FulfillmentTask from an approved request (FIFO)' })
   allocate(@Param('requestId') requestId: string, @CurrentUser('id') userId: string) {
     return this.svc.allocate(requestId, userId);
   }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/advance')
   @ApiOperation({ summary: 'Advance status one step in the pipeline' })
   advance(
@@ -47,6 +52,7 @@ export class Fulfillment2Controller {
     @CurrentUser('id') userId: string,
   ) { return this.svc.advance(id, userId, body); }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/items/:itemId/pick')
   @ApiOperation({ summary: 'Confirm pick for one item (double-pick prevention)' })
   confirmPick(
@@ -56,6 +62,7 @@ export class Fulfillment2Controller {
     @CurrentUser('id') userId: string,
   ) { return this.svc.confirmPick(id, itemId, body.qty ?? 1, userId, body.barcode); }
 
+  @Access(ACCESS.fulfillment)
   @Patch(':id/exception')
   @ApiOperation({ summary: 'Set exception status (SHORT_PICK/DAMAGED/HOLD/CANCELLED)' })
   setException(

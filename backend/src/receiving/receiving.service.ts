@@ -4,6 +4,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus, OwnershipType, ReceivingStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { InspectReceivingDto } from './dto/inspect-receiving.dto';
+import { transitionStock } from '../common/stock-state';
 
 interface CreateReceivingDto {
   sourceType: string;
@@ -163,6 +164,33 @@ export class ReceivingService {
   // old single-click verify() for new records; verify() is kept for backward compat.
   async inspect(id: string, dto: InspectReceivingDto, userId: string) {
     const gr = await this.findOne(id);
+    if (gr.statusEnum === ReceivingStatus.CANCELLED) throw new ConflictException('Receiving record is cancelled');
+
+    // Validate every line before writing anything.
+    for (const inspectItem of dto.items) {
+      const grItem = gr.items.find((i) => i.id === inspectItem.itemId);
+      if (!grItem) throw new NotFoundException(`Item ${inspectItem.itemId} not found in GR ${id}`);
+      if (grItem.inspectionOutcome) throw new ConflictException(`Item ${inspectItem.itemId} has already been inspected`);
+      if (inspectItem.inspectedQty > grItem.quantity) {
+        throw new BadRequestException(
+          `Inspected quantity ${inspectItem.inspectedQty} exceeds received quantity ${grItem.quantity} for item ${inspectItem.itemId}`,
+        );
+      }
+      const correctedSerial = inspectItem.serialNumber && inspectItem.serialNumber !== grItem.stockItem?.serialNumber
+        ? inspectItem.serialNumber
+        : null;
+      if (correctedSerial && correctedSerial !== 'N/A') {
+        const dup = await this.prisma.stockItem.findFirst({
+          where: {
+            serialNumber: correctedSerial,
+            id: { not: grItem.stockItemId ?? undefined },
+            status: { notIn: [StockStatus.CONSUMED, StockStatus.SHIPPED, StockStatus.CLOSED, StockStatus.CANCELLED] },
+          },
+          select: { id: true },
+        });
+        if (dup) throw new ConflictException(`Serial number already exists in active stock: ${correctedSerial}`);
+      }
+    }
 
     const allGood        = dto.items.every((i) => i.inspectionOutcome === 'good');
     const allRejected    = dto.items.every((i) => i.inspectionOutcome === 'wrong_item');
@@ -170,12 +198,11 @@ export class ReceivingService {
 
     await this.prisma.$transaction(async (tx) => {
       for (const inspectItem of dto.items) {
-        const grItem = gr.items.find((i) => i.id === inspectItem.itemId);
-        if (!grItem) throw new NotFoundException(`Item ${inspectItem.itemId} not found in GR ${id}`);
+        const grItem = gr.items.find((i) => i.id === inspectItem.itemId)!;
 
-        // Update inspection fields on the receiving item
-        await tx.goodsReceivingItem.update({
-          where: { id: grItem.id },
+        // Claim the line: a concurrent or repeated inspection matches zero rows.
+        const claimed = await tx.goodsReceivingItem.updateMany({
+          where: { id: grItem.id, inspectionOutcome: null },
           data: {
             inspectedQty: inspectItem.inspectedQty,
             inspectionOutcome: inspectItem.inspectionOutcome,
@@ -184,6 +211,7 @@ export class ReceivingService {
             ...(inspectItem.batchNumber  && { batchNumber:  inspectItem.batchNumber }),
           },
         });
+        if (claimed.count === 0) throw new ConflictException(`Item ${grItem.id} has already been inspected`);
 
         // Route stock based on inspection outcome
         if (grItem.stockItem) {
@@ -211,9 +239,13 @@ export class ReceivingService {
               newStatus = StockStatus.PENDING_INSPECTION;
           }
 
-          await tx.stockItem.update({
-            where: { id: grItem.stockItem.id },
-            data: { status: newStatus, quantity: finalQty },
+          // Only stock still awaiting inspection may be routed — never stock that
+          // was already put away, reserved or issued.
+          await transitionStock(tx, grItem.stockItem.id, [StockStatus.PENDING_RECEIVING], newStatus, {
+            quantity: finalQty,
+            // A serial/batch corrected at inspection must reach the stock record too.
+            ...(inspectItem.serialNumber && { serialNumber: inspectItem.serialNumber }),
+            ...(inspectItem.batchNumber  && { batchNumber:  inspectItem.batchNumber }),
           });
 
           // Create discrepancy record for flagged outcomes
@@ -266,20 +298,25 @@ export class ReceivingService {
   // Legacy single-click verify — kept for backward compat; routes by stored condition.
   async verify(id: string, userId: string) {
     const gr = await this.findOne(id);
-    for (const item of gr.items) {
-      if (!item.stockItem) continue;
-      let newStatus: StockStatus;
-      if (item.condition === 'doa') newStatus = StockStatus.RTV_PENDING;
-      else if (item.condition === 'damaged') newStatus = StockStatus.QUARANTINE;
-      else newStatus = StockStatus.PENDING_INSPECTION;
-      await this.prisma.stockItem.update({ where: { id: item.stockItem.id }, data: { status: newStatus } });
-    }
-    await this.prisma.goodsReceiving.update({
-      where: { id },
-      data: { status: 'completed', statusEnum: ReceivingStatus.COMPLETED },
-    });
-    await this.prisma.auditLog.create({
-      data: { userId, action: 'RECEIVING_VERIFIED', entityType: 'GoodsReceiving', entityId: id, detail: gr.refNumber },
+    await this.prisma.$transaction(async (tx) => {
+      // Claim the receipt: a verified (or inspected) receipt cannot be verified again.
+      const claimed = await tx.goodsReceiving.updateMany({
+        where: { id, status: { not: 'completed' } },
+        data: { status: 'completed', statusEnum: ReceivingStatus.COMPLETED },
+      });
+      if (claimed.count === 0) throw new ConflictException('Receiving record has already been verified or inspected');
+
+      for (const item of gr.items) {
+        if (!item.stockItem || item.inspectionOutcome) continue;
+        let newStatus: StockStatus;
+        if (item.condition === 'doa') newStatus = StockStatus.RTV_PENDING;
+        else if (item.condition === 'damaged') newStatus = StockStatus.QUARANTINE;
+        else newStatus = StockStatus.PENDING_INSPECTION;
+        await transitionStock(tx, item.stockItem.id, [StockStatus.PENDING_RECEIVING], newStatus);
+      }
+      await tx.auditLog.create({
+        data: { userId, action: 'RECEIVING_VERIFIED', entityType: 'GoodsReceiving', entityId: id, detail: gr.refNumber },
+      });
     });
     this.realtime.emitInventoryUpdate({ action: 'verified', id });
     return this.findOne(id);
