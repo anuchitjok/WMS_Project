@@ -2,15 +2,16 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RtvService } from './rtv.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { UserRole, RTVStatus } from '@prisma/client';
+import { RTVStatus } from '@prisma/client';
 
 @ApiTags('RTV')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.RTV_OFFICER)
+@UseGuards(JwtAuthGuard, AccessGuard)
+@Access(ACCESS.rtv)
 @Controller('rtv')
 export class RtvController {
   constructor(private readonly rtvService: RtvService) {}

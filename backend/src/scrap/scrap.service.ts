@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ScrapStatus } from '@prisma/client';
+import { ScrapStatus, StockStatus } from '@prisma/client';
+import { ON_HAND_UNCOMMITTED, transitionStock } from '../common/stock-state';
 import { nanoid } from 'nanoid';
 
 @Injectable()
@@ -44,6 +45,22 @@ export class ScrapService {
     data: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
     requestedById: string,
   ) {
+    const stock = await this.prisma.stockItem.findUnique({ where: { id: data.stockItemId } });
+    if (!stock) throw new NotFoundException('Stock item not found');
+    if (!data.reason || typeof data.reason !== 'string') throw new BadRequestException('reason is required');
+    const quantity = data.quantity ?? 1;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > stock.quantity) {
+      throw new BadRequestException(`quantity must be a whole number between 1 and ${stock.quantity}`);
+    }
+    if (!ON_HAND_UNCOMMITTED.includes(stock.status)) {
+      throw new BadRequestException(`Stock in status ${stock.status} cannot be scrapped`);
+    }
+    const open = await this.prisma.scrapCase.findFirst({
+      where: { stockItemId: data.stockItemId, status: { in: [ScrapStatus.PENDING_REVIEW, ScrapStatus.APPROVED] } },
+      select: { refNumber: true },
+    });
+    if (open) throw new ConflictException(`Stock item already has an open scrap case: ${open.refNumber}`);
+
     const scrap = await this.prisma.scrapCase.create({
       data: {
         refNumber: this.genRef(),
@@ -51,7 +68,7 @@ export class ScrapService {
         reason: data.reason,
         description: data.description,
         disposalMethod: data.disposalMethod,
-        quantity: data.quantity ?? 1,
+        quantity,
         requestedById,
       },
     });
@@ -83,16 +100,48 @@ export class ScrapService {
     if (status === 'APPROVED') { extra.approvedById = actorId; extra.approvedAt = new Date(); }
     if (status === 'DISPOSED') extra.disposedAt = new Date();
 
-    const updated = await this.prisma.scrapCase.update({ where: { id }, data: { status, ...extra } });
-    await this.prisma.auditLog.create({
-      data: {
-        userId: actorId,
-        action: 'SCRAP_STATUS_CHANGED',
-        entityType: 'ScrapCase',
-        entityId: id,
-        detail: `${scrap.refNumber}: ${scrap.status} → ${status}`,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      // Claim the transition: a double click cannot dispose (and deduct) twice.
+      const claimed = await tx.scrapCase.updateMany({ where: { id, status: scrap.status }, data: { status, ...extra } });
+      if (claimed.count === 0) throw new ConflictException('Scrap case was changed by someone else — reload and retry');
+
+      // Disposal removes the goods from inventory: the scrapped quantity leaves the
+      // row, or the whole row is closed when nothing remains.
+      if (status === 'DISPOSED') {
+        const stock = await tx.stockItem.findUnique({ where: { id: scrap.stockItemId } });
+        if (!stock) throw new NotFoundException('Stock item not found');
+        if (stock.quantity > scrap.quantity && !stock.serialNumber) {
+          const reduced = await tx.stockItem.updateMany({
+            where: { id: stock.id, quantity: stock.quantity, status: { in: ON_HAND_UNCOMMITTED } },
+            data: { quantity: stock.quantity - scrap.quantity },
+          });
+          if (reduced.count === 0) {
+            throw new ConflictException(`Stock item is ${stock.status} and cannot be scrapped`);
+          }
+        } else {
+          await transitionStock(tx, stock.id, ON_HAND_UNCOMMITTED, StockStatus.CLOSED);
+        }
+        await tx.auditLog.create({
+          data: {
+            userId: actorId,
+            action: 'STOCK_SCRAPPED',
+            entityType: 'StockItem',
+            entityId: stock.id,
+            detail: `${scrap.refNumber}: ${scrap.quantity} disposed`,
+          },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'SCRAP_STATUS_CHANGED',
+          entityType: 'ScrapCase',
+          entityId: id,
+          detail: `${scrap.refNumber}: ${scrap.status} → ${status}`,
+        },
+      });
+      return tx.scrapCase.findUniqueOrThrow({ where: { id } });
     });
-    return updated;
   }
 }

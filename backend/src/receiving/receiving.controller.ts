@@ -9,17 +9,14 @@ import { ReceivingService } from './receiving.service';
 import { ReceivingImportService } from './receiving-import.service';
 import type { ReceivingImportHeader } from './receiving-import.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateReceivingDto } from './dto/create-receiving.dto';
 import { InspectReceivingDto } from './dto/inspect-receiving.dto';
-import { UserRole } from '@prisma/client';
 
 const UPLOAD_OPTS = { limits: { fileSize: 10 * 1024 * 1024 } }; // 10 MB cap
-const RECEIVE_ROLES = [
-  UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF,
-] as const;
 
 @ApiTags('Receiving')
 @ApiBearerAuth()
@@ -49,8 +46,8 @@ export class ReceivingController {
   }
 
   @Post('import/preview')
-  @UseGuards(RolesGuard)
-  @Roles(...RECEIVE_ROLES)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receiving)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Parse + validate receiving file, return preview (no save)' })
@@ -59,8 +56,8 @@ export class ReceivingController {
   }
 
   @Post('import/commit')
-  @UseGuards(RolesGuard)
-  @Roles(...RECEIVE_ROLES)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receiving)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Create one Goods Receiving from valid file rows' })
@@ -78,23 +75,23 @@ export class ReceivingController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receiving)
   create(@Body() dto: CreateReceivingDto, @CurrentUser('id') userId: string) {
     return this.service.create(dto, userId);
   }
 
   @Patch(':id/inspect')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receiving)
   @ApiOperation({ summary: 'Submit per-item inspection outcomes — drives final stock routing' })
   inspect(@Param('id') id: string, @Body() dto: InspectReceivingDto, @CurrentUser('id') userId: string) {
     return this.service.inspect(id, dto, userId);
   }
 
   @Patch(':id/verify')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receiving)
   @ApiOperation({ summary: 'Legacy single-click verify (backward compat)' })
   verify(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.service.verify(id, userId);

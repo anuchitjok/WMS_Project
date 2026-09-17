@@ -2,10 +2,12 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { RequestsService } from './requests.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateRequestDto } from './dto/create-request.dto';
+import { ApproveRequestDto } from './dto/approve-request.dto';
 import { UserRole, RequestStatus } from '@prisma/client';
 
 @ApiTags('Requests')
@@ -61,16 +63,16 @@ export class RequestsController {
   }
 
   @Patch(':id/cancel')
-  cancel(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.requestsService.cancel(id, userId);
+  cancel(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.requestsService.cancel(id, user);
   }
 
   @Patch(':id/approve')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.DEPT_APPROVER)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.requestApprove)
   approve(
     @Param('id') id: string,
-    @Body() body: { approved: boolean; rejectReason?: string },
+    @Body() body: ApproveRequestDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.requestsService.approve(id, userId, body.approved, body.rejectReason);

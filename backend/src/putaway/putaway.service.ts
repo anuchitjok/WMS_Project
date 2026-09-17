@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus } from '@prisma/client';
 import { boxFitsSlot } from './putaway-fit.util';
+import { LocationInput, resolveLocation, transitionStock } from '../common/stock-state';
 
 @Injectable()
 export class PutawayService {
@@ -47,29 +48,26 @@ export class PutawayService {
     });
   }
 
-  // Confirm putaway: assign location and set AVAILABLE
-  async confirm(
-    stockItemId: string,
-    location: { warehouseId?: string; rackId?: string; slotId?: string },
-    userId: string,
-  ) {
-    const item = await this.prisma.stockItem.findUnique({ where: { id: stockItemId } });
-    if (!item) throw new NotFoundException('Stock item not found');
-
-    const updated = await this.prisma.stockItem.update({
-      where: { id: stockItemId },
-      data: { ...location, status: StockStatus.AVAILABLE },
-      include: { product: true, warehouse: true, rack: true, slot: true },
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'PUTAWAY_CONFIRMED',
-        entityType: 'StockItem',
-        entityId: stockItemId,
-        detail: `Stored & made available`,
-      },
+  // Confirm putaway: assign location and set AVAILABLE.
+  // Only stock waiting in the putaway queue (PENDING_INSPECTION) can be put away,
+  // and only into a location that exists in the Warehouse → Rack → Slot hierarchy.
+  async confirm(stockItemId: string, location: LocationInput, userId: string) {
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const loc = await resolveLocation(tx, location);
+      await transitionStock(tx, stockItemId, [StockStatus.PENDING_INSPECTION], StockStatus.AVAILABLE, loc);
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'PUTAWAY_CONFIRMED',
+          entityType: 'StockItem',
+          entityId: stockItemId,
+          detail: `Stored & made available`,
+        },
+      });
+      return tx.stockItem.findUniqueOrThrow({
+        where: { id: stockItemId },
+        include: { product: true, warehouse: true, rack: true, slot: true },
+      });
     });
     this.realtime.emitInventoryUpdate({ action: 'putaway', item: updated });
     return updated;

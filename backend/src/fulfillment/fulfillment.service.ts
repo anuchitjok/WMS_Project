@@ -1,19 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { FulfillmentStatus } from '@prisma/client';
-
-const STATUS_ORDER: FulfillmentStatus[] = [
-  FulfillmentStatus.ALLOCATED,
-  FulfillmentStatus.PICKING,
-  FulfillmentStatus.PICKED,
-  FulfillmentStatus.PACKING,
-  FulfillmentStatus.PACKED,
-  FulfillmentStatus.READY_TO_SHIP,
-  FulfillmentStatus.SHIPPED,
-  FulfillmentStatus.DELIVERED,
-  FulfillmentStatus.CLOSED,
-];
+import { FulfillmentStatus, Prisma } from '@prisma/client';
+import { PickingService } from './services/picking.service';
+import { PackingService } from './services/packing.service';
+import { HandoverService } from './services/handover.service';
+import { claimTaskStatus, CANCELLABLE_TASK_STATUSES } from './services/task-state';
 
 const EXCEPTION_STATUSES: FulfillmentStatus[] = [
   FulfillmentStatus.SHORT_PICK,
@@ -31,6 +23,9 @@ export class FulfillmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
+    private readonly picking: PickingService,
+    private readonly packing: PackingService,
+    private readonly handover: HandoverService,
   ) {}
 
   // Kanban board grouped into operational lanes
@@ -109,31 +104,69 @@ export class FulfillmentService {
     return t;
   }
 
-  // Advance a task one step through the status pipeline
+  // Advance a task one step through the status pipeline.
+  // Each step runs through the service that owns it, so "Next" can never skip a
+  // warehouse step: picking confirms the picks (stock → PICKED), packing opens and
+  // completes the packing session, delivery requires a dispatched shipment, and the
+  // goods issue itself is never skipped — PACKED / READY_TO_SHIP must use Ship.
   async advance(
     taskId: string,
     userId: string,
     data?: { notes?: string; barcode?: string; deviceId?: string },
   ) {
     const task = await this.findOne(taskId);
-    const idx = STATUS_ORDER.indexOf(task.status);
-    if (idx < 0) throw new BadRequestException(`Status ${task.status} is not in the advancement pipeline`);
-    if (idx >= STATUS_ORDER.length - 1) throw new BadRequestException('Task already at final status');
+    const F = FulfillmentStatus;
 
+    switch (task.status) {
+      case F.ALLOCATED:
+        await this.plainAdvance(task, F.PICKING, userId, data);
+        break;
+      case F.PICKING:
+        await this.picking.confirmAllRemaining(taskId, userId, data?.barcode);
+        break;
+      case F.PICKED:
+        await this.packing.startPacking(taskId, userId);
+        break;
+      case F.PACKING:
+        await this.packing.completePacking(taskId, userId);
+        break;
+      case F.PACKED:
+      case F.READY_TO_SHIP:
+        throw new BadRequestException(
+          'Goods issue cannot be skipped — create the shipment and confirm dispatch (Ship)',
+        );
+      case F.SHIPPED:
+        if (!task.shipment) throw new BadRequestException('Task has no shipment to deliver');
+        await this.handover.confirmDelivery(task.shipment.id, { notes: data?.notes }, userId);
+        break;
+      case F.DELIVERED:
+        await this.plainAdvance(task, F.CLOSED, userId, data);
+        break;
+      default:
+        if (task.status === F.CLOSED) throw new BadRequestException('Task already at final status');
+        throw new BadRequestException(`Status ${task.status} is not in the advancement pipeline`);
+    }
+
+    const updated = await this.prisma.fulfillmentTask.findUniqueOrThrow({ where: { id: taskId } });
+    this.realtime.emitRequestUpdate({ action: 'fulfillment_advance', taskId, status: updated.status });
+    return updated;
+  }
+
+  /** A status step with no stock effect (ALLOCATED → PICKING, DELIVERED → CLOSED). */
+  private async plainAdvance(
+    task: { id: string; status: FulfillmentStatus; warehouseId: string | null },
+    toStatus: FulfillmentStatus,
+    userId: string,
+    data?: { notes?: string; barcode?: string; deviceId?: string },
+  ) {
     const fromStatus = task.status;
-    const toStatus = STATUS_ORDER[idx + 1];
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const updates: any = { status: toStatus, version: { increment: 1 } };
-      if (toStatus === FulfillmentStatus.PICKING) updates.pickedById = userId;
-      if (toStatus === FulfillmentStatus.PICKED)  updates.pickedAt = new Date();
-      if (toStatus === FulfillmentStatus.PACKING) updates.packedById = userId;
-      if (toStatus === FulfillmentStatus.PACKED)  updates.packedAt = new Date();
-
-      const t = await tx.fulfillmentTask.update({ where: { id: taskId }, data: updates });
+    await this.prisma.$transaction(async (tx) => {
+      const extra: Prisma.FulfillmentTaskUncheckedUpdateManyInput = {};
+      if (toStatus === FulfillmentStatus.PICKING) extra.pickedById = userId;
+      await claimTaskStatus(tx, task.id, [fromStatus], toStatus, extra);
       await tx.fulfillmentTimeline.create({
         data: {
-          taskId,
+          taskId: task.id,
           fromStatus,
           toStatus,
           description: data?.notes ?? `Advanced by operator`,
@@ -148,15 +181,11 @@ export class FulfillmentService {
           userId,
           action: 'FULFILLMENT_ADVANCE',
           entityType: 'FulfillmentTask',
-          entityId: taskId,
+          entityId: task.id,
           detail: `${fromStatus} → ${toStatus}`,
         },
       });
-      return t;
     });
-
-    this.realtime.emitRequestUpdate({ action: 'fulfillment_advance', taskId, status: toStatus });
-    return updated;
   }
 
   // Set exception status (SHORT_PICK / DAMAGED / HOLD / CANCELLED / RETURNED)
@@ -169,12 +198,22 @@ export class FulfillmentService {
     if (!EXCEPTION_STATUSES.includes(status)) {
       throw new BadRequestException(`${status} is not a valid exception status`);
     }
+    // Cancelling must release the reserved / picked stock, not just flip the status.
+    if (status === FulfillmentStatus.CANCELLED) {
+      return this.handover.releaseAndCancel(taskId, userId, reason);
+    }
     const task = await this.findOne(taskId);
+    // RETURNED describes goods that already left; the hold-type exceptions only
+    // apply while the stock is still in the warehouse.
+    const allowedFrom =
+      status === FulfillmentStatus.RETURNED
+        ? [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED]
+        : CANCELLABLE_TASK_STATUSES;
+    if (status !== FulfillmentStatus.RETURNED && task.shipment?.shippedAt) {
+      throw new BadRequestException('Goods already issued — use RETURNED instead');
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
-      const t = await tx.fulfillmentTask.update({
-        where: { id: taskId },
-        data: { status, version: { increment: 1 } },
-      });
+      await claimTaskStatus(tx, taskId, allowedFrom, status);
       await tx.fulfillmentTimeline.create({
         data: {
           taskId,
@@ -194,7 +233,7 @@ export class FulfillmentService {
           detail: `${status}: ${reason ?? '—'}`,
         },
       });
-      return t;
+      return tx.fulfillmentTask.findUniqueOrThrow({ where: { id: taskId } });
     });
     this.realtime.emitRequestUpdate({ action: 'fulfillment_exception', taskId, status });
     return updated;

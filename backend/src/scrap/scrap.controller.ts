@@ -2,12 +2,15 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ScrapService } from './scrap.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ScrapStatus } from '@prisma/client';
 
 @ApiTags('Scrap')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AccessGuard)
 @Controller('scrap')
 export class ScrapController {
   constructor(private readonly scrap: ScrapService) {}
@@ -28,6 +31,7 @@ export class ScrapController {
   }
 
   @Post()
+  @Access(ACCESS.scrap)
   @ApiOperation({ summary: 'Create scrap case' })
   create(
     @Body() body: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
@@ -37,6 +41,7 @@ export class ScrapController {
   }
 
   @Patch(':id/status')
+  @Access(ACCESS.scrap)
   @ApiOperation({ summary: 'Advance scrap case status' })
   updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @CurrentUser('id') userId: string) {
     return this.scrap.updateStatus(id, status, userId);

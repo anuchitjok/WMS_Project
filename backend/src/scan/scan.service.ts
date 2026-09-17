@@ -2,9 +2,13 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { BarcodeParserService, ParsedBarcode } from './barcode-parser.service';
-import { StockStatus, RequestStatus } from '@prisma/client';
+import { StockStatus, FulfillmentStatus } from '@prisma/client';
+import { PickingService } from '../fulfillment/services/picking.service';
+import { DispatchService } from '../fulfillment/services/dispatch.service';
+import { transitionStock } from '../common/stock-state';
+import { ACCESS, AccessPrincipal, AccessRule, hasAccess } from '../auth/access';
 
-interface Actor { id: string; roleKey?: string; warehouseIds?: string[] }
+interface Actor extends AccessPrincipal { id: string; roleKey?: string; warehouseIds?: string[] }
 type ScanWorkflow =
   | 'LOOKUP' | 'RECEIVE' | 'PUTAWAY' | 'PICK' | 'PACK' | 'SHIP'
   | 'TRANSFER' | 'COUNT' | 'ADJUST' | 'RTV';
@@ -27,12 +31,30 @@ interface ScanDto {
   deviceId?: string;
 }
 
+/** Internal: stop the workflow switch once a result has been decided. */
+class ScanStop extends Error {}
+
+/** Workflows that change state need the same rights as the equivalent screen. */
+const WORKFLOW_ACCESS: Partial<Record<ScanWorkflow, AccessRule>> = {
+  RECEIVE: ACCESS.receiving,
+  PUTAWAY: ACCESS.putaway,
+  PICK: ACCESS.fulfillment,
+  PACK: ACCESS.fulfillment,
+  SHIP: ACCESS.fulfillment,
+  TRANSFER: ACCESS.transfer,
+  COUNT: ACCESS.cycleCount,
+  ADJUST: ACCESS.adjustment,
+  RTV: ACCESS.rtv,
+};
+
 @Injectable()
 export class ScanService {
   constructor(
     private prisma: PrismaService,
     private parser: BarcodeParserService,
     private realtime: RealtimeGateway,
+    private picking: PickingService,
+    private dispatch: DispatchService,
   ) {}
 
   // Resolve a parsed barcode to a concrete entity (no state change)
@@ -93,6 +115,18 @@ export class ScanService {
     let effect: any = null;
 
     try {
+      const rule = WORKFLOW_ACCESS[dto.workflow];
+      if (rule && !hasAccess(actor, rule)) {
+        result = 'FORBIDDEN';
+        message = `You are not permitted to run ${dto.workflow} scans`;
+        throw new ScanStop();
+      }
+      if (dto.workflow === 'SHIP') {
+        // A shipment barcode is not a product/stock entity — resolve it directly.
+        ({ result, message, entityId, warehouseId, effect } = await this.doShip(parsed, dto, actor));
+        entityType = 'shipment';
+        throw new ScanStop();
+      }
       const resolved = await this.resolve(parsed);
       entityType = resolved.entityType;
       const entity = resolved.entity;
@@ -111,8 +145,6 @@ export class ScanService {
         ({ result, message, entityId, warehouseId, effect } = await this.doReceive(entity, dto, actor));
       } else if (dto.workflow === 'PACK') {
         ({ result, message, entityId, warehouseId, effect } = await this.doPack(entity, dto, actor));
-      } else if (dto.workflow === 'SHIP') {
-        ({ result, message, entityId, warehouseId, effect } = await this.doShip(entity, dto, actor));
       } else if (dto.workflow === 'TRANSFER') {
         ({ result, message, entityId, warehouseId, effect } = await this.doTransfer(entity, dto, actor));
       } else if (dto.workflow === 'COUNT') {
@@ -127,8 +159,10 @@ export class ScanService {
         message = `Unsupported workflow: ${dto.workflow}`;
       }
     } catch (e: any) {
-      result = 'ERROR';
-      message = e?.message ?? 'Scan failed';
+      if (!(e instanceof ScanStop)) {
+        result = 'ERROR';
+        message = e?.message ?? 'Scan failed';
+      }
     }
 
     const event = await this.prisma.scanEvent.create({
@@ -152,55 +186,64 @@ export class ScanService {
 
   private async doPutaway(item: any, dto: ScanDto, actor: Actor) {
     if (!dto.context?.locationKey) throw new BadRequestException('Putaway requires a destination location scan');
-    const allowed: StockStatus[] = [StockStatus.PENDING_RECEIVING, StockStatus.PENDING_INSPECTION];
-    if (!allowed.includes(item.status)) throw new BadRequestException(`Item not awaiting putaway (status ${item.status})`);
+    // Same queue as the putaway screen: inspected stock only (PENDING_RECEIVING has not passed QC).
+    if (item.status !== StockStatus.PENDING_INSPECTION) {
+      throw new BadRequestException(`Item not awaiting putaway (status ${item.status})`);
+    }
 
     const [whCode, rackCode, slotCode] = dto.context.locationKey.split('|');
-    const wh = await this.prisma.warehouse.findFirst({ where: { code: whCode } });
+    const wh = await this.prisma.warehouse.findFirst({ where: { code: whCode, isDeleted: false, isActive: true } });
     if (!wh) throw new BadRequestException(`Unknown warehouse: ${whCode}`);
     if (actor.roleKey !== 'SUPER_ADMIN' && (actor.warehouseIds?.length ?? 0) > 0 && !actor.warehouseIds!.includes(wh.id)) {
       return { result: 'OUT_OF_SCOPE', message: `Warehouse ${whCode} not in your scope`, entityId: item.id, warehouseId: wh.id, effect: null };
     }
-    const rack = rackCode ? await this.prisma.rack.findFirst({ where: { warehouseId: wh.id, code: rackCode } }) : null;
-    const slot = rack && slotCode ? await this.prisma.slot.findFirst({ where: { rackId: rack.id, code: slotCode } }) : null;
+    if (slotCode && !rackCode) throw new BadRequestException('A slot scan must include its rack');
+    // A mistyped rack or slot must not silently store the item without a bin.
+    const rack = rackCode
+      ? await this.prisma.rack.findFirst({ where: { warehouseId: wh.id, code: rackCode, isDeleted: false, isActive: true } })
+      : null;
+    if (rackCode && !rack) throw new BadRequestException(`Unknown rack ${rackCode} in ${whCode}`);
+    const slot = rack && slotCode
+      ? await this.prisma.slot.findFirst({ where: { rackId: rack.id, code: slotCode, isDeleted: false, isActive: true } })
+      : null;
+    if (slotCode && !slot) throw new BadRequestException(`Unknown slot ${slotCode} in rack ${rackCode}`);
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const u = await tx.stockItem.update({
-        where: { id: item.id },
-        data: { warehouseId: wh.id, rackId: rack?.id, slotId: slot?.id, status: StockStatus.AVAILABLE },
-        include: { product: true, warehouse: true, rack: true, slot: true },
+      await transitionStock(tx, item.id, [StockStatus.PENDING_INSPECTION], StockStatus.AVAILABLE, {
+        warehouseId: wh.id, rackId: rack?.id ?? null, slotId: slot?.id ?? null,
       });
       await tx.auditLog.create({ data: { userId: actor.id, action: 'PUTAWAY_CONFIRMED', entityType: 'StockItem', entityId: item.id, detail: dto.context!.locationKey } });
-      return u;
+      return tx.stockItem.findUniqueOrThrow({ where: { id: item.id }, include: { product: true, warehouse: true, rack: true, slot: true } });
     });
     return { result: 'SUCCESS', message: undefined, entityId: item.id, warehouseId: wh.id, effect: updated };
   }
 
+  // PICK scan confirms the fulfillment task line that holds the scanned unit, so
+  // the task, its progress and the stock stay in step (same path as the board).
   private async doPick(item: any, dto: ScanDto, actor: Actor) {
-    if (!dto.context?.requestId) throw new BadRequestException('Pick requires a request context');
-    if (item.status !== StockStatus.RESERVED) {
-      // double-pick / wrong-unit guard
-      return { result: 'ERROR', message: `Item is ${item.status}, not RESERVED — cannot pick`, entityId: item.id, warehouseId: item.warehouseId, effect: null };
+    if (!dto.context?.requestId && !dto.context?.taskId) throw new BadRequestException('Pick requires a request or task context');
+    if (!item?.productId || item.status === undefined) {
+      return { result: 'ERROR', message: 'Scan the unit label or serial number, not the product', entityId: null, warehouseId: null, effect: null };
     }
-    const reqItem = await this.prisma.withdrawalRequestItem.findFirst({
-      where: { request: { refNumber: dto.context.requestId }, stockItemId: item.id },
-      include: { request: true },
-    });
-    if (!reqItem) {
+    const task = dto.context.taskId
+      ? await this.prisma.fulfillmentTask.findUnique({ where: { id: dto.context.taskId } })
+      : await this.prisma.fulfillmentTask.findFirst({
+          where: { requestRef: dto.context.requestId, status: { in: [FulfillmentStatus.ALLOCATED, FulfillmentStatus.PICKING] } },
+          orderBy: { createdAt: 'desc' },
+        });
+    if (!task) {
+      return { result: 'ERROR', message: 'No open picking task for that request — allocate it first', entityId: item.id, warehouseId: item.warehouseId, effect: null };
+    }
+    const line = await this.prisma.fulfillmentTaskItem.findFirst({ where: { taskId: task.id, stockItemId: item.id } });
+    if (!line) {
       return { result: 'ERROR', message: 'This unit is not reserved for that request', entityId: item.id, warehouseId: item.warehouseId, effect: null };
     }
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const u = await tx.stockItem.update({ where: { id: item.id }, data: { status: StockStatus.PICKED }, include: { product: true } });
-      // advance request to PICKING if still APPROVED
-      if (reqItem.request.status === RequestStatus.APPROVED) {
-        await tx.withdrawalRequest.update({ where: { id: reqItem.requestId }, data: { status: RequestStatus.PICKING } });
-      }
-      await tx.auditLog.create({ data: { userId: actor.id, action: 'PICK_CONFIRMED', entityType: 'StockItem', entityId: item.id, detail: dto.context!.requestId } });
-      return u;
-    });
-    this.realtime.emitRequestUpdate({ action: 'pick', requestId: reqItem.requestId });
-    return { result: 'SUCCESS', message: undefined, entityId: item.id, warehouseId: item.warehouseId, effect: updated };
+    if (line.pickedAt) {
+      return { result: 'DUPLICATE', message: 'This unit has already been picked', entityId: item.id, warehouseId: item.warehouseId, effect: null };
+    }
+    const picked = await this.picking.confirmPick(task.id, line.id, line.qtyRequested, actor.id, dto.rawValue);
+    this.realtime.emitRequestUpdate({ action: 'pick', requestId: task.requestId });
+    return { result: 'SUCCESS', message: undefined, entityId: item.id, warehouseId: item.warehouseId, effect: picked };
   }
 
   // Offline replay — idempotent per clientScanId
@@ -243,18 +286,21 @@ export class ScanService {
     return { result: 'SUCCESS', message: `Item verified for packing`, entityId: task.id, warehouseId: task.warehouseId, effect: { task, item } };
   }
 
-  // ── SHIP scan: confirm shipment barcode ────────────────────────────────────
-  private async doShip(entity: any, dto: ScanDto, actor: Actor) {
-    // Scan shipment ref barcode or task ref
-    const shipment = await this.prisma.shipment.findFirst({
-      where: { OR: [{ refNumber: dto.rawValue.replace('SHP|', '') }, { taskId: dto.context?.taskId }] },
-    });
-    if (!shipment) return { result: 'NOT_FOUND', message: `No shipment found`, entityId: null, warehouseId: null, effect: null };
-    // Update shipment to SHIPPED
-    const updated = await this.prisma.shipment.update({ where: { id: shipment.id }, data: { shippedAt: new Date() } });
-    await this.prisma.shipmentTimeline.create({ data: { shipmentId: shipment.id, status: 'SHIPPED', description: 'Confirmed via barcode scan', actorId: actor.id } });
+  // ── SHIP scan: dispatch the scanned shipment (full goods issue) ─────────────
+  private async doShip(parsed: { type: string; value: string }, dto: ScanDto, actor: Actor) {
+    const ref = parsed.type === 'shipment' || parsed.type === 'unknown' ? parsed.value : null;
+    // Exact matches only: a shipment ref, or the task given in context.
+    let shipment = ref ? await this.prisma.shipment.findUnique({ where: { refNumber: ref } }) : null;
+    if (!shipment && dto.context?.taskId) {
+      shipment = await this.prisma.shipment.findUnique({ where: { taskId: dto.context.taskId } });
+    }
+    if (!shipment) return { result: 'NOT_FOUND', message: 'No shipment found', entityId: null, warehouseId: null, effect: null };
+    if (shipment.shippedAt) {
+      return { result: 'DUPLICATE', message: `Shipment ${shipment.refNumber} was already dispatched`, entityId: shipment.id, warehouseId: null, effect: null };
+    }
+    const updated = await this.dispatch.confirmDispatch(shipment.id, actor.id);
     await this.prisma.auditLog.create({ data: { userId: actor.id, action: 'SCAN_SHIP', entityType: 'Shipment', entityId: shipment.id } });
-    return { result: 'SUCCESS', message: `Shipment ${shipment.refNumber} confirmed`, entityId: shipment.id, warehouseId: null, effect: updated };
+    return { result: 'SUCCESS', message: `Shipment ${shipment.refNumber} dispatched`, entityId: shipment.id, warehouseId: null, effect: updated };
   }
 
   // ── TRANSFER scan: confirm source or destination ─────────────────────────
@@ -269,6 +315,10 @@ export class ScanService {
   // ── COUNT scan: record cycle count for a line ─────────────────────────────
   private async doCount(item: any, dto: ScanDto, actor: Actor) {
     if (!dto.context?.sessionId) throw new BadRequestException('COUNT scan requires sessionId in context');
+    const session = await this.prisma.cycleCountSession.findUnique({ where: { id: dto.context.sessionId }, select: { status: true } });
+    if (!session || !['OPEN', 'IN_PROGRESS'].includes(session.status)) {
+      return { result: 'ERROR', message: 'Count session is not open for counting', entityId: null, warehouseId: item.warehouseId, effect: null };
+    }
     const line = await this.prisma.cycleCountLine.findFirst({
       where: { sessionId: dto.context.sessionId, stockItemId: item.id },
     });

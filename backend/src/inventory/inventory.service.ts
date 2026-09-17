@@ -4,6 +4,13 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateStockItemDto } from './dto/create-stock-item.dto';
 import { StockFilterDto } from './dto/stock-filter.dto';
 import { StockStatus } from '@prisma/client';
+import { FINAL_STATUSES, ISSUED_STATUSES, LocationInput, MANUAL_STATUSES, resolveLocation, transitionStock } from '../common/stock-state';
+
+const CREATABLE_STATUSES: StockStatus[] = [...MANUAL_STATUSES, StockStatus.PENDING_INSPECTION];
+const NOT_RELOCATABLE: StockStatus[] = [
+  StockStatus.PICKING, StockStatus.PICKED, StockStatus.PACKED, StockStatus.READY_FOR_PICKUP,
+  ...ISSUED_STATUSES, ...FINAL_STATUSES,
+];
 
 @Injectable()
 export class InventoryService {
@@ -95,6 +102,13 @@ export class InventoryService {
     const product = await this.prisma.product.findUnique({ where: { id: dto.productId } });
     if (!product) throw new NotFoundException('Product not found');
 
+    // Workflow statuses (reserved, picked, shipped, …) can only be reached through
+    // their workflows; a directly created stock item starts on hand.
+    if (dto.status && !CREATABLE_STATUSES.includes(dto.status)) {
+      throw new BadRequestException(`Stock cannot be created in status ${dto.status}`);
+    }
+    await resolveLocation(this.prisma, { warehouseId: dto.warehouseId, rackId: dto.rackId, slotId: dto.slotId });
+
     if (product.serialControlled && !dto.serialNumber) {
       throw new BadRequestException('Serial number required for serial-controlled products');
     }
@@ -128,20 +142,25 @@ export class InventoryService {
 
   async updateStatus(id: string, status: StockStatus, userId: string) {
     const item = await this.findOne(id);
-    const updated = await this.prisma.stockItem.update({
-      where: { id },
-      data: { status },
-      include: { product: true, warehouse: true },
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'STOCK_STATUS_CHANGE',
-        entityType: 'StockItem',
-        entityId: id,
-        detail: `Status changed from ${item.status} to ${status}`,
-      },
+    // Manual changes are limited to on-hand holds (e.g. AVAILABLE ↔ QUARANTINE).
+    // Reserved, picked, issued or consumed stock only moves through its workflow.
+    if (!MANUAL_STATUSES.includes(status) || !MANUAL_STATUSES.includes(item.status)) {
+      throw new BadRequestException(
+        `Status cannot be changed manually from ${item.status} to ${status}; allowed: ${MANUAL_STATUSES.join(', ')}`,
+      );
+    }
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await transitionStock(tx, id, [item.status], status);
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'STOCK_STATUS_CHANGE',
+          entityType: 'StockItem',
+          entityId: id,
+          detail: `Status changed from ${item.status} to ${status}`,
+        },
+      });
+      return tx.stockItem.findUniqueOrThrow({ where: { id }, include: { product: true, warehouse: true } });
     });
 
     this.realtime.emitInventoryUpdate({ action: 'status_changed', item: updated });
@@ -150,26 +169,35 @@ export class InventoryService {
 
   async updateLocation(
     id: string,
-    location: { warehouseId?: string; rackId?: string; slotId?: string },
+    location: LocationInput,
     userId: string,
   ) {
-    const updated = await this.prisma.stockItem.update({
-      where: { id },
-      data: location,
-      include: { product: true, warehouse: true, rack: true, slot: true },
+    return this.prisma.$transaction(async (tx) => {
+      const loc = await resolveLocation(tx, location);
+      // Picked or issued stock is no longer on its shelf — it cannot be relocated.
+      const moved = await tx.stockItem.updateMany({
+        where: { id, status: { notIn: NOT_RELOCATABLE } },
+        data: loc,
+      });
+      if (moved.count === 0) {
+        const stock = await tx.stockItem.findUnique({ where: { id }, select: { status: true } });
+        if (!stock) throw new NotFoundException(`Stock item ${id} not found`);
+        throw new ConflictException(`Stock item cannot be relocated (status ${stock.status})`);
+      }
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'STOCK_RELOCATED',
+          entityType: 'StockItem',
+          entityId: id,
+          detail: JSON.stringify(loc),
+        },
+      });
+      return tx.stockItem.findUniqueOrThrow({
+        where: { id },
+        include: { product: true, warehouse: true, rack: true, slot: true },
+      });
     });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId,
-        action: 'STOCK_RELOCATED',
-        entityType: 'StockItem',
-        entityId: id,
-        detail: JSON.stringify(location),
-      },
-    });
-
-    return updated;
   }
 
   async getSummary() {

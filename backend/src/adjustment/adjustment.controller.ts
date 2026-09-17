@@ -2,15 +2,15 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { AdjustmentService } from './adjustment.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateAdjustmentDto } from './dto/create-adjustment.dto';
-import { UserRole } from '@prisma/client';
 
 @ApiTags('Stock Adjustment')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AccessGuard)
 @Controller('adjustment')
 export class AdjustmentController {
   constructor(private readonly service: AdjustmentService) {}
@@ -21,20 +21,19 @@ export class AdjustmentController {
   }
 
   @Post()
+  @Access(ACCESS.adjustment)
   create(@Body() dto: CreateAdjustmentDto, @CurrentUser('id') userId: string) {
     return this.service.create(dto, userId);
   }
 
   @Patch(':id/approve')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @Access(ACCESS.adjustment)
   approve(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.service.approve(id, userId);
   }
 
   @Patch(':id/reject')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @Access(ACCESS.adjustment)
   reject(@Param('id') id: string, @CurrentUser('id') userId: string) {
     return this.service.reject(id, userId);
   }

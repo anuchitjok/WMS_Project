@@ -2,11 +2,14 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { ApprovalService } from './approval.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('Approval Engine')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, AccessGuard)
 @Controller('approvals')
 export class ApprovalController {
   constructor(private readonly svc: ApprovalService) {}
@@ -14,6 +17,7 @@ export class ApprovalController {
   @Get('rules') findRules() { return this.svc.findRules(); }
 
   @Post('rules')
+  @Access(ACCESS.approvalRules)
   @ApiOperation({ summary: 'Create approval rule with steps' })
   createRule(@Body() dto: any, @CurrentUser('id') userId: string) { return this.svc.createRule(dto, userId); }
 
@@ -25,12 +29,14 @@ export class ApprovalController {
   }
 
   @Post('start')
+  @Access(ACCESS.approvalDecide)
   @ApiOperation({ summary: 'Start approval chain for an entity' })
   start(@Body() dto: { entityType: string; entityId: string }, @CurrentUser('id') userId: string) {
     return this.svc.startApproval(dto.entityType, dto.entityId, userId);
   }
 
   @Patch(':instanceId/step/:stepOrder/decide')
+  @Access(ACCESS.approvalDecide)
   @ApiOperation({ summary: 'Approve or reject a step' })
   decide(
     @Param('instanceId') instanceId: string,

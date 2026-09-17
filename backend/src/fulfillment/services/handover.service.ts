@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { InventoryOrchestrationService } from '../../inventory/inventory-orchestration.service';
-import { FulfillmentStatus } from '@prisma/client';
+import { FulfillmentStatus, Prisma, RequestStatus } from '@prisma/client';
+import { claimTaskStatus, CANCELLABLE_TASK_STATUSES } from './task-state';
+import { DispatchService } from './dispatch.service';
 
 @Injectable()
 export class HandoverService {
@@ -10,6 +12,7 @@ export class HandoverService {
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
     private readonly inventory: InventoryOrchestrationService,
+    private readonly dispatch: DispatchService,
   ) {}
 
   // Handover queue: tasks ready for physical handover to requester / RMA
@@ -38,8 +41,8 @@ export class HandoverService {
     if (!sh.shippedAt) throw new BadRequestException('Shipment must be dispatched before delivery confirmation');
 
     return this.prisma.$transaction(async (tx) => {
-      const s = await tx.shipment.update({
-        where: { id: shipmentId },
+      const claimed = await tx.shipment.updateMany({
+        where: { id: shipmentId, deliveredAt: null },
         data: {
           deliveredAt: new Date(),
           receiverName: dto.receiverName ?? sh.receiverName,
@@ -47,6 +50,8 @@ export class HandoverService {
           notes: dto.notes ?? sh.notes,
         },
       });
+      if (claimed.count === 0) throw new ConflictException('Delivery already confirmed');
+      await claimTaskStatus(tx, sh.taskId, [FulfillmentStatus.SHIPPED], FulfillmentStatus.DELIVERED);
       await tx.shipmentTimeline.create({
         data: {
           shipmentId,
@@ -54,10 +59,6 @@ export class HandoverService {
           description: dto.notes ?? 'Delivery confirmed',
           actorId: userId,
         },
-      });
-      await tx.fulfillmentTask.update({
-        where: { id: sh.taskId },
-        data: { status: FulfillmentStatus.DELIVERED, version: { increment: 1 } },
       });
       await tx.fulfillmentTimeline.create({
         data: {
@@ -68,17 +69,19 @@ export class HandoverService {
           actorId: userId,
         },
       });
-      return s;
+      return tx.shipment.findUniqueOrThrow({ where: { id: shipmentId } });
     });
   }
 
-  // Issue to RMA: preserves V1 handover behavior — confirms physical handover
+  // Issue to RMA: preserves V1 handover behavior — confirms physical handover.
+  // Goods cannot leave without a goods issue: a task that is still READY_TO_SHIP is
+  // dispatched in the same transaction before it is closed.
   async issueToRma(
     taskId: string,
     dto: { receiver: string; rmaId?: string },
     userId: string,
   ) {
-    const task = await this.prisma.fulfillmentTask.findUnique({ where: { id: taskId } });
+    const task = await this.prisma.fulfillmentTask.findUnique({ where: { id: taskId }, include: { shipment: true } });
     if (!task) throw new NotFoundException('Task not found');
 
     const readyStatuses: FulfillmentStatus[] = [
@@ -92,14 +95,17 @@ export class HandoverService {
       );
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const t = await tx.fulfillmentTask.update({
-        where: { id: taskId },
-        data: {
-          status: FulfillmentStatus.CLOSED,
-          version: { increment: 1 },
-        },
-      });
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (task.status === FulfillmentStatus.READY_TO_SHIP) {
+        const shipment = task.shipment ?? (await this.dispatch.createShipmentInTx(tx, task, { receiverName: dto.receiver }, userId));
+        await this.dispatch.dispatchInTx(tx, shipment.id, userId);
+      }
+      await claimTaskStatus(
+        tx,
+        taskId,
+        [FulfillmentStatus.SHIPPED, FulfillmentStatus.DELIVERED],
+        FulfillmentStatus.CLOSED,
+      );
       await tx.fulfillmentTimeline.create({
         data: {
           taskId,
@@ -109,9 +115,9 @@ export class HandoverService {
           actorId: userId,
         },
       });
-      // Sync WithdrawalRequest to ISSUED_TO_RMA for backward compat
-      await tx.withdrawalRequest.update({
-        where: { id: task.requestId },
+      // Sync WithdrawalRequest to ISSUED_TO_RMA for backward compat (never revive a cancelled/closed request)
+      await tx.withdrawalRequest.updateMany({
+        where: { id: task.requestId, status: { notIn: [RequestStatus.CANCELLED, RequestStatus.COMPLETED] } },
         data: { status: 'ISSUED_TO_RMA' },
       });
       await tx.auditLog.create({
@@ -123,44 +129,58 @@ export class HandoverService {
           detail: `Issued to RMA — receiver: ${dto.receiver}`,
         },
       });
-      return t;
+      return tx.fulfillmentTask.findUniqueOrThrow({ where: { id: taskId } });
     });
+    this.realtime.emitRequestUpdate({ action: 'handover', taskId });
+    return result;
   }
 
   // Release reservation for cancelled / exception tasks
   async releaseAndCancel(taskId: string, userId: string, reason?: string) {
-    const task = await this.prisma.fulfillmentTask.findUnique({
+    const result = await this.prisma.$transaction((tx) => this.cancelInTx(tx, taskId, userId, reason));
+    this.realtime.emitRequestUpdate({ action: 'fulfillment_cancelled', taskId });
+    return result;
+  }
+
+  /** Cancels a task that has not issued goods and releases every unit it holds. */
+  async cancelInTx(tx: Prisma.TransactionClient, taskId: string, userId: string, reason?: string) {
+    const task = await tx.fulfillmentTask.findUnique({
       where: { id: taskId },
-      include: { items: true },
+      include: { items: true, shipment: true },
     });
     if (!task) throw new NotFoundException('Task not found');
+    if (task.shipment?.shippedAt) throw new ConflictException('Goods already issued — the task cannot be cancelled');
 
-    return this.prisma.$transaction(async (tx) => {
-      // Release inventory reservations
-      const reservedItems = task.items.filter((i) => i.stockItemId !== null);
-      if (reservedItems.length > 0) {
-        await this.inventory.releaseReservation(
-          tx,
-          reservedItems.map((i) => ({ stockItemId: i.stockItemId! })),
-          task.refNumber,
-          userId,
-        );
-      }
+    await claimTaskStatus(tx, taskId, CANCELLABLE_TASK_STATUSES, FulfillmentStatus.CANCELLED);
 
-      const t = await tx.fulfillmentTask.update({
-        where: { id: taskId },
-        data: { status: FulfillmentStatus.CANCELLED, version: { increment: 1 } },
-      });
-      await tx.fulfillmentTimeline.create({
-        data: {
-          taskId,
-          fromStatus: task.status,
-          toStatus: FulfillmentStatus.CANCELLED,
-          description: reason ?? 'Cancelled',
-          actorId: userId,
-        },
-      });
-      return t;
+    const reservedItems = task.items.filter((i) => i.stockItemId !== null);
+    if (reservedItems.length > 0) {
+      await this.inventory.releaseReservation(
+        tx,
+        reservedItems.map((i) => ({ stockItemId: i.stockItemId! })),
+        `task ${task.refNumber}`,
+        userId,
+      );
+    }
+
+    await tx.fulfillmentTimeline.create({
+      data: {
+        taskId,
+        fromStatus: task.status,
+        toStatus: FulfillmentStatus.CANCELLED,
+        description: reason ?? 'Cancelled',
+        actorId: userId,
+      },
     });
+    await tx.auditLog.create({
+      data: {
+        userId,
+        action: 'FULFILLMENT_CANCELLED',
+        entityType: 'FulfillmentTask',
+        entityId: taskId,
+        detail: `${task.refNumber}: ${reason ?? 'Cancelled'}`,
+      },
+    });
+    return tx.fulfillmentTask.findUniqueOrThrow({ where: { id: taskId } });
   }
 }

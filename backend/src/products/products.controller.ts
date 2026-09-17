@@ -8,6 +8,9 @@ import type { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateProductDto, UpdateProductDto, ChangeProductStatusDto } from './dto/create-product.dto';
@@ -111,6 +114,8 @@ export class ProductsController {
   }
 
   @Post('stock-register/import')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.productImport)
   @ApiOperation({ summary: 'Batch import products from xlsx or csv' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file'))

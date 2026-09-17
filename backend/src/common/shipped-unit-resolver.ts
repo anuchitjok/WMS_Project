@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 type RequestItemLike = {
@@ -48,4 +49,31 @@ export async function resolveShippedUnits(
     result.set(ri.id, resolved);
   }
   return result;
+}
+
+/**
+ * Every unit actually issued for the given request lines: the picked units of the
+ * request's latest non-cancelled fulfillment task for those products. A line can
+ * be fulfilled by several units, so post-issue flows (RMA usage, unused return)
+ * must act on all of them, not just the first. Requests issued without a task
+ * (legacy) fall back to `resolveShippedUnits`.
+ */
+export async function resolveIssuedUnits(
+  prisma: PrismaService | Prisma.TransactionClient,
+  requestId: string,
+  requestItems: RequestItemLike[],
+): Promise<string[]> {
+  const task = await prisma.fulfillmentTask.findFirst({
+    where: { requestId, status: { not: 'CANCELLED' } },
+    include: { items: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  const productIds = new Set(requestItems.map((ri) => ri.productId));
+  const fromTask = (task?.items ?? [])
+    .filter((ti) => ti.stockItemId && ti.qtyPicked > 0 && productIds.has(ti.productId))
+    .map((ti) => ti.stockItemId!);
+  if (fromTask.length) return [...new Set(fromTask)];
+
+  const legacy = await resolveShippedUnits(prisma as PrismaService, requestId, requestItems);
+  return [...new Set([...legacy.values()].filter((v): v is string => !!v))];
 }

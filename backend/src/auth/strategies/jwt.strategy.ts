@@ -60,6 +60,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       roleKey: roleKeys.includes('SUPER_ADMIN') ? 'SUPER_ADMIN' : (roleKeys[0] ?? null),
       roleKeys,
       permissions: codes,
+      // True once the user holds any DB role (even a disabled one): from then on
+      // the permission matrix alone decides access (see auth/access.ts).
+      rbacAssigned: roleIds.size > 0,
       warehouseIds,
     };
   }

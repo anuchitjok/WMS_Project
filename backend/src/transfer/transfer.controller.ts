@@ -2,11 +2,12 @@ import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@ne
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { TransferService } from './transfer.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
+import { LocationDto } from '../common/location.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateTransferDto } from './dto/create-transfer.dto';
-import { UserRole } from '@prisma/client';
 
 @ApiTags('Stock Transfer')
 @ApiBearerAuth()
@@ -21,18 +22,18 @@ export class TransferController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.transfer)
   create(@Body() dto: CreateTransferDto, @CurrentUser('id') userId: string) {
     return this.service.create(dto, userId);
   }
 
   @Patch(':id/complete')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.transfer)
   complete(
     @Param('id') id: string,
-    @Body() dest: { warehouseId?: string; rackId?: string; slotId?: string },
+    @Body() dest: LocationDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.service.complete(id, dest, userId);

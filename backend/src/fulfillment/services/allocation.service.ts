@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
-import { InventoryOrchestrationService } from '../../inventory/inventory-orchestration.service';
+import { InventoryOrchestrationService, LockedRow } from '../../inventory/inventory-orchestration.service';
 import { FulfillmentStatus, StockStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { isUnifiedReservationEnabled } from '../../common/feature-flags';
+import { splitStockRow } from '../../common/stock-state';
 
 @Injectable()
 export class AllocationService {
@@ -17,42 +18,37 @@ export class AllocationService {
   // FIFO allocation: creates FulfillmentTask from an approved WithdrawalRequest.
   // Reserves stock atomically. Prevents duplicate tasks per request.
   async allocate(requestId: string, userId: string) {
-    const req = await this.prisma.withdrawalRequest.findUnique({
-      where: { id: requestId },
-      include: { items: { include: { product: true } }, requester: true },
-    });
-    if (!req) throw new NotFoundException('Request not found');
-    if (!['APPROVED', 'PICKING'].includes(req.status)) {
-      throw new BadRequestException(
-        `Request must be APPROVED to allocate (current: ${req.status})`,
-      );
-    }
-
-    // Prevent duplicate active task
-    const existing = await this.prisma.fulfillmentTask.findFirst({
-      where: {
-        requestId,
-        status: { notIn: [FulfillmentStatus.CANCELLED, FulfillmentStatus.RETURNED] },
-      },
-    });
-    if (existing) {
-      throw new ConflictException(
-        `FulfillmentTask already exists for this request: ${existing.refNumber}`,
-      );
-    }
-
     const taskRef = `FT-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
-
-    // Under unified reservation, approval no longer reserves, so allocation must
-    // pick from AVAILABLE only (never grab another task's RESERVED unit — C1).
-    // In legacy mode we still accept RESERVED so allocation can consume the unit
-    // reserved at approval time.
-    const allocatableStatuses = isUnifiedReservationEnabled()
-      ? [StockStatus.AVAILABLE]
-      : [StockStatus.AVAILABLE, StockStatus.RESERVED];
+    const unified = isUnifiedReservationEnabled();
 
     const task = await this.prisma.$transaction(async (tx) => {
-      // Determine warehouse from first allocated stock item
+      // Serialize allocations of the same request: the second caller waits here,
+      // then sees the first caller's task and is rejected below.
+      await tx.$queryRaw`SELECT "id" FROM "WithdrawalRequest" WHERE "id" = ${requestId} FOR UPDATE`;
+
+      const req = await tx.withdrawalRequest.findUnique({
+        where: { id: requestId },
+        include: { items: true },
+      });
+      if (!req) throw new NotFoundException('Request not found');
+      if (!['APPROVED', 'PICKING'].includes(req.status)) {
+        throw new BadRequestException(
+          `Request must be APPROVED to allocate (current: ${req.status})`,
+        );
+      }
+
+      // Prevent duplicate task. Only a CANCELLED task frees the request again — a
+      // RETURNED task already issued its goods, so re-allocating would issue twice.
+      const existing = await tx.fulfillmentTask.findFirst({
+        where: { requestId, status: { not: FulfillmentStatus.CANCELLED } },
+      });
+      if (existing) {
+        throw new ConflictException(
+          `FulfillmentTask already exists for this request: ${existing.refNumber}`,
+        );
+      }
+
+      // Determine warehouse from the first line's approval-time unit (legacy behaviour).
       const firstItem = req.items[0];
       let warehouseId: string | undefined;
       if (firstItem?.stockItemId) {
@@ -74,46 +70,90 @@ export class AllocationService {
         },
       });
 
-      const reservationItems: Array<{ stockItemId: string; qty: number }> = [];
-
       for (const item of req.items) {
-        // FIFO: oldest receivedDate first, only AVAILABLE or RESERVED
-        const stock = await tx.stockItem.findFirst({
-          where: {
-            productId: item.productId,
-            status: { in: allocatableStatuses },
-            ...(warehouseId ? { warehouseId } : {}),
-          },
-          orderBy: { receivedDate: 'asc' },
-          include: { warehouse: true, rack: true, slot: true },
+        const need = item.quantityApproved ?? item.quantityRequested;
+
+        // Legacy approval reserved ceil(need) rows for this line (linking the first).
+        // Those rows are consumed here — never a unit reserved for another request.
+        const owned =
+          !unified && req.status === 'APPROVED' && item.stockItemId ? Math.ceil(item.quantityRequested) : 0;
+        const pool = await this.inventory.lockApprovalPool(tx, {
+          productId: item.productId,
+          requestId,
+          preferId: item.stockItemId,
+          warehouseId: warehouseId ?? null,
+          limit: owned,
         });
 
-        await tx.fulfillmentTaskItem.create({
-          data: {
-            taskId: t.id,
-            productId: item.productId,
-            stockItemId: stock?.id ?? null,
-            qtyRequested: item.quantityApproved ?? item.quantityRequested,
-            qtyPicked: 0,
-            binLocation: stock
-              ? [stock.warehouse?.code, stock.rack?.code, stock.slot?.code]
-                  .filter(Boolean)
-                  .join('|')
-              : null,
-          },
-        });
+        const chosen: Array<{ row: LockedRow; take: number; reserved: boolean }> = [];
+        const surplus: LockedRow[] = [];
+        let covered = 0;
+        for (const row of pool) {
+          if (covered < need && row.quantity > 0) {
+            const take = Math.min(row.quantity, need - covered);
+            chosen.push({ row, take, reserved: true });
+            covered += take;
+          } else {
+            surplus.push(row);
+          }
+        }
+        // Top up from AVAILABLE stock (FIFO), one locked row at a time.
+        const taken = [...pool.map((r) => r.id)];
+        while (covered < need) {
+          const row = await this.inventory.lockAvailableRow(tx, item.productId, warehouseId ?? null, taken);
+          if (!row) break;
+          taken.push(row.id);
+          const take = Math.min(row.quantity, need - covered);
+          chosen.push({ row, take, reserved: false });
+          covered += take;
+        }
 
-        if (stock) {
-          reservationItems.push({
-            stockItemId: stock.id,
-            qty: item.quantityApproved ?? item.quantityRequested,
+        for (const c of chosen) {
+          // Bulk rows: keep exactly `take` on this row; the rest goes back to AVAILABLE.
+          await splitStockRow(tx, c.row.id, c.take, StockStatus.AVAILABLE);
+          if (!c.reserved) await this.inventory.reserveRow(tx, c.row.id, taskRef, userId);
+
+          const stock = await tx.stockItem.findUnique({
+            where: { id: c.row.id },
+            include: { warehouse: true, rack: true, slot: true },
+          });
+          await tx.fulfillmentTaskItem.create({
+            data: {
+              taskId: t.id,
+              productId: item.productId,
+              stockItemId: c.row.id,
+              qtyRequested: c.take,
+              qtyPicked: 0,
+              binLocation: [stock?.warehouse?.code, stock?.rack?.code, stock?.slot?.code]
+                .filter(Boolean)
+                .join('|'),
+            },
           });
         }
-      }
 
-      // Reserve all stock atomically
-      if (reservationItems.length > 0) {
-        await this.inventory.reserveForTask(tx, reservationItems, taskRef, userId);
+        // Shortfall keeps the previous behaviour: an unallocated line for the remainder.
+        if (covered < need) {
+          await tx.fulfillmentTaskItem.create({
+            data: {
+              taskId: t.id,
+              productId: item.productId,
+              stockItemId: null,
+              qtyRequested: need - covered,
+              qtyPicked: 0,
+              binLocation: null,
+            },
+          });
+        }
+
+        // Units approval over-reserved for this line are released, not leaked.
+        if (surplus.length) {
+          await this.inventory.releaseReservation(
+            tx,
+            surplus.map((r) => ({ stockItemId: r.id })),
+            `approval surplus of ${req.refNumber} (allocated as ${taskRef})`,
+            userId,
+          );
+        }
       }
 
       // Advance request status (version bump for optimistic locking — C3)

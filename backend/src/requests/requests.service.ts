@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -6,6 +6,10 @@ import { RequestStatus, UserRole, StockStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { isUnifiedReservationEnabled, isApprovalEngineEnabled } from '../common/feature-flags';
 import { ApprovalService } from '../approval/approval.service';
+import { InventoryOrchestrationService } from '../inventory/inventory-orchestration.service';
+import { HandoverService } from '../fulfillment/services/handover.service';
+import { ISSUED_TASK_STATUSES } from '../fulfillment/services/task-state';
+import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
 
 // Phase 5: coarse, business-facing request lifecycle derived from the
 // FulfillmentTask (the execution SSOT). The granular RequestStatus values
@@ -39,6 +43,8 @@ export function deriveRequestStage(status: RequestStatus, taskStatus?: string | 
   return 'IN_FULFILLMENT';
 }
 
+const REVIEWABLE: RequestStatus[] = [RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL];
+
 @Injectable()
 export class RequestsService {
   constructor(
@@ -46,6 +52,8 @@ export class RequestsService {
     private realtime: RealtimeGateway,
     private notifications: NotificationsService,
     private approval: ApprovalService,
+    private inventory: InventoryOrchestrationService,
+    private handover: HandoverService,
   ) {}
 
   private genRef() {
@@ -215,11 +223,22 @@ export class RequestsService {
   }
 
   async submit(id: string, userId: string) {
-    await this.findOne(id);
-    const updated = await this.prisma.withdrawalRequest.update({
+    const current = await this.prisma.withdrawalRequest.findUnique({
       where: { id },
-      data: { status: RequestStatus.SUBMITTED },
+      select: { requesterId: true, status: true },
     });
+    if (!current) throw new NotFoundException('Request not found');
+    if (current.requesterId !== userId) throw new ForbiddenException('Only the requester can submit this request');
+    // Only a draft can be submitted — re-submitting an approved/cancelled request
+    // would send it through approval (and stock reservation) a second time.
+    const claimed = await this.prisma.withdrawalRequest.updateMany({
+      where: { id, status: RequestStatus.DRAFT },
+      data: { status: RequestStatus.SUBMITTED, version: { increment: 1 } },
+    });
+    if (claimed.count === 0) {
+      throw new ConflictException(`Only a DRAFT request can be submitted (current: ${current.status})`);
+    }
+    const updated = await this.prisma.withdrawalRequest.findUniqueOrThrow({ where: { id } });
     await this.prisma.auditLog.create({
       data: { userId, action: 'REQUEST_SUBMITTED', entityType: 'WithdrawalRequest', entityId: id },
     });
@@ -274,10 +293,12 @@ export class RequestsService {
     if (isApprovalEngineEnabled()) {
       const outcome = await this.decideViaEngine(id, req.requesterId, approverId, approved, rejectReason);
       if (outcome === 'PENDING') {
-        const pending = await this.prisma.withdrawalRequest.update({
-          where: { id },
+        const claimed = await this.prisma.withdrawalRequest.updateMany({
+          where: { id, status: { in: REVIEWABLE } },
           data: { status: RequestStatus.PENDING_APPROVAL, version: { increment: 1 } },
         });
+        if (claimed.count === 0) throw new ConflictException('Request was already decided');
+        const pending = await this.prisma.withdrawalRequest.findUniqueOrThrow({ where: { id } });
         this.realtime.emitRequestUpdate({ action: 'approval_step', requestId: id });
         return pending;
       }
@@ -287,10 +308,12 @@ export class RequestsService {
 
     // ── Rejection: simple status update, no stock impact ──────────────────
     if (!approved) {
-      const rejected = await this.prisma.withdrawalRequest.update({
-        where: { id },
+      const claimed = await this.prisma.withdrawalRequest.updateMany({
+        where: { id, status: { in: REVIEWABLE } },
         data: { status: RequestStatus.REJECTED, approverId, approvedAt: new Date(), rejectReason, version: { increment: 1 } },
       });
+      if (claimed.count === 0) throw new ConflictException('Request was already decided');
+      const rejected = await this.prisma.withdrawalRequest.findUniqueOrThrow({ where: { id } });
       await this.prisma.auditLog.create({
         data: { userId: approverId, action: 'REQUEST_REJECTED', entityType: 'WithdrawalRequest', entityId: id, detail: rejectReason },
       });
@@ -306,6 +329,14 @@ export class RequestsService {
     // keeps reserving stock here for backward compatibility.
     const unified = isUnifiedReservationEnabled();
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Claim the decision first. A concurrent second approval matches zero rows
+      // (Postgres re-checks the WHERE after the row lock) and never reserves stock.
+      const claimed = await tx.withdrawalRequest.updateMany({
+        where: { id, status: { in: REVIEWABLE } },
+        data: { status: RequestStatus.APPROVED, approverId, approvedAt: new Date(), version: { increment: 1 } },
+      });
+      if (claimed.count === 0) throw new ConflictException('Request was already decided');
+
       if (unified) {
         // Governance only: set approved quantities, no stock mutation.
         for (const item of req.items) {
@@ -324,7 +355,7 @@ export class RequestsService {
             // which is exactly what prevents the double-allocation race.
             const rows = await tx.$queryRaw<{ id: string }[]>`
               SELECT "id" FROM "StockItem"
-              WHERE "productId" = ${item.productId} AND "status" = 'AVAILABLE'
+              WHERE "productId" = ${item.productId} AND "status" = 'AVAILABLE' AND "quantity" > 0
               ORDER BY "receivedDate" ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1
@@ -347,10 +378,7 @@ export class RequestsService {
         }
       }
 
-      const result = await tx.withdrawalRequest.update({
-        where: { id },
-        data: { status: RequestStatus.APPROVED, approverId, approvedAt: new Date(), version: { increment: 1 } },
-      });
+      const result = await tx.withdrawalRequest.findUniqueOrThrow({ where: { id } });
       await tx.auditLog.create({
         data: {
           userId: approverId,
@@ -370,16 +398,17 @@ export class RequestsService {
   }
 
   /**
-   * Cancel a request and release any RESERVED stock back to AVAILABLE.
-   * Safe to call before the goods are physically issued. Idempotent guard
-   * prevents double rollback (already-cancelled / completed requests are rejected).
+   * Cancel a request and release every unit it holds. Safe to call before the goods
+   * are physically issued. The requester may cancel their own request; anyone else
+   * needs approver rights. Guards prevent double rollback.
    */
-  async cancel(id: string, userId: string) {
-    const req = await this.prisma.withdrawalRequest.findUnique({
-      where: { id },
-      include: { items: true },
-    });
-    if (!req) throw new NotFoundException('Request not found');
+  async cancel(id: string, user: AccessPrincipal & { id: string }) {
+    const userId = user.id;
+    const owner = await this.prisma.withdrawalRequest.findUnique({ where: { id }, select: { requesterId: true } });
+    if (!owner) throw new NotFoundException('Request not found');
+    if (owner.requesterId !== userId && !hasAccess(user, ACCESS.requestCancelAny)) {
+      throw new ForbiddenException('You can only cancel your own requests');
+    }
 
     // Block double rollback / cancelling after goods left the building
     const noCancel: RequestStatus[] = [
@@ -388,26 +417,59 @@ export class RequestsService {
       RequestStatus.SHIPPED,
       RequestStatus.ISSUED_TO_RMA,
     ];
-    if (noCancel.includes(req.status)) {
-      throw new BadRequestException(`Cannot cancel a request in status ${req.status}`);
-    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Release only stock that is still RESERVED for this request
-      for (const item of req.items) {
-        if (item.stockItemId) {
-          const stock = await tx.stockItem.findUnique({ where: { id: item.stockItemId } });
-          if (stock && stock.status === StockStatus.RESERVED) {
-            await tx.stockItem.update({ where: { id: item.stockItemId }, data: { status: StockStatus.AVAILABLE } });
-          }
-        }
+      // Serialize with approval / allocation / another cancel of the same request.
+      await tx.$queryRaw`SELECT "id" FROM "WithdrawalRequest" WHERE "id" = ${id} FOR UPDATE`;
+      const req = await tx.withdrawalRequest.findUniqueOrThrow({ where: { id }, include: { items: true } });
+      if (noCancel.includes(req.status)) {
+        throw new BadRequestException(`Cannot cancel a request in status ${req.status}`);
       }
+
+      const task = await tx.fulfillmentTask.findFirst({
+        where: { requestId: id, status: { not: 'CANCELLED' } },
+        orderBy: { createdAt: 'desc' },
+      });
+      let detail: string;
+      if (task) {
+        if (ISSUED_TASK_STATUSES.includes(task.status)) {
+          throw new BadRequestException(`Goods already issued on ${task.refNumber} — the request cannot be cancelled`);
+        }
+        // Releases every unit the task reserved or picked.
+        await this.handover.cancelInTx(tx, task.id, userId, `Request ${req.refNumber} cancelled`);
+        detail = `Fulfillment task ${task.refNumber} cancelled and its stock released`;
+      } else if (req.status === RequestStatus.APPROVED) {
+        // Legacy approval reserved ceil(qty) units per line but linked only the
+        // first; release all of them, not just the linked one.
+        let released = 0;
+        for (const item of req.items) {
+          if (!item.stockItemId) continue; // unified mode: approval reserved nothing
+          const rows = await this.inventory.lockApprovalPool(tx, {
+            productId: item.productId,
+            requestId: id,
+            preferId: item.stockItemId,
+            warehouseId: null,
+            limit: Math.ceil(item.quantityRequested),
+          });
+          await this.inventory.releaseReservation(
+            tx,
+            rows.map((r) => ({ stockItemId: r.id })),
+            `request ${req.refNumber}`,
+            userId,
+          );
+          released += rows.length;
+        }
+        detail = `Reserved stock released (${released} unit(s))`;
+      } else {
+        detail = 'No stock reserved';
+      }
+
       const result = await tx.withdrawalRequest.update({
         where: { id },
         data: { status: RequestStatus.CANCELLED, version: { increment: 1 } },
       });
       await tx.auditLog.create({
-        data: { userId, action: 'REQUEST_CANCELLED', entityType: 'WithdrawalRequest', entityId: id, detail: 'Reserved stock released' },
+        data: { userId, action: 'REQUEST_CANCELLED', entityType: 'WithdrawalRequest', entityId: id, detail },
       });
       return result;
     });
