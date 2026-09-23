@@ -48,6 +48,8 @@ export const ACCESS = {
   stockCreate:      { permissions: ['inventory.create'], legacyRoles: OPERATORS },
   stockStatus:      { permissions: ['inventory.adjust'], legacyRoles: OPERATORS },
   stockRelocate:    { permissions: ['inventory.transfer'], legacyRoles: SUPERVISORS },
+  /** Releasing a reservation whose request/task is finished — data repair, not a workflow step. */
+  reservationRelease:{ permissions: ['inventory.adjust'], legacyRoles: SUPERVISORS },
   transfer:         { permissions: ['inventory.transfer'], legacyRoles: OPERATORS },
   adjustment:       { permissions: ['inventory.adjust'], legacyRoles: SUPERVISORS },
   cycleCount:       { permissions: ['inventory.adjust', 'putaway.manage'], legacyRoles: OPERATORS },

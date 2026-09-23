@@ -3,13 +3,24 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateStockItemDto } from './dto/create-stock-item.dto';
 import { StockFilterDto } from './dto/stock-filter.dto';
-import { StockStatus } from '@prisma/client';
+import { FulfillmentStatus, RequestStatus, StockStatus } from '@prisma/client';
 import { FINAL_STATUSES, ISSUED_STATUSES, LocationInput, MANUAL_STATUSES, resolveLocation, transitionStock } from '../common/stock-state';
+import { CANCELLABLE_TASK_STATUSES } from '../fulfillment/services/task-state';
+import { InventoryOrchestrationService } from './inventory-orchestration.service';
 
 const CREATABLE_STATUSES: StockStatus[] = [...MANUAL_STATUSES, StockStatus.PENDING_INSPECTION];
 const NOT_RELOCATABLE: StockStatus[] = [
   StockStatus.PICKING, StockStatus.PICKED, StockStatus.PACKED, StockStatus.READY_FOR_PICKUP,
   ...ISSUED_STATUSES, ...FINAL_STATUSES,
+];
+/** A request in one of these can still reach its stock through the normal flow. */
+const LIVE_REQUEST_STATUSES: RequestStatus[] = [
+  RequestStatus.DRAFT, RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL, RequestStatus.APPROVED,
+];
+/** A request in one of these is already closed and needs no further status write. */
+const TERMINAL_REQUEST_STATUSES: RequestStatus[] = [
+  RequestStatus.CANCELLED, RequestStatus.REJECTED, RequestStatus.COMPLETED,
+  RequestStatus.SHIPPED, RequestStatus.ISSUED_TO_RMA,
 ];
 
 @Injectable()
@@ -17,6 +28,7 @@ export class InventoryService {
   constructor(
     private prisma: PrismaService,
     private realtime: RealtimeGateway,
+    private orchestration: InventoryOrchestrationService,
   ) {}
 
   async findAll(filter: StockFilterDto, scope?: { roleKey?: string; warehouseIds?: string[] }) {
@@ -164,6 +176,98 @@ export class InventoryService {
     });
 
     this.realtime.emitInventoryUpdate({ action: 'status_changed', item: updated });
+    return updated;
+  }
+
+  /**
+   * Releases a reservation that nothing can consume any more: the request that
+   * reserved the unit is finished (or never existed) and no goods were ever
+   * issued against it. This is data repair, not a workflow step — the workflow
+   * path is cancelling the request, which only works while its task is live.
+   * Everything still in play is refused here and pointed back at that path.
+   */
+  async releaseStuckReservation(id: string, userId: string) {
+    const item = await this.findOne(id);
+    if (item.status !== StockStatus.RESERVED) {
+      throw new BadRequestException(
+        `Only RESERVED stock can be released here; stock item ${id} is ${item.status}`,
+      );
+    }
+
+    const links = await this.prisma.withdrawalRequestItem.findMany({
+      where: { stockItemId: id },
+      include: { request: { select: { id: true, refNumber: true, status: true } } },
+    });
+
+    for (const link of links) {
+      if (link.quantityIssued > 0 || link.shippedStockItemId) {
+        throw new ConflictException(
+          `${link.request.refNumber} already issued this unit — it is not a stuck reservation`,
+        );
+      }
+      // FulfillmentTask.requestId has no FK, so the task is looked up by value.
+      const task = await this.prisma.fulfillmentTask.findFirst({
+        where: { requestId: link.requestId, status: { not: FulfillmentStatus.CANCELLED } },
+        orderBy: { createdAt: 'desc' },
+        include: { shipment: { select: { shippedAt: true } }, items: { where: { stockItemId: id } } },
+      });
+      if (task?.shipment?.shippedAt || task?.items.some((i) => i.qtyPicked > 0)) {
+        throw new ConflictException(
+          `Goods left the warehouse on ${task!.refNumber} — this reservation is not stuck`,
+        );
+      }
+      if (task && CANCELLABLE_TASK_STATUSES.includes(task.status)) {
+        throw new ConflictException(
+          `${task.refNumber} is still ${task.status} — cancel the request instead of releasing the unit`,
+        );
+      }
+      if (!task && LIVE_REQUEST_STATUSES.includes(link.request.status)) {
+        throw new ConflictException(
+          `${link.request.refNumber} is ${link.request.status} and still holds this unit — cancel the request instead`,
+        );
+      }
+    }
+
+    const refs = links.map((l) => l.request.refNumber).join(', ') || 'no request';
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.orchestration.releaseReservation(tx, [{ stockItemId: id }], `stuck reservation on ${refs}`, userId);
+      if (links.length > 0) {
+        await tx.withdrawalRequestItem.updateMany({
+          where: { id: { in: links.map((l) => l.id) } },
+          data: { stockItemId: null },
+        });
+      }
+      for (const link of links) {
+        if (TERMINAL_REQUEST_STATUSES.includes(link.request.status)) continue;
+        // A request left mid-flight can never finish now. Close it only once its
+        // last held unit is gone, so releasing one of several does not strand the rest.
+        const stillHeld = await tx.withdrawalRequestItem.count({
+          where: { requestId: link.requestId, stockItemId: { not: null } },
+        });
+        if (stillHeld > 0) continue;
+        await tx.withdrawalRequest.update({
+          where: { id: link.requestId },
+          data: {
+            status: RequestStatus.CANCELLED,
+            rejectReason: `Cancelled on stuck reservation release (${item.id})`,
+            version: { increment: 1 },
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'REQUEST_CANCELLED',
+            entityType: 'WithdrawalRequest',
+            entityId: link.requestId,
+            detail: `Closed with the release of stuck reservation ${item.id}`,
+          },
+        });
+      }
+      return tx.stockItem.findUniqueOrThrow({ where: { id }, include: { product: true, warehouse: true } });
+    });
+
+    this.realtime.emitInventoryUpdate({ action: 'reservation_released', item: updated });
+    for (const link of links) this.realtime.emitRequestUpdate({ action: 'reservation_released', requestId: link.requestId });
     return updated;
   }
 
