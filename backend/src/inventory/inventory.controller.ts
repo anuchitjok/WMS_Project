@@ -91,6 +91,14 @@ export class InventoryController {
     return this.inventoryService.updateStatus(id, status, userId);
   }
 
+  @Patch(':id/release-reservation')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.reservationRelease)
+  @ApiOperation({ summary: 'Release a reservation left behind by a finished request/task' })
+  releaseStuckReservation(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.inventoryService.releaseStuckReservation(id, userId);
+  }
+
   @Patch(':id/location')
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockRelocate)

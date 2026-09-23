@@ -247,6 +247,7 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [section, setSection] = useState('info');
+  const [releasing, setReleasing] = useState(false);
 
   useEffect(() => {
     setLoading(true); setSection('info');
@@ -422,12 +423,28 @@ function InventoryDetailDrawer({ itemId, onClose }: { itemId: string; onClose: (
 
       {data && (
         <div className="border-t border-slate-100 p-3 flex gap-2 flex-shrink-0 bg-slate-50">
+          {data.status === 'RESERVED' ? (
+            // Reserved stock has no manual status toggle — it moves through fulfillment.
+            // This releases a reservation whose request/task already finished; the server
+            // refuses anything still in play and says which reference is holding it.
+            <Button size="sm" variant="outline" className="flex-1 text-xs gap-1.5" disabled={releasing}
+              onClick={() => {
+                setReleasing(true);
+                inventoryApi.releaseReservation(data.id)
+                  .then(() => { toast.success('Reservation released — stock is available again'); onClose(); })
+                  .catch((e: any) => toast.error(e.message ?? 'Failed to release reservation'))
+                  .finally(() => setReleasing(false));
+              }}>
+              <CheckCircle2 className="w-3.5 h-3.5" /> {releasing ? 'Releasing…' : 'Release Reservation'}
+            </Button>
+          ) : (
           <Button size="sm" variant="outline" className="flex-1 text-xs gap-1.5"
             onClick={() => { inventoryApi.updateStatus(data.id, data.status === 'AVAILABLE' ? 'QUARANTINE' : 'AVAILABLE').then(() => { toast.success('Status updated'); onClose(); }).catch((e: any) => toast.error(e.message)); }}>
             {data.status === 'QUARANTINE'
               ? <><CheckCircle2 className="w-3.5 h-3.5" /> Release</>
               : <><Shield className="w-3.5 h-3.5" /> On Hold</>}
           </Button>
+          )}
           <Link href="/rtv"><Button size="sm" variant="outline" className="text-xs gap-1"><RefreshCw className="w-3.5 h-3.5" /> RTV</Button></Link>
           <Link href="/adjustment"><Button size="sm" variant="outline" className="text-xs gap-1"><SlidersHorizontal className="w-3.5 h-3.5" /> Adjust</Button></Link>
         </div>

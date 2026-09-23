@@ -87,6 +87,8 @@ export const inventoryApi = {
     request<StockItem>(`/inventory/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   updateLocation: (id: string, loc: { warehouseId?: string; rackId?: string; slotId?: string }) =>
     request<StockItem>(`/inventory/${id}/location`, { method: 'PATCH', body: JSON.stringify(loc) }),
+  releaseReservation: (id: string) =>
+    request<StockItem>(`/inventory/${id}/release-reservation`, { method: 'PATCH' }),
   summary: () => request<unknown>('/inventory/summary'),
   kpi: (warehouseId?: string) => request<any>(`/inventory/kpi${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
   enterpriseList: (filter: Record<string, any> = {}) => {
