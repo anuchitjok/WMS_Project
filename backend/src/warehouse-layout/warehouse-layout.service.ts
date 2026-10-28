@@ -1,3 +1,4 @@
+import { NOT_IN_LOCATION } from '../common/stock-presence';
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
@@ -17,9 +18,8 @@ const MAX_TREE_DEPTH = 64; // cycle/runaway guard for parent-chain walks
 
 // Stock that has left the building is not occupying a bin. Matches the set used
 // by warehouse.service.inventoryByBrand so both surfaces agree.
-const GONE: StockStatus[] = [
-  StockStatus.SHIPPED, StockStatus.CLOSED, StockStatus.CANCELLED, StockStatus.CONSUMED,
-];
+// Same definition as the Control Center (common/stock-presence.ts).
+const GONE: StockStatus[] = NOT_IN_LOCATION;
 // There is no committedQty column anywhere in the schema — "committed" has to be
 // derived by bucketing StockStatus. See the Sprint 1 blueprint.
 const COMMITTED: StockStatus[] = [

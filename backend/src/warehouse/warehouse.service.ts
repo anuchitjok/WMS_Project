@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RackType, SlotStatus, SlotType } from '@prisma/client';
+import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
+import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
 
 @Injectable()
 export class WarehouseService {
@@ -8,31 +10,36 @@ export class WarehouseService {
 
   // ─── Warehouse ────────────────────────────────────────────────────────────
 
+  // Occupancy counts only stock still in the location — the same rule as the
+  // Floor Plan (common/stock-presence.ts). Shipped / consumed rows keep their
+  // slotId, so an unfiltered count made emptied bins look full.
   private slotInclude = {
     where: { isActive: true },
-    include: { _count: { select: { stockItems: true } } },
+    include: { _count: { select: { stockItems: IN_LOCATION_COUNT } } },
     orderBy: [{ level: 'asc' as const }, { column: 'asc' as const }],
   };
 
-  findAll() {
+  findAll(scope?: ScopePrincipal) {
+    const wh = warehouseFilter(scope);
     return this.prisma.warehouse.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(wh ? { id: wh } : {}) },
       include: {
         racks: {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
-            _count: { select: { slots: true, stockItems: true } },
+            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },
-        _count: { select: { racks: true, stockItems: true } },
+        _count: { select: { racks: true, stockItems: IN_LOCATION_COUNT } },
       },
       orderBy: { code: 'asc' },
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, scope?: ScopePrincipal) {
+    assertWarehouseAccess(scope, id, 'this warehouse');
     const wh = await this.prisma.warehouse.findUnique({
       where: { id },
       include: {
@@ -40,7 +47,7 @@ export class WarehouseService {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
-            _count: { select: { slots: true, stockItems: true } },
+            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },
@@ -50,7 +57,7 @@ export class WarehouseService {
     return wh;
   }
 
-  async getSlotDetail(id: string) {
+  async getSlotDetail(id: string, scope?: ScopePrincipal) {
     const slot = await this.prisma.slot.findUnique({
       where: { id },
       include: {
@@ -58,19 +65,21 @@ export class WarehouseService {
           include: { warehouse: { select: { code: true, name: true } } },
         },
         stockItems: {
-          where: { status: { notIn: ['SHIPPED', 'CLOSED', 'CANCELLED'] } },
+          where: { status: { notIn: NOT_IN_LOCATION } },
           include: { product: { select: { code: true, name: true, unit: true } } },
           orderBy: { updatedAt: 'desc' },
           take: 10,
         },
-        _count: { select: { stockItems: true } },
+        _count: { select: { stockItems: IN_LOCATION_COUNT } },
       },
     });
     if (!slot) throw new NotFoundException('Slot not found');
+    assertWarehouseAccess(scope, slot.rack.warehouseId, 'this location');
     return slot;
   }
 
-  async getStats(warehouseId?: string) {
+  async getStats(requestedWarehouseId?: string, scope?: ScopePrincipal) {
+    const warehouseId = warehouseFilter(scope, requestedWarehouseId);
     const where = warehouseId
       ? { rack: { warehouseId } }
       : {};
@@ -101,6 +110,22 @@ export class WarehouseService {
     };
   }
 
+  /** Loads a rack and refuses it when its warehouse is outside the caller's scope. */
+  private async scopedRack(id: string, scope?: ScopePrincipal) {
+    const rack = await this.prisma.rack.findUnique({ where: { id } });
+    if (!rack) throw new NotFoundException('Rack not found');
+    assertWarehouseAccess(scope, rack.warehouseId, 'this rack');
+    return rack;
+  }
+
+  /** Loads a slot (with its rack's warehouse) and refuses it when out of scope. */
+  private async scopedSlot(id: string, scope?: ScopePrincipal) {
+    const slot = await this.prisma.slot.findUnique({ where: { id }, include: { rack: { select: { warehouseId: true } } } });
+    if (!slot) throw new NotFoundException('Slot not found');
+    assertWarehouseAccess(scope, slot.rack.warehouseId, 'this location');
+    return slot;
+  }
+
   // ─── Rack CRUD ────────────────────────────────────────────────────────────
 
   async createRack(dto: {
@@ -113,7 +138,8 @@ export class WarehouseService {
     levels?: number;
     columns?: number;
     description?: string;
-  }, actorId?: string) {
+  }, actorId?: string, scope?: ScopePrincipal) {
+    assertWarehouseAccess(scope, dto.warehouseId, 'this warehouse');
     const exists = await this.prisma.rack.findUnique({
       where: { warehouseId_code: { warehouseId: dto.warehouseId, code: dto.code } },
     });
@@ -123,15 +149,17 @@ export class WarehouseService {
     return rack;
   }
 
-  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string; isActive: boolean }>, actorId?: string) {
-    const rack = await this.prisma.rack.findUnique({ where: { id } });
-    if (!rack) throw new NotFoundException('Rack not found');
+  // Only descriptive fields: moving a rack between warehouses or deactivating it
+  // goes through deleteRack (which refuses racks holding stock), never a PATCH.
+  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string }>, actorId?: string, scope?: ScopePrincipal) {
+    await this.scopedRack(id, scope);
     const updated = await this.prisma.rack.update({ where: { id }, data: dto });
     await this.audit(actorId, 'RACK_UPDATED', 'Rack', id, updated.code);
     return updated;
   }
 
-  async deleteRack(id: string, actorId?: string) {
+  async deleteRack(id: string, actorId?: string, scope?: ScopePrincipal) {
+    await this.scopedRack(id, scope);
     const rack = await this.prisma.rack.findUnique({ where: { id }, include: { _count: { select: { stockItems: true } } } });
     if (!rack) throw new NotFoundException('Rack not found');
     if (rack._count.stockItems > 0) throw new ConflictException('Cannot delete rack with stock items');
@@ -150,7 +178,8 @@ export class WarehouseService {
     slotType?: SlotType;
     capacity?: number;
     maxWeight?: number;
-  }, actorId?: string) {
+  }, actorId?: string, scope?: ScopePrincipal) {
+    await this.scopedRack(rackId, scope);
     const exists = await this.prisma.slot.findUnique({
       where: { rackId_code: { rackId, code: dto.code } },
     });
@@ -167,9 +196,8 @@ export class WarehouseService {
     capacity?: number;
     maxWeight?: number;
     prefix?: string;
-  }) {
-    const rack = await this.prisma.rack.findUnique({ where: { id: rackId } });
-    if (!rack) throw new NotFoundException('Rack not found');
+  }, scope?: ScopePrincipal) {
+    const rack = await this.scopedRack(rackId, scope);
 
     const prefix = dto.prefix ?? rack.code;
     const slots: any[] = [];
@@ -207,15 +235,17 @@ export class WarehouseService {
     return { created: newSlots.length, skipped: existingCodes.size };
   }
 
-  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; status: SlotStatus; capacity: number; maxWeight: number; isActive: boolean }>, actorId?: string) {
-    const slot = await this.prisma.slot.findUnique({ where: { id } });
-    if (!slot) throw new NotFoundException('Slot not found');
+  // Only these fields: deactivating a slot goes through deleteSlot (which
+  // refuses slots holding stock), and a slot never changes rack via PATCH.
+  async updateSlot(id: string, dto: Partial<{ name: string; slotType: SlotType; status: SlotStatus; capacity: number; maxWeight: number }>, actorId?: string, scope?: ScopePrincipal) {
+    await this.scopedSlot(id, scope);
     const updated = await this.prisma.slot.update({ where: { id }, data: dto });
     await this.audit(actorId, 'SLOT_UPDATED', 'Slot', id, updated.code);
     return updated;
   }
 
-  async deleteSlot(id: string, actorId?: string) {
+  async deleteSlot(id: string, actorId?: string, scope?: ScopePrincipal) {
+    await this.scopedSlot(id, scope);
     const slot = await this.prisma.slot.findUnique({ where: { id }, include: { _count: { select: { stockItems: true } } } });
     if (!slot) throw new NotFoundException('Slot not found');
     if (slot._count.stockItems > 0) throw new ConflictException('Cannot delete slot with stock items');
