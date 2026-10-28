@@ -7,7 +7,7 @@ import {
   QrCode, LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle, Calculator, ArrowLeftRight,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Calculator as CountIcon, Trash2,
-  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing,
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -36,6 +36,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { href: '/reports', label: 'Reports', icon: BarChart3 },
+      { href: '/planning', label: 'Project Planning', icon: PlanIcon, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER', 'FINANCE_VIEWER', 'AUDITOR'] },
     ],
   },
   {
