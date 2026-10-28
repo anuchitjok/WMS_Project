@@ -5,7 +5,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { RackType, SlotStatus, SlotType, UserRole } from '@prisma/client';
+import { BulkSlotsDto, CreateRackDto, CreateSlotDto, UpdateRackDto, UpdateSlotDto } from './dto/rack-slot.dto';
+import { UserRole } from '@prisma/client';
 
 const MASTER_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR] as const;
 
@@ -31,7 +32,8 @@ const OPS_ROLES = [
 export class WarehouseController {
   constructor(private readonly warehouseService: WarehouseService) {}
 
-  @Get() findAll() { return this.warehouseService.findAll(); }
+  // Warehouse tree, narrowed to the caller's assigned warehouses (common/warehouse-scope.ts).
+  @Get() findAll(@CurrentUser() user: any) { return this.warehouseService.findAll(user); }
   @Get('products') findProducts() { return this.warehouseService.findProducts(); }
   @Get('brands') findBrands() { return this.warehouseService.findBrands(); }
   @Get('vendors') findVendors() { return this.warehouseService.findVendors(); }
@@ -66,53 +68,54 @@ export class WarehouseController {
   @Get('inventory-by-brand') @ApiOperation({ summary: 'Inventory rolled up per brand' })
   inventoryByBrand() { return this.warehouseService.inventoryByBrand(); }
   @Get('stats') @ApiOperation({ summary: 'KPI stats for warehouse layout' })
-  getStats(@Query('warehouseId') warehouseId?: string) { return this.warehouseService.getStats(warehouseId); }
+  getStats(@Query('warehouseId') warehouseId: string | undefined, @CurrentUser() user: any) { return this.warehouseService.getStats(warehouseId, user); }
   @Get('slots/:id/detail') @ApiOperation({ summary: 'Slot detail with stock items' })
-  getSlotDetail(@Param('id') id: string) { return this.warehouseService.getSlotDetail(id); }
-  @Get(':id') findOne(@Param('id') id: string) { return this.warehouseService.findOne(id); }
+  getSlotDetail(@Param('id') id: string, @CurrentUser() user: any) { return this.warehouseService.getSlotDetail(id, user); }
+  @Get(':id') findOne(@Param('id') id: string, @CurrentUser() user: any) { return this.warehouseService.findOne(id, user); }
 
   // ─── Rack ──────────────────────────────────────────────────────────────────
 
   @Post('racks') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Create rack' })
-  createRack(@Body() dto: { warehouseId: string; code: string; name?: string; zone?: string; rackType?: RackType; capacity?: number; levels?: number; columns?: number; description?: string }, @CurrentUser('id') userId: string) {
-    return this.warehouseService.createRack(dto, userId);
+  createRack(@Body() dto: CreateRackDto, @CurrentUser() user: any) {
+    return this.warehouseService.createRack(dto, user.id, user);
   }
 
   @Patch('racks/:id') @UseGuards(RolesGuard) @Roles(...OPS_ROLES)
-  updateRack(@Param('id') id: string, @Body() dto: any, @CurrentUser('id') userId: string) {
-    return this.warehouseService.updateRack(id, dto, userId);
+  updateRack(@Param('id') id: string, @Body() dto: UpdateRackDto, @CurrentUser() user: any) {
+    return this.warehouseService.updateRack(id, dto, user.id, user);
   }
 
   @Delete('racks/:id') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
-  deleteRack(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.warehouseService.deleteRack(id, userId);
+  deleteRack(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.warehouseService.deleteRack(id, user.id, user);
   }
 
   // ─── Slot ──────────────────────────────────────────────────────────────────
 
   @Post('racks/:rackId/slots') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Create single slot' })
-  createSlot(@Param('rackId') rackId: string, @Body() dto: { code: string; name?: string; level?: number; column?: number; slotType?: SlotType; capacity?: number; maxWeight?: number }, @CurrentUser('id') userId: string) {
-    return this.warehouseService.createSlot(rackId, dto, userId);
+  createSlot(@Param('rackId') rackId: string, @Body() dto: CreateSlotDto, @CurrentUser() user: any) {
+    return this.warehouseService.createSlot(rackId, dto, user.id, user);
   }
 
   @Post('racks/:rackId/slots/bulk') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
   @ApiOperation({ summary: 'Bulk generate slots for a rack' })
   bulkGenerateSlots(
     @Param('rackId') rackId: string,
-    @Body() dto: { levels: number; columns: number; slotType?: SlotType; capacity?: number; maxWeight?: number; prefix?: string },
+    @Body() dto: BulkSlotsDto,
+    @CurrentUser() user: any,
   ) {
-    return this.warehouseService.bulkGenerateSlots(rackId, dto);
+    return this.warehouseService.bulkGenerateSlots(rackId, dto, user);
   }
 
   @Patch('slots/:id') @UseGuards(RolesGuard) @Roles(...OPS_ROLES)
-  updateSlot(@Param('id') id: string, @Body() dto: any, @CurrentUser('id') userId: string) {
-    return this.warehouseService.updateSlot(id, dto, userId);
+  updateSlot(@Param('id') id: string, @Body() dto: UpdateSlotDto, @CurrentUser() user: any) {
+    return this.warehouseService.updateSlot(id, dto, user.id, user);
   }
 
   @Delete('slots/:id') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ROLES)
-  deleteSlot(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.warehouseService.deleteSlot(id, userId);
+  deleteSlot(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.warehouseService.deleteSlot(id, user.id, user);
   }
 }

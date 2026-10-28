@@ -7,6 +7,9 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
+import { GrantActor, assertCanGrantLegacyRole } from './role-grant';
+import { MasterDataService } from '../master-data/master-data.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TokenBlocklistService } from './token-blocklist.service';
 import { LoginDto } from './dto/login.dto';
@@ -19,6 +22,7 @@ export class AuthService {
     private jwt: JwtService,
     private config: ConfigService,
     private blocklist: TokenBlocklistService,
+    private masterData: MasterDataService,
   ) {}
 
   // Invalidate token on logout
@@ -71,10 +75,12 @@ export class AuthService {
     });
 
     const payload = { sub: user.id, username: user.username, role: user.role };
-    const accessToken = this.jwt.sign(payload);
+    // Every token carries a jti so logout / revocation (TokenBlocklist) can target it.
+    const accessToken = this.jwt.sign(payload, { jwtid: randomUUID() });
     const refreshToken = this.jwt.sign(payload, {
       secret: this.config.get('JWT_REFRESH_SECRET'),
       expiresIn: this.config.get('JWT_REFRESH_EXPIRES_IN'),
+      jwtid: randomUUID(),
     });
 
     return {
@@ -122,7 +128,11 @@ export class AuthService {
     return { changed: true };
   }
 
-  async register(dto: RegisterDto) {
+  async register(dto: RegisterDto, actor: GrantActor) {
+    // Role assignment is enforced here, not in the UI: only a system
+    // administrator may create another SYSTEM_ADMIN.
+    assertCanGrantLegacyRole(actor, dto.role);
+    dto.department = (await this.masterData.assertDepartment(dto.department)) ?? undefined;
     const exists = await this.prisma.user.findFirst({
       where: { OR: [{ username: dto.username }, { email: dto.email ?? undefined }] },
     });
@@ -140,6 +150,9 @@ export class AuthService {
       },
       select: { id: true, username: true, fullName: true, email: true, role: true },
     });
+    await this.prisma.auditLog.create({
+      data: { userId: actor.id, action: 'USER_CREATED', entityType: 'User', entityId: user.id, detail: `${user.username} (${user.role})` },
+    });
     return user;
   }
 
@@ -148,8 +161,15 @@ export class AuthService {
       const payload = this.jwt.verify(refreshToken, {
         secret: this.config.get('JWT_REFRESH_SECRET'),
       });
-      const newPayload = { sub: payload.sub, username: payload.username, role: payload.role };
-      return { accessToken: this.jwt.sign(newPayload) };
+      if (payload.jti && (await this.blocklist.isRevoked(payload.jti))) throw new Error('revoked');
+      // A deactivated or deleted account must not mint new access tokens.
+      const user = await this.prisma.user.findFirst({
+        where: { id: payload.sub, deletedAt: null, isActive: true },
+        select: { id: true, username: true, role: true },
+      });
+      if (!user) throw new Error('inactive');
+      const newPayload = { sub: user.id, username: user.username, role: user.role };
+      return { accessToken: this.jwt.sign(newPayload, { jwtid: randomUUID() }) };
     } catch {
       throw new BadRequestException('Invalid refresh token');
     }

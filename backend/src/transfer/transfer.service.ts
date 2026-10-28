@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { assertNotCountLocked } from '../common/count-lock';
 import { FINAL_STATUSES, ISSUED_STATUSES, LocationInput, resolveLocation } from '../common/stock-state';
 import { StockStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { nanoid } from 'nanoid';
+import { ScopePrincipal, assertStockInScope, assertWarehouseAccess, filterByStockScope } from '../common/warehouse-scope';
 
 const NOT_RELOCATABLE: StockStatus[] = [
   StockStatus.PICKING, StockStatus.PICKED, StockStatus.PACKED, StockStatus.READY_FOR_PICKUP,
@@ -13,17 +15,20 @@ const NOT_RELOCATABLE: StockStatus[] = [
 export class TransferService {
   constructor(private prisma: PrismaService) {}
 
-  findAll(status?: string) {
-    return this.prisma.stockTransfer.findMany({
+  async findAll(status?: string, scope?: ScopePrincipal) {
+    const rows = await this.prisma.stockTransfer.findMany({
       where: status ? { status } : {},
       orderBy: { createdAt: 'desc' },
     });
+    return filterByStockScope(this.prisma, scope, rows);
   }
 
   async create(
     dto: { stockItemId?: string; productLabel: string; quantity: number; fromLocation: string; toLocation: string; notes?: string },
     userId: string,
+    scope?: ScopePrincipal,
   ) {
+    await assertStockInScope(this.prisma, scope, dto.stockItemId);
     const trf = await this.prisma.stockTransfer.create({
       data: {
         refNumber: `TRF-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`,
@@ -48,9 +53,12 @@ export class TransferService {
     id: string,
     dest: LocationInput | undefined,
     userId: string,
+    scope?: ScopePrincipal,
   ) {
     const trf = await this.prisma.stockTransfer.findUnique({ where: { id } });
     if (!trf) throw new NotFoundException('Transfer not found');
+    // Both ends must be in the caller's warehouses.
+    await assertStockInScope(this.prisma, scope, trf.stockItemId, 'the source stock');
 
     return this.prisma.$transaction(async (tx) => {
       // Claim the transfer: completing twice (or a cancelled transfer) is rejected.
@@ -61,7 +69,9 @@ export class TransferService {
       if (claimed.count === 0) throw new ConflictException(`Transfer is already ${trf.status}`);
 
       const loc = dest ? await resolveLocation(tx, dest) : {};
+      if (loc.warehouseId) assertWarehouseAccess(scope, loc.warehouseId, 'the destination warehouse');
       if (trf.stockItemId && Object.keys(loc).length > 0) {
+        await assertNotCountLocked(tx, [trf.stockItemId]);
         // Picked or issued stock is no longer on its shelf — it cannot be relocated.
         const moved = await tx.stockItem.updateMany({
           where: { id: trf.stockItemId, status: { notIn: NOT_RELOCATABLE } },

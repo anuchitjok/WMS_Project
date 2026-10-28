@@ -1,9 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { createTransport, Transporter } from 'nodemailer';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationChannel } from '@prisma/client';
+import {
+  DEFAULT_TEMPLATES, NOTIFICATION_TYPES, TEMPLATE_VARIABLES, TemplateInput,
+  escapeHtml, missingSmtpSettings, renderTemplate, validateTemplate,
+} from './notification-templates';
 
 export type NotificationType =
   | 'REQUEST_SUBMITTED' | 'REQUEST_APPROVED' | 'REQUEST_REJECTED'
@@ -23,20 +27,8 @@ export interface NotifyPayload {
   channel?: NotificationChannel;
 }
 
-const DEFAULT_TEMPLATES: Record<NotificationType, { title: string; emailSubject: string }> = {
-  REQUEST_SUBMITTED:  { title: '📋 New Withdrawal Request', emailSubject: '[WMS] Request submitted — action required' },
-  REQUEST_APPROVED:   { title: '✅ Request Approved', emailSubject: '[WMS] Your request has been approved' },
-  REQUEST_REJECTED:   { title: '❌ Request Rejected', emailSubject: '[WMS] Your request was rejected' },
-  PICKING_TASK:       { title: '📦 Picking Task Assigned', emailSubject: '[WMS] New picking task for you' },
-  READY_FOR_PICKUP:   { title: '🚚 Ready for Pickup', emailSubject: '[WMS] Your goods are ready for pickup' },
-  USAGE_REQUIRED:     { title: '🔔 Usage Confirmation Required', emailSubject: '[WMS] Please confirm RMA usage result' },
-  DOA_DECLARED:       { title: '⚠️ DOA Item Declared', emailSubject: '[WMS] DOA item requires RTV review' },
-  RTV_OVERDUE:        { title: '⏱ RTV Case Overdue', emailSubject: '[WMS] RTV case SLA exceeded' },
-  UNUSED_RETURN:      { title: '🔁 Unused Return Submitted', emailSubject: '[WMS] Unused goods return pending verification' },
-  LOW_STOCK:          { title: '↓ Low Stock Alert', emailSubject: '[WMS] Stock below minimum threshold' },
-  SLA_OVERDUE:        { title: '⏰ SLA Overdue', emailSubject: '[WMS] Workflow SLA has been exceeded' },
-  GENERAL:            { title: '💬 System Notification', emailSubject: '[WMS] Notification' },
-};
+// Built-in templates and variables live in notification-templates.ts; admin
+// overrides are rows in NotificationTemplate (see listTemplates/saveTemplate).
 
 @Injectable()
 export class NotificationsService {
@@ -63,8 +55,25 @@ export class NotificationsService {
   }
 
   // ── Core send method ────────────────────────────────────────────────────────
+  /** Active admin override for a type, else the built-in default. */
+  private async templateFor(type: NotificationType) {
+    const row = await this.prisma.notificationTemplate.findUnique({ where: { type } }).catch(() => null);
+    const def = DEFAULT_TEMPLATES[type];
+    if (row && row.isActive) {
+      return { title: row.title, body: row.body, emailSubject: row.emailSubject || def.emailSubject, emailBody: row.emailBody, custom: true };
+    }
+    return { ...def, emailBody: null as string | null, custom: false };
+  }
+
   async send(payload: NotifyPayload): Promise<void> {
-    const tpl = DEFAULT_TEMPLATES[payload.type];
+    const t = await this.templateFor(payload.type);
+    const baseVars: Record<string, unknown> = { ...(payload.metadata ?? {}), title: payload.title, message: payload.message, name: '' };
+    // A custom template defines the wording; otherwise the caller's title/message are used as before.
+    const tpl = {
+      title: t.custom ? renderTemplate(t.title, baseVars) : (payload.title || t.title),
+      message: t.custom ? renderTemplate(t.body, baseVars) : payload.message,
+      emailSubject: renderTemplate(t.emailSubject, baseVars),
+    };
     const channel = payload.channel ?? NotificationChannel.IN_APP;
     let targetIds = [...payload.userIds];
 
@@ -84,8 +93,8 @@ export class NotificationsService {
       data: targetIds.map((userId) => ({
         userId,
         type: payload.type,
-        title: payload.title || tpl.title,
-        message: payload.message,
+        title: tpl.title,
+        message: tpl.message,
         channel,
         entityType: payload.entityType,
         entityId: payload.entityId,
@@ -95,16 +104,16 @@ export class NotificationsService {
 
     // Push realtime to each connected user
     targetIds.forEach((userId) => {
-      (this.realtime.server as any)?.to?.(`user:${userId}`)?.emit('notification:new', {
+      this.realtime.emitToUser(userId, 'notification:new', {
         type: payload.type,
-        title: payload.title || tpl.title,
-        message: payload.message,
+        title: tpl.title,
+        message: tpl.message,
         entityType: payload.entityType,
         entityId: payload.entityId,
       });
     });
     // Also broadcast to a general notifications room for dashboard refresh
-    (this.realtime.server as any)?.emit?.('notification:broadcast', { type: payload.type });
+    this.realtime.emitToAuthenticated('notification:broadcast', { type: payload.type });
 
     // Send email if configured
     if (channel !== NotificationChannel.IN_APP && this.mailer) {
@@ -119,7 +128,9 @@ export class NotificationsService {
             from: this.config.get('SMTP_FROM') ?? 'noreply@hsnt-wms.com',
             to: user.email,
             subject: tpl.emailSubject,
-            html: this.renderEmail(user.fullName, payload.title || tpl.title, payload.message, payload.metadata),
+            html: t.emailBody
+              ? this.wrapEmail(escapeHtml(renderTemplate(t.emailBody, { ...baseVars, name: user.fullName })).split('\n').join('<br>'))
+              : this.renderEmail(user.fullName, tpl.title, tpl.message, payload.metadata),
           });
           await this.prisma.notification.updateMany({
             where: { userId: user.id, type: payload.type, emailSent: false },
@@ -141,21 +152,74 @@ export class NotificationsService {
     });
   }
 
+  // Every interpolated value is HTML-escaped: titles, messages and metadata can carry user input.
   private renderEmail(name: string, title: string, message: string, meta?: Record<string, unknown>): string {
-    const extras = meta ? Object.entries(meta).map(([k, v]) => `<tr><td style="color:#888">${k}</td><td><b>${v}</b></td></tr>`).join('') : '';
+    const extras = meta ? Object.entries(meta).map(([k, v]) => `<tr><td style="color:#888">${escapeHtml(k)}</td><td><b>${escapeHtml(v)}</b></td></tr>`).join('') : '';
+    return this.wrapEmail(`
+          <h3 style="color:#0f172a">${escapeHtml(title)}</h3>
+          <p style="color:#475569">${escapeHtml(message)}</p>
+          ${extras ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">${extras}</table>` : ''}`);
+  }
+
+  private wrapEmail(inner: string): string {
     return `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:20px;background:#f8fafc">
         <div style="background:#0f766e;color:#fff;padding:18px 24px;border-radius:8px 8px 0 0">
           <h2 style="margin:0">HSNT WMS</h2>
         </div>
         <div style="background:#fff;padding:24px;border-radius:0 0 8px 8px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
-          <h3 style="color:#0f172a">${title}</h3>
-          <p style="color:#475569">${message}</p>
-          ${extras ? `<table style="width:100%;border-collapse:collapse;margin-top:12px;font-size:13px">${extras}</table>` : ''}
+          ${inner}
           <hr style="margin:20px 0;border:none;border-top:1px solid #e2e8f0">
           <p style="color:#94a3b8;font-size:12px">HSNT WMS — Do not reply to this email.</p>
         </div>
       </div>`;
+  }
+
+  // ── Template administration ───────────────────────────────────────────────
+  async listTemplates() {
+    const rows = await this.prisma.notificationTemplate.findMany();
+    const byType = new Map(rows.map((r) => [r.type, r]));
+    return NOTIFICATION_TYPES.map((type) => {
+      const row = byType.get(type);
+      return {
+        type,
+        variables: TEMPLATE_VARIABLES[type],
+        default: DEFAULT_TEMPLATES[type],
+        custom: row ? { title: row.title, body: row.body, emailSubject: row.emailSubject, emailBody: row.emailBody, isActive: row.isActive, updatedAt: row.updatedAt } : null,
+      };
+    });
+  }
+
+  async saveTemplate(type: string, dto: TemplateInput, userId: string) {
+    const v = validateTemplate(type, dto);
+    const row = await this.prisma.notificationTemplate.upsert({
+      where: { type: v.type },
+      update: { title: v.title, body: v.body, emailSubject: v.emailSubject, emailBody: v.emailBody, isActive: v.isActive },
+      create: { type: v.type, title: v.title, body: v.body, emailSubject: v.emailSubject, emailBody: v.emailBody, isActive: v.isActive },
+    });
+    await this.prisma.auditLog.create({ data: { userId, action: 'NOTIFICATION_TEMPLATE_SAVED', entityType: 'NotificationTemplate', entityId: row.id, detail: v.type } });
+    return row;
+  }
+
+  async resetTemplate(type: string, userId: string) {
+    if (!(NOTIFICATION_TYPES as readonly string[]).includes(type)) throw new BadRequestException(`Unknown notification type: ${type}`);
+    const res = await this.prisma.notificationTemplate.deleteMany({ where: { type } });
+    await this.prisma.auditLog.create({ data: { userId, action: 'NOTIFICATION_TEMPLATE_RESET', entityType: 'NotificationTemplate', entityId: type, detail: `${type} back to default` } });
+    return { reset: res.count > 0 };
+  }
+
+  /** Whether email can be delivered, naming any missing settings — never their values. */
+  deliveryStatus() {
+    const missing = missingSmtpSettings((k) => this.config.get(k));
+    return {
+      inApp: { enabled: true },
+      email: {
+        configured: missing.length === 0 && !!this.mailer,
+        missing,
+        from: missing.length === 0 ? (this.config.get('SMTP_FROM') ? 'configured' : 'default (noreply@hsnt-wms.com)') : null,
+        hint: missing.length ? `Email is off. Set ${missing.join(', ')} in the server environment and restart the API.` : null,
+      },
+    };
   }
 
   // ── Convenience methods (domain-specific) ─────────────────────────────────

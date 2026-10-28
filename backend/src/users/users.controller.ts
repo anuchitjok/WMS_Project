@@ -22,31 +22,31 @@ export class UsersController {
 
   @Post()
   @ApiOperation({ summary: 'Create user' })
-  create(@Body() dto: CreateUserDto, @CurrentUser('id') actor: string) { return this.usersService.create(dto, actor); }
+  create(@Body() dto: CreateUserDto, @CurrentUser() actor: any) { return this.usersService.create(dto, actor); }
 
   @Patch(':id')
   @ApiOperation({ summary: 'Edit user' })
-  update(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser('id') actor: string) {
+  update(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() actor: any) {
     return this.usersService.update(id, dto, actor);
   }
 
-  @Patch(':id/toggle') toggle(@Param('id') id: string, @CurrentUser('id') actor: string) { return this.usersService.toggleActive(id, actor); }
+  @Patch(':id/toggle') toggle(@Param('id') id: string, @CurrentUser() actor: any) { return this.usersService.toggleActive(id, actor); }
 
   @Post(':id/reset-password')
   @ApiOperation({ summary: 'Reset password (returns temp password, forces change)' })
-  resetPassword(@Param('id') id: string, @CurrentUser('id') actor: string) { return this.usersService.resetPassword(id, actor); }
+  resetPassword(@Param('id') id: string, @CurrentUser() actor: any) { return this.usersService.resetPassword(id, actor); }
 
-  @Patch(':id/force-change') forceChange(@Param('id') id: string, @CurrentUser('id') actor: string) { return this.usersService.forceChange(id, actor); }
+  @Patch(':id/force-change') forceChange(@Param('id') id: string, @CurrentUser() actor: any) { return this.usersService.forceChange(id, actor); }
 
   @Patch(':id/warehouses')
   @ApiOperation({ summary: 'Set assigned warehouses' })
-  setWarehouses(@Param('id') id: string, @Body('warehouseIds') ids: string[], @CurrentUser('id') actor: string) {
+  setWarehouses(@Param('id') id: string, @Body('warehouseIds') ids: string[], @CurrentUser() actor: any) {
     return this.usersService.setWarehouses(id, ids, actor);
   }
 
   @Patch(':id/role')
   @ApiOperation({ summary: 'Assign dynamic RBAC role' })
-  setRole(@Param('id') id: string, @Body('roleId') roleId: string | null, @CurrentUser('id') actor: string) {
+  setRole(@Param('id') id: string, @Body('roleId') roleId: string | null, @CurrentUser() actor: any) {
     return this.usersService.setRole(id, roleId, actor);
   }
 
@@ -63,5 +63,5 @@ export class UsersController {
     return this.usersService.unassignRole(id, aid, actor);
   }
 
-  @Delete(':id') softDelete(@Param('id') id: string, @CurrentUser('id') actor: string) { return this.usersService.softDelete(id, actor); }
+  @Delete(':id') softDelete(@Param('id') id: string, @CurrentUser() actor: any) { return this.usersService.softDelete(id, actor); }
 }

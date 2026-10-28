@@ -20,7 +20,7 @@ export class AppController {
   // Health check — verifies DB connectivity. Exempt from rate limiting so
   // load balancers / uptime monitors can poll freely.
   @Get('health')
-  @SkipThrottle()
+  @SkipThrottle({ default: true, ip: true })
   @ApiOperation({ summary: 'Health check (liveness + DB connectivity)' })
   async health() {
     let db = 'down';

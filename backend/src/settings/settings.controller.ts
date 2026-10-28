@@ -2,10 +2,10 @@ import { Controller, Get, Patch, Body, Param, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
 import { SettingsService } from './settings.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { AccessGuard } from '../auth/guards/access.guard';
+import { Access } from '../auth/decorators/access.decorator';
+import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { UserRole } from '@prisma/client';
 
 @ApiTags('Settings')
 @ApiBearerAuth()
@@ -20,8 +20,8 @@ export class SettingsController {
   }
 
   @Patch(':key')
-  @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN)
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.settings)
   update(@Param('key') key: string, @Body('value') value: string, @CurrentUser('id') userId: string) {
     return this.service.update(key, value, userId);
   }

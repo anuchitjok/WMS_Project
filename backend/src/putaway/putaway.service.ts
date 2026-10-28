@@ -4,6 +4,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus } from '@prisma/client';
 import { boxFitsSlot } from './putaway-fit.util';
 import { LocationInput, resolveLocation, transitionStock } from '../common/stock-state';
+import { ScopePrincipal, assertWarehouseAccess, scopedWarehouseIds } from '../common/warehouse-scope';
 
 @Injectable()
 export class PutawayService {
@@ -40,9 +41,12 @@ export class PutawayService {
   }
 
   // Items awaiting putaway = PENDING_INSPECTION
-  pending() {
+  // Scoped users see items already assigned to their warehouses plus unassigned
+  // ones (still at the dock), which they may put away into their own warehouses.
+  pending(scope?: ScopePrincipal) {
+    const ids = scopedWarehouseIds(scope);
     return this.prisma.stockItem.findMany({
-      where: { status: StockStatus.PENDING_INSPECTION },
+      where: { status: StockStatus.PENDING_INSPECTION, ...(ids ? { OR: [{ warehouseId: { in: ids } }, { warehouseId: null }] } : {}) },
       include: { product: { include: { brand: true } }, warehouse: true, rack: true, slot: true },
       orderBy: { receivedDate: 'asc' },
     });
@@ -51,9 +55,13 @@ export class PutawayService {
   // Confirm putaway: assign location and set AVAILABLE.
   // Only stock waiting in the putaway queue (PENDING_INSPECTION) can be put away,
   // and only into a location that exists in the Warehouse → Rack → Slot hierarchy.
-  async confirm(stockItemId: string, location: LocationInput, userId: string) {
+  async confirm(stockItemId: string, location: LocationInput, userId: string, scope?: ScopePrincipal) {
+    // Stock already assigned to a warehouse must be in scope; unassigned (dock) stock may be put away by anyone in scope.
+    const current = await this.prisma.stockItem.findUnique({ where: { id: stockItemId }, select: { warehouseId: true } });
+    if (current?.warehouseId) assertWarehouseAccess(scope, current.warehouseId, 'this stock item');
     const updated = await this.prisma.$transaction(async (tx) => {
       const loc = await resolveLocation(tx, location);
+      if (scopedWarehouseIds(scope)) assertWarehouseAccess(scope, loc.warehouseId, 'the destination warehouse');
       await transitionStock(tx, stockItemId, [StockStatus.PENDING_INSPECTION], StockStatus.AVAILABLE, loc);
       await tx.auditLog.create({
         data: {

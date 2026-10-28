@@ -2,6 +2,10 @@ import { Injectable, NotFoundException, ConflictException, ForbiddenException } 
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
+import { MasterDataService } from '../master-data/master-data.service';
+import {
+  GrantActor, isPrivilegedActor, assertCanGrantLegacyRole, assertCanGrantDbRole, assertCanManageTarget,
+} from '../auth/role-grant';
 
 const USER_SELECT = {
   id: true, username: true, fullName: true, email: true, role: true, roleId: true,
@@ -19,7 +23,7 @@ const USER_SELECT = {
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private masterData: MasterDataService) {}
 
   findAll(role?: UserRole) {
     return this.prisma.user.findMany({
@@ -35,7 +39,22 @@ export class UsersService {
     return user;
   }
 
-  async create(dto: any, actorId: string) {
+  /** Loads a DB role with its permission codes and checks the actor may hand it out. */
+  private async assertGrantableRoleId(actor: GrantActor, roleId: string | null | undefined) {
+    if (!roleId) return;
+    const role = await this.prisma.role.findUnique({
+      where: { id: roleId },
+      select: { key: true, permissions: { select: { permission: { select: { code: true } } } } },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+    assertCanGrantDbRole(actor, role);
+  }
+
+  async create(dto: any, actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanGrantLegacyRole(actor, dto.role);
+    await this.assertGrantableRoleId(actor, dto.roleId);
+    dto.department = await this.masterData.assertDepartment(dto.department);
     const exists = await this.prisma.user.findFirst({
       where: { OR: [{ username: dto.username }, ...(dto.email ? [{ email: dto.email }] : [])] },
     });
@@ -66,8 +85,14 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, dto: any, actorId: string) {
-    await this.findOne(id);
+  async update(id: string, dto: any, actor: GrantActor) {
+    const actorId = actor.id;
+    const current = await this.findOne(id);
+    assertCanManageTarget(actor, current);
+    if (dto.role !== undefined) assertCanGrantLegacyRole(actor, dto.role);
+    if (dto.roleId !== undefined) await this.assertGrantableRoleId(actor, dto.roleId);
+    // Only a changed department is validated, so existing users keep legacy values until edited.
+    if (dto.department !== undefined && dto.department !== current.department) dto.department = await this.masterData.assertDepartment(dto.department);
 
     // Username must stay unique across (non-deleted) users
     if (dto.username) {
@@ -101,8 +126,10 @@ export class UsersService {
     return user;
   }
 
-  async toggleActive(id: string, actorId: string) {
+  async toggleActive(id: string, actor: GrantActor) {
+    const actorId = actor.id;
     const user = await this.findOne(id);
+    assertCanManageTarget(actor, user);
     const updated = await this.prisma.user.update({
       where: { id }, data: { isActive: !user.isActive }, select: { id: true, isActive: true },
     });
@@ -110,8 +137,9 @@ export class UsersService {
     return updated;
   }
 
-  async resetPassword(id: string, actorId: string) {
-    await this.findOne(id);
+  async resetPassword(id: string, actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanManageTarget(actor, await this.findOne(id));
     const temp = 'Temp@' + Math.random().toString(36).slice(2, 8);
     const hash = await bcrypt.hash(temp, 12);
     await this.prisma.user.update({
@@ -122,8 +150,9 @@ export class UsersService {
     return { tempPassword: temp, forcePasswordChange: true };
   }
 
-  async forceChange(id: string, actorId: string) {
-    await this.findOne(id);
+  async forceChange(id: string, actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanManageTarget(actor, await this.findOne(id));
     await this.prisma.user.update({ where: { id }, data: { forcePasswordChange: true } });
     await this.audit(actorId, 'FORCE_PASSWORD_CHANGE', id);
     return { forcePasswordChange: true };
@@ -135,8 +164,9 @@ export class UsersService {
     });
   }
 
-  async setWarehouses(id: string, warehouseIds: string[], actorId: string) {
-    await this.findOne(id);
+  async setWarehouses(id: string, warehouseIds: string[], actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanManageTarget(actor, await this.findOne(id));
     await this.prisma.$transaction([
       this.prisma.userWarehouse.deleteMany({ where: { userId: id } }),
       this.prisma.userWarehouse.createMany({
@@ -148,15 +178,18 @@ export class UsersService {
     return this.findOne(id);
   }
 
-  async setRole(id: string, roleId: string | null, actorId: string) {
-    await this.findOne(id);
+  async setRole(id: string, roleId: string | null, actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanManageTarget(actor, await this.findOne(id));
+    await this.assertGrantableRoleId(actor, roleId);
     const user = await this.prisma.user.update({ where: { id }, data: { roleId }, select: USER_SELECT });
     await this.audit(actorId, 'USER_ROLE_ASSIGNED', id, roleId ?? 'none');
     return user;
   }
 
-  async softDelete(id: string, actorId: string) {
-    await this.findOne(id);
+  async softDelete(id: string, actor: GrantActor) {
+    const actorId = actor.id;
+    assertCanManageTarget(actor, await this.findOne(id));
     const r = await this.prisma.user.update({ where: { id }, data: { deletedAt: new Date(), isActive: false } });
     await this.audit(actorId, 'USER_DELETED', id);
     return r;
@@ -174,15 +207,16 @@ export class UsersService {
   async assignRole(
     userId: string,
     dto: { roleId: string; warehouseId?: string; department?: string; expiresAt?: string },
-    actor: { id: string; roleKey?: string },
+    actor: GrantActor,
   ) {
-    await this.findOne(userId);
-    const role = await this.prisma.role.findUnique({ where: { id: dto.roleId } });
+    assertCanManageTarget(actor, await this.findOne(userId));
+    const role = await this.prisma.role.findUnique({
+      where: { id: dto.roleId },
+      include: { permissions: { select: { permission: { select: { code: true } } } } },
+    });
     if (!role) throw new NotFoundException('Role not found');
-    // Privilege escalation guard: only SUPER_ADMIN can grant SUPER_ADMIN
-    if (role.key === 'SUPER_ADMIN' && actor.roleKey !== 'SUPER_ADMIN') {
-      throw new ForbiddenException('Only SUPER_ADMIN can assign the SUPER_ADMIN role');
-    }
+    // Privilege escalation guard: SUPER_ADMIN only by SUPER_ADMIN; others only roles within their own permissions
+    assertCanGrantDbRole(actor, role);
     const data = {
       department: dto.department ?? null,
       expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
@@ -200,12 +234,13 @@ export class UsersService {
     return assignment;
   }
 
-  async unassignRole(userId: string, assignmentId: string, actor: { id: string; roleKey?: string }) {
+  async unassignRole(userId: string, assignmentId: string, actor: GrantActor) {
     const a = await this.prisma.userRoleAssignment.findUnique({ where: { id: assignmentId }, include: { role: true } });
     if (!a || a.userId !== userId) throw new NotFoundException('Assignment not found');
-    if (a.role.key === 'SUPER_ADMIN' && actor.roleKey !== 'SUPER_ADMIN') {
+    if (a.role.key === 'SUPER_ADMIN' && !isPrivilegedActor(actor)) {
       throw new ForbiddenException('Only SUPER_ADMIN can revoke the SUPER_ADMIN role');
     }
+    assertCanManageTarget(actor, await this.findOne(userId));
     await this.prisma.userRoleAssignment.delete({ where: { id: assignmentId } });
     await this.audit(actor.id, 'USER_ROLE_REVOKED', userId, a.role.key);
     return { revoked: true };

@@ -1,4 +1,7 @@
+import { assertSerialsFree } from '../common/serial-guard';
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { ScopePrincipal, assertStockInScope } from '../common/warehouse-scope';
+import { assertNotCountLocked } from '../common/count-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateStockItemDto } from './dto/create-stock-item.dto';
@@ -75,6 +78,11 @@ export class InventoryService {
     return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
+  /** Refuses an item outside the caller's warehouses (404 for unknown ids is left to the caller). */
+  async assertItemScope(id: string, scope?: ScopePrincipal) {
+    await assertStockInScope(this.prisma, scope, id);
+  }
+
   async findOne(id: string) {
     const item = await this.prisma.stockItem.findUnique({
       where: { id },
@@ -139,13 +147,16 @@ export class InventoryService {
       }
     }
 
-    const item = await this.prisma.stockItem.create({
-      data: {
-        ...dto,
-        expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : undefined,
-        createdById: userId,
-      },
-      include: { product: true, warehouse: true },
+    const item = await this.prisma.$transaction(async (tx) => {
+      await assertSerialsFree(tx, [dto.serialNumber]);
+      return tx.stockItem.create({
+        data: {
+          ...dto,
+          expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : undefined,
+          createdById: userId,
+        },
+        include: { product: true, warehouse: true },
+      });
     });
 
     this.realtime.emitInventoryUpdate({ action: 'created', item });
@@ -278,6 +289,7 @@ export class InventoryService {
   ) {
     return this.prisma.$transaction(async (tx) => {
       const loc = await resolveLocation(tx, location);
+      await assertNotCountLocked(tx, [id]);
       // Picked or issued stock is no longer on its shelf — it cannot be relocated.
       const moved = await tx.stockItem.updateMany({
         where: { id, status: { notIn: NOT_RELOCATABLE } },
@@ -304,9 +316,9 @@ export class InventoryService {
     });
   }
 
-  async getSummary() {
+  async getSummary(warehouse?: string | { in: string[] }) {
     const [totalByStatus, lowStock] = await Promise.all([
-      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true } }),
+      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true }, ...(warehouse ? { where: { warehouseId: warehouse } } : {}) }),
       this.prisma.product.findMany({
         where: { stockItems: { every: { status: { in: [StockStatus.AVAILABLE] } } } },
         include: { _count: { select: { stockItems: true } } },
@@ -318,7 +330,7 @@ export class InventoryService {
 
   // ─── Enterprise KPI ───────────────────────────────────────────────────────
 
-  async getKpi(warehouseId?: string) {
+  async getKpi(warehouseId?: string | { in: string[] }) {
     const AGING_90_DAYS = 90;
     const AGING_365_DAYS = 365;
     const aging90Cutoff = new Date(Date.now() - AGING_90_DAYS * 86_400_000);

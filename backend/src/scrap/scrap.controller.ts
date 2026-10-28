@@ -21,8 +21,9 @@ export class ScrapController {
     @Query('status') status?: ScrapStatus,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @CurrentUser() user?: any,
   ) {
-    return this.scrap.findAll({ status, page: page ? +page : 1, limit: limit ? +limit : 20 });
+    return this.scrap.findAll({ status, page: page ? +page : 1, limit: limit ? +limit : 20 }, user);
   }
 
   @Get(':id')
@@ -34,16 +35,16 @@ export class ScrapController {
   @Access(ACCESS.scrap)
   @ApiOperation({ summary: 'Create scrap case' })
   create(
-    @Body() body: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
-    @CurrentUser('id') userId: string,
+    @Body() body: { stockItemId: string; reason?: string; reasonCode?: string; description?: string; disposalMethod?: string; quantity?: number },
+    @CurrentUser() user: any,
   ) {
-    return this.scrap.create(body, userId);
+    return this.scrap.create(body, user.id, user);
   }
 
   @Patch(':id/status')
   @Access(ACCESS.scrap)
   @ApiOperation({ summary: 'Advance scrap case status' })
-  updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @CurrentUser('id') userId: string) {
-    return this.scrap.updateStatus(id, status, userId);
+  updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @CurrentUser() user: any) {
+    return this.scrap.updateStatus(id, status, user.id, user);
   }
 }

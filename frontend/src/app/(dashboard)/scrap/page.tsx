@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import { ReasonCodeField, reasonFilled, type ReasonValue } from '@/components/reason-code-field';
 
 const SCRAP_FLOW: Record<string, string[]> = {
   PENDING_REVIEW: ['APPROVED', 'REJECTED'],
@@ -32,6 +33,7 @@ export default function ScrapPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ stockItemId: '', reason: '', description: '', disposalMethod: '', quantity: 1 });
   const [submitting, setSubmitting] = useState(false);
+  const [reason, setReason] = useState<ReasonValue>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,10 +53,11 @@ export default function ScrapPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.stockItemId || !form.reason) { toast.error('Stock Item ID and Reason are required'); return; }
+    if (!form.stockItemId || !reasonFilled(reason)) { toast.error('Stock Item ID and Reason are required'); return; }
     setSubmitting(true);
     try {
-      await scrapApi.create({ ...form, quantity: Number(form.quantity) });
+      await scrapApi.create({ ...form, ...reason, reason: reason.reason?.trim(), quantity: Number(form.quantity) });
+      setReason({});
       toast.success('Scrap case created');
       setShowCreate(false);
       setForm({ stockItemId: '', reason: '', description: '', disposalMethod: '', quantity: 1 });
@@ -101,10 +104,7 @@ export default function ScrapPage() {
                 <label className="text-xs font-medium text-slate-600 block mb-1">Stock Item ID / Serial *</label>
                 <Input placeholder="Enter Stock Item ID" value={form.stockItemId} onChange={(e) => setForm({ ...form, stockItemId: e.target.value })} />
               </div>
-              <div>
-                <label className="text-xs font-medium text-slate-600 block mb-1">Reason *</label>
-                <Input placeholder="e.g. Physical damage, End of life" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
-              </div>
+              <ReasonCodeField category="SCRAP" label="Reason *" value={reason} onChange={setReason} placeholder="e.g. Physical damage, End of life" />
               <div>
                 <label className="text-xs font-medium text-slate-600 block mb-1">Description</label>
                 <Input placeholder="Additional details" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />

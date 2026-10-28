@@ -49,7 +49,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (!res.ok) {
       const err = await res.json().catch(() => ({ message: 'Request failed' }));
       const msg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
-      throw new Error(msg || `Request failed (${res.status})`);
+      // Keep the structured body (e.g. cycle-count `conflicts`) for callers that need it.
+      throw Object.assign(new Error(msg || `Request failed (${res.status})`), { status: res.status, body: err });
     }
 
     return res.json();
@@ -461,8 +462,8 @@ export const rmaApi = {
 // DOA
 export const doaApi = {
   list: () => request<any[]>('/doa'),
-  declare: (stockItemId: string, reason: string) =>
-    request<any>(`/doa/${stockItemId}/declare`, { method: 'PATCH', body: JSON.stringify({ reason }) }),
+  declare: (stockItemId: string, reason?: string, reasonCode?: string) =>
+    request<any>(`/doa/${stockItemId}/declare`, { method: 'PATCH', body: JSON.stringify({ reason, reasonCode }) }),
   createRtv: (stockItemId: string, vendorId?: string) =>
     request<any>(`/doa/${stockItemId}/rtv`, { method: 'POST', body: JSON.stringify({ vendorId }) }),
 };
@@ -545,6 +546,42 @@ export const settingsApi = {
   list: () => request<any[]>('/settings'),
   update: (key: string, value: string) =>
     request<any>(`/settings/${key}`, { method: 'PATCH', body: JSON.stringify({ value }) }),
+  retentionPreview: () => request<any>('/audit/retention/preview'),
+  retentionArchive: () => request<any>('/audit/retention/archive', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+};
+
+// ─── Master data (reason codes, departments, units of measure) ───────────────
+export type ReasonCategory = 'ADJUSTMENT' | 'DOA' | 'SCRAP';
+export const masterDataApi = {
+  reasonCodes: (category?: ReasonCategory, includeInactive = false) => {
+    const q = new URLSearchParams();
+    if (category) q.set('category', category);
+    if (includeInactive) q.set('includeInactive', 'true');
+    return request<any[]>(`/master-data/reason-codes?${q}`);
+  },
+  createReasonCode: (dto: { category: string; code: string; description: string }) =>
+    request<any>('/master-data/reason-codes', { method: 'POST', body: JSON.stringify(dto) }),
+  updateReasonCode: (id: string, dto: { description?: string; isActive?: boolean }) =>
+    request<any>(`/master-data/reason-codes/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  departments: (includeInactive = false) => request<any[]>(`/master-data/departments${includeInactive ? '?includeInactive=true' : ''}`),
+  createDepartment: (dto: { code: string; name: string }) =>
+    request<any>('/master-data/departments', { method: 'POST', body: JSON.stringify(dto) }),
+  updateDepartment: (id: string, dto: { name?: string; isActive?: boolean }) =>
+    request<any>(`/master-data/departments/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  uoms: (includeInactive = false) => request<any[]>(`/master-data/uoms${includeInactive ? '?includeInactive=true' : ''}`),
+  createUom: (dto: { code: string; name: string }) =>
+    request<any>('/master-data/uoms', { method: 'POST', body: JSON.stringify(dto) }),
+  updateUom: (id: string, dto: { name?: string; isActive?: boolean }) =>
+    request<any>(`/master-data/uoms/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+};
+
+// ─── Notification templates ───────────────────────────────────────────────────
+export const notificationTemplatesApi = {
+  list: () => request<any[]>('/notifications/templates'),
+  save: (type: string, dto: { title: string; body: string; emailSubject?: string | null; emailBody?: string | null; isActive?: boolean }) =>
+    request<any>(`/notifications/templates/${type}`, { method: 'PUT', body: JSON.stringify(dto) }),
+  reset: (type: string) => request<any>(`/notifications/templates/${type}`, { method: 'DELETE' }),
+  deliveryStatus: () => request<any>('/notifications/delivery-status'),
 };
 
 // Reports
@@ -576,7 +613,7 @@ export const rtvApi = {
 export const scrapApi = {
   list: (status?: string) => request<any[]>(`/scrap${status ? `?status=${status}` : ''}`),
   get: (id: string) => request<any>(`/scrap/${id}`),
-  create: (body: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number }) =>
+  create: (body: { stockItemId: string; reason?: string; reasonCode?: string; description?: string; disposalMethod?: string; quantity?: number }) =>
     request<any>('/scrap', { method: 'POST', body: JSON.stringify(body) }),
   updateStatus: (id: string, status: string) =>
     request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
@@ -754,7 +791,9 @@ export const cycleCountApi = {
     request<any>(`/cycle-count/${sessionId}/lines/${lineId}/count`, { method: 'PATCH', body: JSON.stringify({ countedQty }) }),
   submit: (id: string) => request<any>(`/cycle-count/${id}/submit`, { method: 'POST' }),
   approve: (id: string) => request<any>(`/cycle-count/${id}/approve`, { method: 'POST' }),
+  recountConflicts: (id: string) => request<any>(`/cycle-count/${id}/recount-conflicts`, { method: 'POST' }),
   cancel: (id: string) => request<any>(`/cycle-count/${id}/cancel`, { method: 'POST' }),
+  schedule: () => request<any>('/cycle-count/schedule'),
 };
 
 // ─── Approval Engine ──────────────────────────────────────────────────────────
@@ -766,4 +805,9 @@ export const approvalApi = {
     request<any>('/approvals/start', { method: 'POST', body: JSON.stringify({ entityType, entityId }) }),
   decide: (instanceId: string, stepOrder: number, approved: boolean, notes?: string) =>
     request<any>(`/approvals/${instanceId}/step/${stepOrder}/decide`, { method: 'PATCH', body: JSON.stringify({ approved, notes }) }),
+  rulesMeta: () => request<{ entityTypes: string[] }>('/approvals/rules/meta'),
+  createRule: (dto: any) => request<any>('/approvals/rules', { method: 'POST', body: JSON.stringify(dto) }),
+  updateRule: (id: string, dto: any) => request<any>(`/approvals/rules/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  setRuleActive: (id: string, isActive: boolean) =>
+    request<any>(`/approvals/rules/${id}/active`, { method: 'PATCH', body: JSON.stringify({ isActive }) }),
 };

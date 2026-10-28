@@ -170,6 +170,8 @@ export class Fixture {
       get: (path: string) => request(server).get(`/api${path}`).set('Authorization', auth),
       post: (path: string, body: object = {}) => request(server).post(`/api${path}`).set('Authorization', auth).send(body),
       patch: (path: string, body: object = {}) => request(server).patch(`/api${path}`).set('Authorization', auth).send(body),
+      put: (path: string, body: object = {}) => request(server).put(`/api${path}`).set('Authorization', auth).send(body),
+      delete: (path: string) => request(server).delete(`/api${path}`).set('Authorization', auth),
     };
   }
 

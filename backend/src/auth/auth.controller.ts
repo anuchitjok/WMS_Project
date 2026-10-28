@@ -18,8 +18,9 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  // Brute-force protection: max 5 login attempts per minute per IP
-  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  // Brute-force protection: max 5 login attempts per minute per IP — always by IP,
+  // even if the caller presents someone's valid token.
+  @Throttle({ default: { limit: 5, ttl: 60_000, getTracker: (req: Record<string, any>) => `ip:${req.ip}` } })
   @ApiOperation({ summary: 'Login and receive JWT tokens' })
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.authService.login(dto, req.ip);
@@ -30,8 +31,8 @@ export class AuthController {
   @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Register a new user (admin only)' })
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  register(@Body() dto: RegisterDto, @CurrentUser() actor: any) {
+    return this.authService.register(dto, actor);
   }
 
   @Post('refresh')
@@ -74,7 +75,10 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout — revoke current token' })
-  logout(@Body('token') token: string, @CurrentUser('id') userId: string) {
-    return this.authService.logout(token, userId);
+  logout(@Body('token') token: string, @CurrentUser('id') userId: string, @Req() req: Request) {
+    // Revoke the bearer token actually used for this call (body token kept for compatibility).
+    const header = req.headers?.authorization ?? '';
+    const bearer = header.startsWith('Bearer ') ? header.slice(7) : undefined;
+    return this.authService.logout(token || bearer || '', userId);
   }
 }

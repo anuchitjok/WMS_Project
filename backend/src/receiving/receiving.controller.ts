@@ -29,8 +29,8 @@ export class ReceivingController {
   ) {}
 
   @Get()
-  findAll(@Query('status') status?: string) {
-    return this.service.findAll(status);
+  findAll(@Query('status') status: string | undefined, @CurrentUser() user: any) {
+    return this.service.findAll(status, user);
   }
 
   // ── Bulk import (one file = one goods receipt) ───────────────────────────
@@ -64,36 +64,36 @@ export class ReceivingController {
   importCommit(
     @UploadedFile() file: Express.Multer.File,
     @Body() header: ReceivingImportHeader,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.importer.commit(header, file, userId);
+    return this.importer.commit(header, file, user.id, user);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.findOne(id, user);
   }
 
   @Post()
   @UseGuards(AccessGuard)
   @Access(ACCESS.receiving)
-  create(@Body() dto: CreateReceivingDto, @CurrentUser('id') userId: string) {
-    return this.service.create(dto, userId);
+  create(@Body() dto: CreateReceivingDto, @CurrentUser() user: any) {
+    return this.service.create(dto, user.id, user);
   }
 
   @Patch(':id/inspect')
   @UseGuards(AccessGuard)
   @Access(ACCESS.receiving)
   @ApiOperation({ summary: 'Submit per-item inspection outcomes — drives final stock routing' })
-  inspect(@Param('id') id: string, @Body() dto: InspectReceivingDto, @CurrentUser('id') userId: string) {
-    return this.service.inspect(id, dto, userId);
+  inspect(@Param('id') id: string, @Body() dto: InspectReceivingDto, @CurrentUser() user: any) {
+    return this.service.inspect(id, dto, user.id, user);
   }
 
   @Patch(':id/verify')
   @UseGuards(AccessGuard)
   @Access(ACCESS.receiving)
   @ApiOperation({ summary: 'Legacy single-click verify (backward compat)' })
-  verify(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.service.verify(id, userId);
+  verify(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.verify(id, user.id, user);
   }
 }

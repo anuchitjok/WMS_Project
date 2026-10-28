@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { UserThrottlerGuard, throttlerConfig } from './common/guards/user-throttler.guard';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { validateEnv } from './config/env.validation';
@@ -19,6 +20,7 @@ import { RtvModule } from './rtv/rtv.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AuditModule } from './audit/audit.module';
 import { RealtimeModule } from './realtime/realtime.module';
+import { MasterDataModule } from './master-data/master-data.module';
 import { ReceivingModule } from './receiving/receiving.module';
 import { PutawayModule } from './putaway/putaway.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
@@ -50,7 +52,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
     ScheduleModule.forRoot(),
     // Global rate limiting — 100 requests / minute per IP by default
-    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
+    ThrottlerModule.forRoot(throttlerConfig()),
     PrismaModule,
     RbacModule,
     AuthModule,
@@ -74,6 +76,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     TransferModule,
     ProductsModule,
     SettingsModule,
+    MasterDataModule,
     ReportsModule,
     DataioModule,
     RolesModule,
@@ -91,8 +94,8 @@ import { ScheduleModule } from '@nestjs/schedule';
   controllers: [AppController],
   providers: [
     AppService,
-    // Apply rate limiting globally
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Apply rate limiting globally (per user when authenticated, plus a per-IP ceiling)
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     // Catch-all exception filter for consistent error responses
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // Centralized request logging

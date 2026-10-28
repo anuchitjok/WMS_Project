@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { MasterDataService } from '../master-data/master-data.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProductType, ProductStatus } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
@@ -23,7 +24,7 @@ const STOCK_REGISTER_COLS = [
 
 @Injectable()
 export class ProductsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private masterData: MasterDataService) {}
 
   // ─── Product Master ────────────────────────────────────────────────────────
 
@@ -56,6 +57,7 @@ export class ProductsService {
   }
 
   async create(dto: any, userId: string) {
+    if (dto.unit !== undefined) dto.unit = await this.masterData.assertUom(dto.unit);
     if (dto.partNumber) {
       const exists = await this.prisma.product.findUnique({ where: { partNumber: dto.partNumber } });
       if (exists) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
@@ -84,6 +86,7 @@ export class ProductsService {
   }
 
   async update(id: string, dto: any, userId: string) {
+    if (dto.unit !== undefined) dto.unit = await this.masterData.assertUom(dto.unit);
     await this.findOne(id);
     if (dto.partNumber) {
       const clash = await this.prisma.product.findFirst({ where: { partNumber: dto.partNumber, NOT: { id } } });

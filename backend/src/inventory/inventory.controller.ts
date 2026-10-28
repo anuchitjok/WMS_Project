@@ -1,3 +1,4 @@
+import { assertWarehouseAccess, scopedWarehouseIds, warehouseFilter } from '../common/warehouse-scope';
 import {
   Controller, Get, Post, Patch, Body, Param, Query, UseGuards
 } from '@nestjs/common';
@@ -28,7 +29,7 @@ export class InventoryController {
 
   @Get('kpi')
   @ApiOperation({ summary: 'Enterprise inventory KPI stats' })
-  getKpi(@Query('warehouseId') warehouseId?: string) { return this.inventoryService.getKpi(warehouseId); }
+  getKpi(@Query('warehouseId') warehouseId: string | undefined, @CurrentUser() user: any) { return this.inventoryService.getKpi(warehouseFilter(user, warehouseId)); }
 
   @Get('enterprise-list')
   @ApiOperation({ summary: 'Enterprise inventory list with traceability' })
@@ -43,9 +44,10 @@ export class InventoryController {
     @Query('aging365') aging365?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @CurrentUser() user?: any,
   ) {
     return this.inventoryService.findEnterpriseList({
-      search, status: status as any, warehouseId, brandId, itemType,
+      search, status: status as any, warehouseId: warehouseFilter(user, warehouseId), brandId, itemType,
       serialOnly: serialOnly === 'true', aging: aging === 'true', aging365: aging365 === 'true',
       page: page ? +page : 1, limit: limit ? +limit : 50,
     } as any);
@@ -53,61 +55,73 @@ export class InventoryController {
 
   @Get(':id/detail-full')
   @ApiOperation({ summary: 'Full stock item detail with audit, RTV, RMA' })
-  getDetailFull(@Param('id') id: string) { return this.inventoryService.getItemDetailFull(id); }
+  async getDetailFull(@Param('id') id: string, @CurrentUser() user: any) {
+    await this.inventoryService.assertItemScope(id, user);
+    return this.inventoryService.getItemDetailFull(id);
+  }
 
   @Get('summary')
   @ApiOperation({ summary: 'Inventory summary by status' })
-  getSummary() { return this.inventoryService.getSummary(); }
+  getSummary(@CurrentUser() user: any) { return this.inventoryService.getSummary(warehouseFilter(user)); }
 
   @Get('barcode/:barcode')
   @ApiOperation({ summary: 'Lookup stock item by barcode / serial number' })
-  findByBarcode(@Param('barcode') barcode: string) {
-    return this.inventoryService.findByBarcode(barcode);
+  async findByBarcode(@Param('barcode') barcode: string, @CurrentUser() user: any) {
+    const item = await this.inventoryService.findByBarcode(barcode);
+    assertWarehouseAccess(user, item.warehouseId, 'this stock item');
+    return item;
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get single stock item' })
-  findOne(@Param('id') id: string) {
-    return this.inventoryService.findOne(id);
+  async findOne(@Param('id') id: string, @CurrentUser() user: any) {
+    const item = await this.inventoryService.findOne(id);
+    assertWarehouseAccess(user, item.warehouseId, 'this stock item');
+    return item;
   }
 
   @Post()
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockCreate)
   @ApiOperation({ summary: 'Create stock item' })
-  create(@Body() dto: CreateStockItemDto, @CurrentUser('id') userId: string) {
-    return this.inventoryService.create(dto, userId);
+  create(@Body() dto: CreateStockItemDto, @CurrentUser() user: any) {
+    if (scopedWarehouseIds(user)) assertWarehouseAccess(user, dto.warehouseId, 'this warehouse');
+    return this.inventoryService.create(dto, user.id);
   }
 
   @Patch(':id/status')
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockStatus)
   @ApiOperation({ summary: 'Update stock item status' })
-  updateStatus(
+  async updateStatus(
     @Param('id') id: string,
     @Body('status') status: StockStatus,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.inventoryService.updateStatus(id, status, userId);
+    await this.inventoryService.assertItemScope(id, user);
+    return this.inventoryService.updateStatus(id, status, user.id);
   }
 
   @Patch(':id/release-reservation')
   @UseGuards(AccessGuard)
   @Access(ACCESS.reservationRelease)
   @ApiOperation({ summary: 'Release a reservation left behind by a finished request/task' })
-  releaseStuckReservation(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.inventoryService.releaseStuckReservation(id, userId);
+  async releaseStuckReservation(@Param('id') id: string, @CurrentUser() user: any) {
+    await this.inventoryService.assertItemScope(id, user);
+    return this.inventoryService.releaseStuckReservation(id, user.id);
   }
 
   @Patch(':id/location')
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockRelocate)
   @ApiOperation({ summary: 'Update stock item location' })
-  updateLocation(
+  async updateLocation(
     @Param('id') id: string,
     @Body() location: LocationDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.inventoryService.updateLocation(id, location, userId);
+    await this.inventoryService.assertItemScope(id, user);
+    if (location.warehouseId) assertWarehouseAccess(user, location.warehouseId, 'the destination warehouse');
+    return this.inventoryService.updateLocation(id, location, user.id);
   }
 }

@@ -1,29 +1,45 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { assertNotCountLocked } from '../common/count-lock';
 import { ON_HAND_UNCOMMITTED } from '../common/stock-state';
 import { PrismaService } from '../prisma/prisma.service';
 import { nanoid } from 'nanoid';
+import { assertNotSelfApproval } from '../common/separation-of-duties';
+import { ScopePrincipal, assertStockInScope, filterByStockScope } from '../common/warehouse-scope';
+import { MasterDataService } from '../master-data/master-data.service';
 
 @Injectable()
 export class AdjustmentService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private masterData: MasterDataService) {}
 
-  findAll(status?: string) {
-    return this.prisma.stockAdjustment.findMany({
+  async findAll(status?: string, scope?: ScopePrincipal) {
+    const rows = await this.prisma.stockAdjustment.findMany({
       where: status ? { status } : {},
       orderBy: { createdAt: 'desc' },
     });
+    return filterByStockScope(this.prisma, scope, rows);
+  }
+
+  private async scoped(id: string, scope?: ScopePrincipal) {
+    const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
+    if (!adj) throw new NotFoundException('Adjustment not found');
+    await assertStockInScope(this.prisma, scope, adj.stockItemId, 'this adjustment');
+    return adj;
   }
 
   async create(
-    dto: { stockItemId?: string; productLabel: string; reason: string; quantityBefore: number; quantityAfter: number; notes?: string },
+    dto: { stockItemId?: string; productLabel: string; reason?: string; reasonCode?: string; quantityBefore: number; quantityAfter: number; notes?: string },
     userId: string,
+    scope?: ScopePrincipal,
   ) {
+    await assertStockInScope(this.prisma, scope, dto.stockItemId);
+    const { reasonCode, reason } = await this.masterData.resolveReason('ADJUSTMENT', dto);
     const adj = await this.prisma.stockAdjustment.create({
       data: {
         refNumber: `ADJ-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`,
         stockItemId: dto.stockItemId,
         productLabel: dto.productLabel,
-        reason: dto.reason,
+        reason,
+        reasonCode,
         quantityBefore: dto.quantityBefore,
         quantityAfter: dto.quantityAfter,
         notes: dto.notes,
@@ -40,10 +56,10 @@ export class AdjustmentService {
   // Approve adjustment and apply quantity change to linked stock item.
   // The change applies only if the stock still holds `quantityBefore` and is on
   // hand; otherwise the stock moved since the request and the approval is refused.
-  async approve(id: string, userId: string) {
-    const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
-    if (!adj) throw new NotFoundException('Adjustment not found');
+  async approve(id: string, userId: string, scope?: ScopePrincipal) {
+    const adj = await this.scoped(id, scope);
     if (adj.status !== 'PENDING_APPROVAL') throw new BadRequestException('Adjustment is not pending approval');
+    assertNotSelfApproval(userId, [adj.requestedById], 'a stock adjustment');
 
     // Atomic: apply quantity change + mark completed + audit in one transaction
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -54,6 +70,7 @@ export class AdjustmentService {
       if (claimed.count === 0) throw new ConflictException('Adjustment has already been decided');
 
       if (adj.stockItemId) {
+        await assertNotCountLocked(tx, [adj.stockItemId]);
         const applied = await tx.stockItem.updateMany({
           where: { id: adj.stockItemId, quantity: adj.quantityBefore, status: { in: ON_HAND_UNCOMMITTED } },
           data: { quantity: adj.quantityAfter },
@@ -80,9 +97,8 @@ export class AdjustmentService {
     return updated;
   }
 
-  async reject(id: string, userId: string) {
-    const adj = await this.prisma.stockAdjustment.findUnique({ where: { id } });
-    if (!adj) throw new NotFoundException('Adjustment not found');
+  async reject(id: string, userId: string, scope?: ScopePrincipal) {
+    const adj = await this.scoped(id, scope);
     if (adj.status !== 'PENDING_APPROVAL') throw new BadRequestException('Adjustment is not pending approval');
     const claimed = await this.prisma.stockAdjustment.updateMany({
       where: { id, status: 'PENDING_APPROVAL' },

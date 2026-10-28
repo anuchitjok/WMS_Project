@@ -67,6 +67,13 @@ export class RequestsController {
     return this.requestsService.cancel(id, user);
   }
 
+  @Patch(':id/recover')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.reservationRelease)
+  recover(@Param('id') id: string, @Body('reason') reason: string, @CurrentUser('id') userId: string) {
+    return this.requestsService.recoverStalled(id, reason, userId);
+  }
+
   @Patch(':id/approve')
   @UseGuards(AccessGuard)
   @Access(ACCESS.requestApprove)

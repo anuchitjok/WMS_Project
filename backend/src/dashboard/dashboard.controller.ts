@@ -2,6 +2,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { warehouseFilter } from '../common/warehouse-scope';
 
 @ApiTags('Dashboard')
 @ApiBearerAuth()
@@ -12,21 +14,21 @@ export class DashboardController {
 
   @Get('stats')
   @ApiOperation({ summary: 'Get dashboard KPIs and stats (legacy V1 — unchanged)' })
-  getStats() {
-    return this.dashboardService.getStats();
+  getStats(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
+    return this.dashboardService.getStats(warehouseFilter(user, warehouseId));
   }
 
   // ── Dashboard V2 additive endpoints (UI cutover deferred to Phase 2) ────────
   @Get('kpis')
   @ApiOperation({ summary: 'V2 Section A — executive KPI cards' })
-  getKpis(@Query('warehouseId') warehouseId?: string) {
-    return this.dashboardService.getKpis(warehouseId);
+  getKpis(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
+    return this.dashboardService.getKpis(warehouseFilter(user, warehouseId));
   }
 
   @Get('inventory-health')
   @ApiOperation({ summary: 'V2 Section B — inventory health by status' })
-  getInventoryHealth(@Query('warehouseId') warehouseId?: string) {
-    return this.dashboardService.getInventoryHealth(warehouseId);
+  getInventoryHealth(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
+    return this.dashboardService.getInventoryHealth(warehouseFilter(user, warehouseId));
   }
 
   @Get('activity')

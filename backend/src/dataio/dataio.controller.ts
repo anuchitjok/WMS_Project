@@ -1,3 +1,4 @@
+import { warehouseFilter } from '../common/warehouse-scope';
 import {
   Controller, Get, Post, Param, Query, UploadedFile, UseInterceptors, UseGuards, Res, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
@@ -80,7 +81,8 @@ export class DataioController {
     // The audit trail (users, IPs, every action) needs the same rights as /audit.
     if (type === 'audit' && !hasAccess(user, ACCESS.auditExport)) throw new ForbiddenException('Insufficient permissions');
     const fmt = format === 'csv' ? 'csv' : 'xlsx';
-    const buf = await this.dataio.export(type as ExportType, fmt);
+    // Stock exports are limited to the caller's warehouses.
+    const buf = await this.dataio.export(type as ExportType, fmt, warehouseFilter(user));
     const mime = fmt === 'csv'
       ? 'text/csv'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

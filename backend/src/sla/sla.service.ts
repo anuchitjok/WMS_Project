@@ -1,3 +1,5 @@
+import { SystemSettingsService } from '../settings/system-settings.service';
+import { getLowStockProducts } from '../common/inventory-metrics';
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +13,7 @@ export class SlaService {
   constructor(
     private prisma: PrismaService,
     private notifications: NotificationsService,
+    private settings: SystemSettingsService,
   ) {}
 
   // ── Run every 30 minutes ──────────────────────────────────────────────────
@@ -29,14 +32,11 @@ export class SlaService {
   // ── Low stock check — every hour ─────────────────────────────────────────
   @Cron(CronExpression.EVERY_HOUR)
   async checkLowStock() {
-    const products = await this.prisma.product.findMany({
-      where: { isActive: true, minStock: { gt: 0 } },
-      include: { _count: { select: { stockItems: true } } },
-    });
-    for (const p of products) {
-      if (p._count.stockItems <= p.minStock) {
-        await this.notifications.notifyLowStock(p.code, p.name, p._count.stockItems, p.minStock);
-      }
+    // Same metric as the dashboard: AVAILABLE units vs Product.minStock, else the
+    // `stock.lowThreshold` default. (Previously counted every stock row ever received.)
+    const low = await getLowStockProducts(this.prisma, { defaultThreshold: await this.settings.lowStockThreshold() });
+    for (const p of low) {
+      await this.notifications.notifyLowStock(p.code, p.name, p.available, p.minStock);
     }
   }
 

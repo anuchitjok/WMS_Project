@@ -1,5 +1,7 @@
 generator client {
   provider = "prisma-client-js"
+  // Partial unique index on FulfillmentTask (guard rail from database/schema/18_fulfillment_guard_rails.sql)
+  previewFeatures = ["partialIndexes"]
 }
 
 datasource db {
@@ -646,7 +648,8 @@ model StockAdjustment {
   refNumber      String    @unique
   stockItemId    String?
   productLabel   String // denormalized "CODE — Name"
-  reason         String // cycle_count, found_stock, damage, loss, correction
+  reason         String // free text (legacy) or the reason code's description
+  reasonCode     String? // ReasonCode.code (category ADJUSTMENT); null on legacy rows
   quantityBefore Float
   quantityAfter  Float
   status         String    @default("PENDING_APPROVAL") // PENDING_APPROVAL, APPROVED, REJECTED, COMPLETED
@@ -739,6 +742,13 @@ model FulfillmentTask {
   @@index([status])
   @@index([requestId])
   @@index([warehouseId])
+  // Guard rails created by database/schema/18_fulfillment_guard_rails.sql — declared here so
+  // `prisma db push` / migrate diff keep them instead of dropping them (schema drift fix).
+  @@index([requestId], map: "idx_ft_request_id")
+  @@index([warehouseId, status], map: "idx_ft_warehouse_status")
+  /// One active (non-cancelled, non-returned) task per request. The predicate is written in
+  /// Postgres' normalised form (= `status NOT IN ('CANCELLED','RETURNED')`) so Prisma sees no drift.
+  @@unique([requestId], map: "ux_fulfillment_task_request_active", where: raw("(status <> ALL (ARRAY['CANCELLED'::\"FulfillmentStatus\", 'RETURNED'::\"FulfillmentStatus\"]))"))
 }
 
 model FulfillmentTaskItem {
@@ -940,12 +950,17 @@ model CycleCountLine {
   countedById  String?
   countedAt    DateTime?
   notes        String?
+  /// Set when approval found the stock row changed since it was counted (cleared by recount).
+  conflictReason String?
+  /// Line dropped from the count (its stock left AVAILABLE before the lock applied); holds no lock.
+  excludedAt   DateTime?
   createdAt    DateTime @default(now())
 
   session CycleCountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
   @@index([productId])
+  @@index([stockItemId])
 }
 
 // ─── Multi-level Approval Chain ───────────────────────────────────────────────
@@ -983,6 +998,7 @@ model ScrapCase {
   refNumber      String      @unique
   stockItemId    String
   reason         String
+  reasonCode     String? // ReasonCode.code (category SCRAP); null on legacy rows
   description    String?
   disposalMethod String?
   quantity       Int         @default(1)
@@ -1136,4 +1152,62 @@ model LayoutObject {
   @@index([parentObjectId])
   @@index([objectType])
   @@index([rackId])
+}
+
+
+// ─── System control master data (database/schema/21_system_control.sql) ─────
+
+/// Managed reasons for stock adjustments, DOA declarations and scrap.
+/// Records keep the code string, so deactivating a code never breaks history.
+model ReasonCode {
+  id          String   @id @default(cuid())
+  category    String   // ADJUSTMENT | DOA | SCRAP
+  code        String
+  description String
+  isActive    Boolean  @default(true)
+  /// System codes are used by the application itself (e.g. CYCLE_COUNT) and cannot be deactivated.
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([category, code])
+  @@index([category, isActive])
+}
+
+/// Departments referenced by users and withdrawal requests (stored by code).
+model Department {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Units of measure for Product.unit (stored by code). No conversions.
+model UnitOfMeasure {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Audit entries moved out of AuditLog by the manual retention job. Same columns + archivedAt.
+model AuditLogArchive {
+  id            String   @id
+  userId        String?
+  action        String
+  entityType    String?
+  entityId      String?
+  detail        String?
+  correlationId String?
+  ipAddress     String?
+  createdAt     DateTime
+  archivedAt  DateTime @default(now())
+  archivedById String?
+
+  @@index([createdAt])
+  @@index([entityType, entityId])
 }

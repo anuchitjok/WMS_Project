@@ -13,11 +13,13 @@ function expectOneWinner(statuses: number[]) {
 
 describe('Stock write integrity', () => {
   let fx: Fixture;
-  let manager: TestUser, staff: TestUser, requester: TestUser;
+  // `checker` approves what `manager` raised: maker ≠ checker (separation of duties).
+  let manager: TestUser, checker: TestUser, staff: TestUser, requester: TestUser;
 
   beforeAll(async () => {
     fx = await Fixture.start();
     manager = await fx.user(UserRole.WAREHOUSE_MANAGER, 'WAREHOUSE_MANAGER');
+    checker = await fx.user(UserRole.WAREHOUSE_MANAGER, 'WAREHOUSE_MANAGER');
     staff = await fx.user(UserRole.WAREHOUSE_STAFF);
     requester = await fx.user(UserRole.REQUESTER, 'REQUESTER');
   });
@@ -189,7 +191,7 @@ describe('Stock write integrity', () => {
     async function scrapCase(stockItemId: string, quantity: number) {
       const res = await fx.as(manager).post('/scrap', { stockItemId, reason: 'broken', quantity });
       expectStatus(res, 201);
-      expectStatus(await fx.as(manager).patch(`/scrap/${res.body.id}/status`, { status: 'APPROVED' }), 200);
+      expectStatus(await fx.as(checker).patch(`/scrap/${res.body.id}/status`, { status: 'APPROVED' }), 200);
       return res.body.id as string;
     }
 
@@ -222,7 +224,7 @@ describe('Stock write integrity', () => {
   });
 
   describe('cycle count approval', () => {
-    it('applies variances only to stock unchanged since the count', async () => {
+    it('refuses to apply anything when counted stock changed, then applies after a recount', async () => {
       const loc = await fx.location();
       const product = await fx.product();
       const [steady, moved] = await fx.stock(product.id, 2, { quantity: 5, serial: false, warehouseId: loc.warehouse.id });
@@ -232,14 +234,27 @@ describe('Stock write integrity', () => {
         expectStatus(await fx.as(staff).patch(`/cycle-count/${created.body.id}/lines/${line.id}/count`, { countedQty: 4 }), 200);
       }
       expectStatus(await fx.as(staff).post(`/cycle-count/${created.body.id}/submit`), 201);
-      await fx.prisma.stockItem.update({ where: { id: moved.id }, data: { quantity: 7 } }); // stock moved after counting
+      await fx.prisma.stockItem.update({ where: { id: moved.id }, data: { quantity: 7 } }); // stock moved after counting (bypassing the API lock)
 
       await fx.as(staff).post(`/cycle-count/${created.body.id}/approve`).expect(403); // counter's role cannot approve
-      const approved = await fx.as(manager).post(`/cycle-count/${created.body.id}/approve`);
-      expectStatus(approved, 201);
-      expect(approved.body.skippedLineIds).toHaveLength(1);
-      expect((await stockRow(steady.id)).quantity).toBe(4);
+      const refused = await fx.as(manager).post(`/cycle-count/${created.body.id}/approve`);
+      expectStatus(refused, 409);
+      expect(refused.body.conflicts ?? refused.body.message?.conflicts).toBeDefined();
+      // Nothing applied — not even the unchanged line
+      expect((await stockRow(steady.id)).quantity).toBe(5);
       expect((await stockRow(moved.id)).quantity).toBe(7);
+
+      // Recovery: recount the flagged line against the new quantity
+      const reset = await fx.as(manager).post(`/cycle-count/${created.body.id}/recount-conflicts`);
+      expectStatus(reset, 201);
+      expect(reset.body.recount).toBe(1);
+      const line = reset.body.lines.find((l: any) => l.stockItemId === moved.id);
+      expect(line.expectedQty).toBe(7);
+      expectStatus(await fx.as(staff).patch(`/cycle-count/${created.body.id}/lines/${line.id}/count`, { countedQty: 6 }), 200);
+      expectStatus(await fx.as(staff).post(`/cycle-count/${created.body.id}/submit`), 201);
+      expectStatus(await fx.as(manager).post(`/cycle-count/${created.body.id}/approve`), 201);
+      expect((await stockRow(steady.id)).quantity).toBe(4);
+      expect((await stockRow(moved.id)).quantity).toBe(6);
       await fx.as(manager).post(`/cycle-count/${created.body.id}/approve`).expect(400);
       await fx.as(manager).post(`/cycle-count/${created.body.id}/cancel`).expect(409);
     });
@@ -250,14 +265,14 @@ describe('Stock write integrity', () => {
       const product = await fx.product();
       const [row] = await fx.stock(product.id, 1, { quantity: 10, serial: false });
       const stale = await fx.as(manager).post('/adjustment', { stockItemId: row.id, productLabel: 'x', reason: 'count', quantityBefore: 8, quantityAfter: 9 });
-      await fx.as(manager).patch(`/adjustment/${stale.body.id}/approve`).expect(409);
+      await fx.as(checker).patch(`/adjustment/${stale.body.id}/approve`).expect(409);
       expect((await stockRow(row.id)).quantity).toBe(10);
       expect((await fx.prisma.stockAdjustment.findUniqueOrThrow({ where: { id: stale.body.id } })).status).toBe('PENDING_APPROVAL');
 
       const good = await fx.as(manager).post('/adjustment', { stockItemId: row.id, productLabel: 'x', reason: 'count', quantityBefore: 10, quantityAfter: 9 });
       const both = await Promise.all([
-        fx.as(manager).patch(`/adjustment/${good.body.id}/approve`),
-        fx.as(manager).patch(`/adjustment/${good.body.id}/approve`),
+        fx.as(checker).patch(`/adjustment/${good.body.id}/approve`),
+        fx.as(checker).patch(`/adjustment/${good.body.id}/approve`),
       ]);
       expectOneWinner(both.map((r) => r.status));
       expect((await stockRow(row.id)).quantity).toBe(9);

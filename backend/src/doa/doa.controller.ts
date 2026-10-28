@@ -15,18 +15,19 @@ export class DoaController {
   constructor(private readonly service: DoaService) {}
 
   @Get()
-  list() {
-    return this.service.list();
+  list(@CurrentUser() user: any) {
+    return this.service.list(user);
   }
 
   @Access(ACCESS.doa)
   @Patch(':stockItemId/declare')
   declare(
     @Param('stockItemId') stockItemId: string,
-    @Body('reason') reason: string,
-    @CurrentUser('id') userId: string,
+    @Body('reason') reason: string | undefined,
+    @Body('reasonCode') reasonCode: string | undefined,
+    @CurrentUser() user: any,
   ) {
-    return this.service.declare(stockItemId, reason ?? 'DOA declared', userId);
+    return this.service.declare(stockItemId, { reason, reasonCode }, user.id, user);
   }
 
   @Access(ACCESS.doa)

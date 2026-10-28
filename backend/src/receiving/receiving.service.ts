@@ -1,6 +1,8 @@
+import { assertSerialsFree } from '../common/serial-guard';
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { ScopePrincipal, assertWarehouseAccess, scopedWarehouseIds } from '../common/warehouse-scope';
 import { StockStatus, OwnershipType, ReceivingStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { InspectReceivingDto } from './dto/inspect-receiving.dto';
@@ -49,9 +51,16 @@ export class ReceivingService {
     return `GR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
   }
 
-  findAll(status?: string) {
+  // A receipt is in a scoped user's view unless one of its lines sits in a warehouse
+  // outside their scope (lines not yet located do not restrict it).
+  private scopeWhere(scope?: ScopePrincipal) {
+    const ids = scopedWarehouseIds(scope);
+    return ids ? { items: { none: { stockItem: { warehouseId: { notIn: ids } } } } } : {};
+  }
+
+  findAll(status?: string, scope?: ScopePrincipal) {
     return this.prisma.goodsReceiving.findMany({
-      where: status ? { status } : {},
+      where: { ...(status ? { status } : {}), ...this.scopeWhere(scope) },
       include: {
         receivedBy: { select: { fullName: true } },
         items: { include: { product: true, stockItem: true } },
@@ -61,7 +70,7 @@ export class ReceivingService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, scope?: ScopePrincipal) {
     const gr = await this.prisma.goodsReceiving.findUnique({
       where: { id },
       include: {
@@ -71,10 +80,16 @@ export class ReceivingService {
       },
     });
     if (!gr) throw new NotFoundException('Receiving record not found');
+    for (const item of gr.items) {
+      if (item.stockItem?.warehouseId) assertWarehouseAccess(scope, item.stockItem.warehouseId, 'this receiving record');
+    }
     return gr;
   }
 
-  async create(dto: CreateReceivingDto, userId: string) {
+  async create(dto: CreateReceivingDto, userId: string, scope?: ScopePrincipal) {
+    for (const item of dto.items ?? []) {
+      if (item.warehouseId) assertWarehouseAccess(scope, item.warehouseId, 'the destination warehouse');
+    }
     // Serial uniqueness validation (before any write)
     const serials = dto.items.map((i) => i.serialNumber).filter((s): s is string => !!s && s !== 'N/A');
     if (serials.length > 0) {
@@ -100,6 +115,8 @@ export class ReceivingService {
     const refNumber = this.ref();
 
     const gr = await this.prisma.$transaction(async (tx) => {
+      // Re-checked under per-serial locks: the pre-check above can race a concurrent receipt.
+      await assertSerialsFree(tx, dto.items.map((i) => i.serialNumber));
       const created = await tx.goodsReceiving.create({
         data: {
           refNumber,
@@ -162,8 +179,8 @@ export class ReceivingService {
   // ─── Inspection ──────────────────────────────────────────────────────────────
   // Per-item inspection outcomes drive final stock routing. This replaces the
   // old single-click verify() for new records; verify() is kept for backward compat.
-  async inspect(id: string, dto: InspectReceivingDto, userId: string) {
-    const gr = await this.findOne(id);
+  async inspect(id: string, dto: InspectReceivingDto, userId: string, scope?: ScopePrincipal) {
+    const gr = await this.findOne(id, scope);
     if (gr.statusEnum === ReceivingStatus.CANCELLED) throw new ConflictException('Receiving record is cancelled');
 
     // Validate every line before writing anything.
@@ -197,6 +214,11 @@ export class ReceivingService {
     const hasDiscrepancy = dto.items.some((i) => DISCREPANCY_OUTCOMES.has(i.inspectionOutcome));
 
     await this.prisma.$transaction(async (tx) => {
+      // Corrected serials re-checked under per-serial locks (excluding the units being corrected).
+      const corrections = dto.items
+        .map((ii) => ({ ii, gi: gr.items.find((i) => i.id === ii.itemId)! }))
+        .filter(({ ii, gi }) => ii.serialNumber && ii.serialNumber !== gi.stockItem?.serialNumber);
+      await assertSerialsFree(tx, corrections.map(({ ii }) => ii.serialNumber), corrections.map(({ gi }) => gi.stockItemId).filter((x): x is string => !!x));
       for (const inspectItem of dto.items) {
         const grItem = gr.items.find((i) => i.id === inspectItem.itemId)!;
 
@@ -296,8 +318,8 @@ export class ReceivingService {
   }
 
   // Legacy single-click verify — kept for backward compat; routes by stored condition.
-  async verify(id: string, userId: string) {
-    const gr = await this.findOne(id);
+  async verify(id: string, userId: string, scope?: ScopePrincipal) {
+    const gr = await this.findOne(id, scope);
     await this.prisma.$transaction(async (tx) => {
       // Claim the receipt: a verified (or inspected) receipt cannot be verified again.
       const claimed = await tx.goodsReceiving.updateMany({
