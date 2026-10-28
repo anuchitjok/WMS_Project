@@ -45,6 +45,7 @@ import { CycleCountModule } from './cycle-count/cycle-count.module';
 import { ApprovalModule } from './approval/approval.module';
 import { ScrapModule } from './scrap/scrap.module';
 import { DocumentsModule } from './documents/documents.module';
+import { PlanningModule } from './planning/planning.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -90,6 +91,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     ApprovalModule,
     ScrapModule,
     DocumentsModule,
+    PlanningModule,
   ],
   controllers: [AppController],
   providers: [

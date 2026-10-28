@@ -117,6 +117,37 @@ describe('Schema drift and migration script', () => {
     ]);
   });
 
+  it('22_project_planning.sql applies cleanly to an existing database, twice', async () => {
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '22_project_planning.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const tables = await db.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'Planning%' ORDER BY table_name`,
+    );
+    expect(tables.rows.map((r) => r.table_name)).toEqual([
+      'PlanningProject',
+      'PlanningRun',
+      'PlanningScenario',
+    ]);
+    const perms = await db.query<{ code: string }>(
+      `SELECT code FROM "Permission" WHERE module = 'planning' ORDER BY code`,
+    );
+    expect(perms.rows.map((r) => r.code)).toEqual([
+      'planning.approve',
+      'planning.cost',
+      'planning.manage',
+      'planning.read',
+    ]);
+    // Grants nothing to any role.
+    const grants = await db.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM "RolePermission" rp JOIN "Permission" p ON p.id = rp."permissionId" WHERE p.module = 'planning'`,
+    );
+    expect(grants.rows[0].n).toBe(0);
+  });
+
   it('after the script, the database matches schema.prisma (no drift left)', async () => {
     const sql = (await diffToSchema()).replace(/^--.*$/gm, '').trim();
     expect(sql).toBe('');

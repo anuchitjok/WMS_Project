@@ -811,3 +811,31 @@ export const approvalApi = {
   setRuleActive: (id: string, isActive: boolean) =>
     request<any>(`/approvals/rules/${id}/active`, { method: 'PATCH', body: JSON.stringify({ isActive }) }),
 };
+
+// ─── Project Planning (planning only — never reserves stock or creates orders) ─
+export const planningApi = {
+  templates: () => request<any[]>('/planning/templates'),
+  owners: () => request<{ id: string; fullName: string; username: string }[]>('/planning/owners'),
+  list: (params: { warehouseId?: string; status?: string; search?: string } = {}) => {
+    const q = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => v && q.set(k, v));
+    return request<any[]>(`/planning/projects?${q}`);
+  },
+  get: (id: string) => request<any>(`/planning/projects/${id}`),
+  create: (dto: any) => request<any>('/planning/projects', { method: 'POST', body: JSON.stringify(dto) }),
+  update: (id: string, dto: any) => request<any>(`/planning/projects/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  createScenario: (id: string, dto: { name: string; cloneFromId?: string; notes?: string }) =>
+    request<any>(`/planning/projects/${id}/scenarios`, { method: 'POST', body: JSON.stringify(dto) }),
+  updateScenario: (id: string, sid: string, dto: any) =>
+    request<any>(`/planning/projects/${id}/scenarios/${sid}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  deleteScenario: (id: string, sid: string) => request<any>(`/planning/projects/${id}/scenarios/${sid}`, { method: 'DELETE' }),
+  calculate: (id: string, sid: string) => request<any>(`/planning/projects/${id}/scenarios/${sid}/calculate`, { method: 'POST' }),
+  run: (id: string, runId: string) => request<any>(`/planning/projects/${id}/runs/${runId}`),
+  verify: (id: string, runId: string) => request<any>(`/planning/projects/${id}/runs/${runId}/verify`, { method: 'POST' }),
+  compare: (id: string, runIds: string[]) => request<any[]>(`/planning/projects/${id}/compare?runIds=${runIds.join(',')}`),
+  submit: (id: string, runId: string, note?: string) => request<any>(`/planning/projects/${id}/submit`, { method: 'POST', body: JSON.stringify({ runId, note }) }),
+  approve: (id: string, note?: string) => request<any>(`/planning/projects/${id}/approve`, { method: 'POST', body: JSON.stringify({ note }) }),
+  reject: (id: string, note: string) => request<any>(`/planning/projects/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
+  reopen: (id: string) => request<any>(`/planning/projects/${id}/reopen`, { method: 'POST' }),
+  archive: (id: string) => request<any>(`/planning/projects/${id}/archive`, { method: 'POST' }),
+};

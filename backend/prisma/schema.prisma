@@ -1211,3 +1211,95 @@ model AuditLogArchive {
   @@index([createdAt])
   @@index([entityType, entityId])
 }
+
+// ─── Project Planning & Resource Calculator (database/schema/22_project_planning.sql) ──
+// PLANNING ONLY. Nothing here reserves stock, creates purchase orders or posts
+// warehouse transactions. Rows reference warehouses/products/users by id with
+// no foreign keys (house convention for additive modules), so deleting master
+// data never cascades into planning history.
+
+/// A planned warehouse / repair / refurbishment / logistics project.
+/// `planStatus` is the planning review state only — it is never an execution state.
+model PlanningProject {
+  id             String    @id @default(cuid())
+  code           String    @unique // PRJ-YYYYMMDD-NNNN
+  name           String
+  projectType    String // REPAIR | REFURBISHMENT | INBOUND | OUTBOUND | CUSTOM
+  description    String?   @db.Text
+  customer       String? // customer / business unit / requesting department
+  department     String?
+  productId      String? // main product / model being processed (optional)
+  scope          String?   @db.Text
+  warehouseId    String // default warehouse (scenarios may plan an alternative)
+  workLocation   String?
+  priority       Priority  @default(NORMAL)
+  ownerId        String?
+  teams          String? // free text: responsible teams
+  plannedStart   DateTime
+  targetEnd      DateTime
+  currency       String    @default("THB") // ISO 4217 code all project costs are expressed in
+  /// DRAFT | IN_REVIEW | PLAN_APPROVED | PLAN_REJECTED | ARCHIVED
+  planStatus     String    @default("DRAFT")
+  submittedById  String?
+  submittedAt    DateTime?
+  reviewedById   String?
+  reviewedAt     DateTime?
+  reviewNote     String?
+  approvedRunId  String? // the calculation run the review decision refers to
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  version        Int       @default(0)
+
+  scenarios PlanningScenario[]
+  runs      PlanningRun[]
+
+  @@index([warehouseId])
+  @@index([planStatus])
+}
+
+/// One set of planning inputs (workflow, labour, materials, space, cost
+/// assumptions). Scenarios are compared side by side; one is the baseline.
+model PlanningScenario {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  isBaseline  Boolean  @default(false)
+  notes       String?
+  inputs      String   @db.Text // JSON — validated ScenarioInputs (see planning/engine/types.ts)
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  version     Int      @default(0)
+
+  project PlanningProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs    PlanningRun[]
+
+  @@index([projectId])
+}
+
+/// An immutable, reproducible calculation: the exact inputs and the WMS data
+/// read for it (stock, inbound, demand, layout) are stored with the result, so
+/// the run can be re-verified later without reading live data again.
+model PlanningRun {
+  id            String   @id @default(cuid())
+  projectId     String
+  scenarioId    String
+  runNumber     Int
+  engineVersion String
+  asOfDate      DateTime // planning "today" used by the calculation
+  inputHash     String // sha256 of inputSnapshot + dataSnapshot
+  inputSnapshot String   @db.Text // JSON — scenario inputs + project header as used
+  dataSnapshot  String   @db.Text // JSON — WMS data read in one repeatable-read transaction
+  result        String   @db.Text // JSON — engine output
+  overallStatus String // READY_FOR_PLANNING_REVIEW | NOT_READY | INSUFFICIENT_DATA
+  flags         String // comma-separated status flags
+  createdById   String?
+  createdAt     DateTime @default(now())
+
+  project  PlanningProject  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenario PlanningScenario @relation(fields: [scenarioId], references: [id], onDelete: Cascade)
+
+  @@unique([scenarioId, runNumber])
+  @@index([projectId])
+}

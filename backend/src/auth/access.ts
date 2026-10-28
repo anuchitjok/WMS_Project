@@ -73,4 +73,14 @@ export const ACCESS = {
   masterData:       { permissions: ['settings.manage', 'product.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
   notificationTemplates: { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },
   approvalDecide:   { permissions: ['request.approve'], legacyRoles: APPROVERS },
+  /**
+   * Project Planning (planning only — never touches stock or purchasing).
+   * New codes planning.* are added to the catalogue by 22_project_planning.sql;
+   * existing codes are listed too so current DB roles keep working without a grant.
+   */
+  planningRead:     { permissions: ['planning.read', 'planning.manage', 'warehouse.manage', 'report.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, WAREHOUSE_SUPERVISOR, UserRole.MGMT_VIEWER, UserRole.FINANCE_VIEWER, AUDITOR] },
+  planningManage:   { permissions: ['planning.manage', 'warehouse.manage'], legacyRoles: SUPERVISORS },
+  planningApprove:  { permissions: ['planning.approve', 'warehouse.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  /** Unit costs, labour rates and cost estimates. */
+  planningCost:     { permissions: ['planning.cost', 'product.manage', 'report.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, UserRole.FINANCE_VIEWER, UserRole.MGMT_VIEWER] },
 } satisfies Record<string, AccessRule>;
