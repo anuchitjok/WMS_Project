@@ -19,8 +19,8 @@ export class PutawayController {
   constructor(private readonly service: PutawayService) {}
 
   @Get('pending')
-  pending() {
-    return this.service.pending();
+  pending(@CurrentUser() user: any) {
+    return this.service.pending(user);
   }
 
   @Post('fit-check')
@@ -36,8 +36,8 @@ export class PutawayController {
   confirm(
     @Param('stockItemId') stockItemId: string,
     @Body() location: LocationDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.service.confirm(stockItemId, location, userId);
+    return this.service.confirm(stockItemId, location, user.id, user);
   }
 }

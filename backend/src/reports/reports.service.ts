@@ -3,6 +3,7 @@ import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { StockStatus, RequestStatus, RTVStatus, Prisma } from '@prisma/client';
 import { getLowStockProducts } from '../common/inventory-metrics';
+import { SystemSettingsService } from '../settings/system-settings.service';
 
 // Statuses that mean the unit has physically left the warehouse — excluded from
 // the on-hand Balance Report.
@@ -18,7 +19,8 @@ const GONE_STATUSES: StockStatus[] = [
 export interface ReportFilters {
   from?: string;
   to?: string;
-  warehouseId?: string;
+  /** A single warehouse id, or the caller's allowed set (see common/warehouse-scope.ts). */
+  warehouseId?: string | { in: string[] };
   q?: string;
 }
 
@@ -59,9 +61,10 @@ function sku(p: { partNumber?: string | null; code: string }): string {
 
 @Injectable()
 export class ReportsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private settings: SystemSettingsService) {}
 
-  async summary() {
+  async summary(warehouse?: string | { in: string[] }) {
+    const wh = warehouse ? { warehouseId: warehouse } : {};
     const [
       totalRequests,
       completedRequests,
@@ -74,13 +77,13 @@ export class ReportsService {
     ] = await Promise.all([
       this.prisma.withdrawalRequest.count(),
       this.prisma.withdrawalRequest.count({ where: { status: RequestStatus.COMPLETED } }),
-      this.prisma.stockItem.count({ where: { status: { in: [StockStatus.DOA, StockStatus.DAMAGED] } } }),
-      this.prisma.stockItem.count(),
-      this.prisma.rTVCase.count({ where: { status: { not: RTVStatus.COMPLETED } } }),
+      this.prisma.stockItem.count({ where: { status: { in: [StockStatus.DOA, StockStatus.DAMAGED] }, ...wh } }),
+      this.prisma.stockItem.count({ where: wh }),
+      this.prisma.rTVCase.count({ where: { status: { not: RTVStatus.COMPLETED }, ...(warehouse ? { stockItem: wh } : {}) } }),
       // Single shared low-stock metric (available-based) — consistent with dashboard.
-      getLowStockProducts(this.prisma),
-      this.prisma.stockItem.groupBy({ by: ['ownershipType'], _count: { _all: true }, _sum: { quantity: true } }),
-      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true } }),
+      getLowStockProducts(this.prisma, { warehouse, defaultThreshold: await this.settings.lowStockThreshold() }),
+      this.prisma.stockItem.groupBy({ by: ['ownershipType'], _count: { _all: true }, _sum: { quantity: true }, where: wh }),
+      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true }, where: wh }),
     ]);
 
     const slaRate = totalRequests > 0 ? Math.round((completedRequests / totalRequests) * 100) : 0;

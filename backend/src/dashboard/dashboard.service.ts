@@ -1,7 +1,12 @@
+import { RTV_CLOSED } from '../rtv/rtv.service';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StockStatus, RequestStatus, FulfillmentStatus } from '@prisma/client';
 import { getLowStockProducts } from '../common/inventory-metrics';
+import { SystemSettingsService } from '../settings/system-settings.service';
+
+/** Prisma filter for StockItem/FulfillmentTask.warehouseId; undefined = all warehouses. */
+export type WarehouseFilter = string | { in: string[] } | undefined;
 
 function startOfToday(): Date {
   const d = new Date();
@@ -11,9 +16,26 @@ function startOfToday(): Date {
 
 @Injectable()
 export class DashboardService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private settings: SystemSettingsService) {}
 
-  async getStats() {
+  private async rtvOverdue(warehouse: WarehouseFilter): Promise<number | null> {
+    const days = await this.settings.rtvAgingSlaDays();
+    if (days === null) return null;
+    return this.prisma.rTVCase.count({
+      where: {
+        status: { notIn: RTV_CLOSED },
+        createdAt: { lt: new Date(Date.now() - days * 86_400_000) },
+        ...(warehouse ? { stockItem: { warehouseId: warehouse } } : {}),
+      },
+    });
+  }
+
+  private async lowStock(warehouse: WarehouseFilter) {
+    return getLowStockProducts(this.prisma, { warehouse, defaultThreshold: await this.settings.lowStockThreshold() });
+  }
+
+  async getStats(warehouse?: WarehouseFilter) {
+    const wh = warehouse ? { warehouseId: warehouse } : {};
     const [
       totalStock,
       availableStock,
@@ -24,13 +46,13 @@ export class DashboardService {
       recentAuditLogs,
       lowStockAlerts,
     ] = await Promise.all([
-      this.prisma.stockItem.count(),
-      this.prisma.stockItem.count({ where: { status: StockStatus.AVAILABLE } }),
+      this.prisma.stockItem.count({ where: wh }),
+      this.prisma.stockItem.count({ where: { status: StockStatus.AVAILABLE, ...wh } }),
       this.prisma.withdrawalRequest.count({
         where: { status: { in: [RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL] } },
       }),
       this.prisma.product.count({ where: { isActive: true } }),
-      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true } }),
+      this.prisma.stockItem.groupBy({ by: ['status'], _count: { _all: true }, where: wh }),
       this.prisma.withdrawalRequest.groupBy({ by: ['status'], _count: { _all: true } }),
       this.prisma.auditLog.findMany({
         include: { user: { select: { fullName: true } } },
@@ -38,7 +60,7 @@ export class DashboardService {
         take: 10,
       }),
       // Low-stock alerts via the single shared metric (available-based).
-      getLowStockProducts(this.prisma),
+      this.lowStock(warehouse),
     ]);
 
     return {
@@ -51,7 +73,7 @@ export class DashboardService {
   }
 
   // ── Dashboard V2 (additive — Section A: Executive KPIs) ─────────────────────
-  async getKpis(warehouseId?: string) {
+  async getKpis(warehouseId?: WarehouseFilter) {
     const since = startOfToday();
     const whStock = warehouseId ? { warehouseId } : {};
     const [
@@ -70,8 +92,8 @@ export class DashboardService {
       this.prisma.fulfillmentTask.count({ where: { status: { notIn: [FulfillmentStatus.CLOSED, FulfillmentStatus.CANCELLED, FulfillmentStatus.RETURNED] }, ...(warehouseId ? { warehouseId } : {}) } }),
       this.prisma.shipment.count({ where: { shippedAt: { gte: since } } }),
       this.prisma.withdrawalRequest.count({ where: { status: { not: RequestStatus.COMPLETED }, items: { some: { usageStatus: { in: ['UNUSED', 'WRONG_ITEM'] } } } } }),
-      this.prisma.rTVCase.count({ where: { status: { notIn: ['COMPLETED', 'CANCELLED'] as any } } }),
-      getLowStockProducts(this.prisma),
+      this.prisma.rTVCase.count({ where: { status: { notIn: ['COMPLETED', 'CANCELLED'] as any }, ...(warehouseId ? { stockItem: { warehouseId } } : {}) } }),
+      this.lowStock(warehouseId),
     ]);
 
     return {
@@ -81,6 +103,8 @@ export class DashboardService {
       activeFulfillment,
       shipmentToday,
       openReturns: openReturnRequests + openRtv,
+      // Open RTV cases past the `rtv.agingSla` setting (null when no SLA is in force).
+      rtvOverdue: await this.rtvOverdue(warehouseId),
       lowStockAlerts: lowStock.length,
       // Inventory Accuracy intentionally NOT implemented (no validated cycle-count
       // source yet). Returned as null so the UI shows "N/A" rather than a fake number.
@@ -116,7 +140,7 @@ export class DashboardService {
   }
 
   // ── Dashboard V2 (additive — Section B: Inventory Health) ───────────────────
-  async getInventoryHealth(warehouseId?: string) {
+  async getInventoryHealth(warehouseId?: WarehouseFilter) {
     const where = warehouseId ? { warehouseId } : {};
     const grouped = await this.prisma.stockItem.groupBy({
       by: ['status'],

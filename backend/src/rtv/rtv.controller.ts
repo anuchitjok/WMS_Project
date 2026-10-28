@@ -17,26 +17,26 @@ export class RtvController {
   constructor(private readonly rtvService: RtvService) {}
 
   @Get()
-  findAll(@Query('status') status?: RTVStatus, @Query('page') page?: number, @Query('limit') limit?: number) {
-    return this.rtvService.findAll({ status, page, limit });
+  findAll(@Query('status') status: RTVStatus | undefined, @Query('page') page: number | undefined, @Query('limit') limit: number | undefined, @Query('overdue') overdue: string | undefined, @CurrentUser() user: any) {
+    return this.rtvService.findAll({ status, page, limit, overdue: overdue === 'true' }, user);
   }
 
-  @Get(':id') findOne(@Param('id') id: string) { return this.rtvService.findOne(id); }
+  @Get(':id') findOne(@Param('id') id: string, @CurrentUser() user: any) { return this.rtvService.findOne(id, user); }
 
   @Post()
   create(
     @Body() body: { stockItemId: string; reason: string; description?: string; vendorId?: string },
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.rtvService.create(body, userId);
+    return this.rtvService.create(body, user.id, user);
   }
 
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: RTVStatus,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.rtvService.updateStatus(id, status, userId);
+    return this.rtvService.updateStatus(id, status, user.id, user);
   }
 }

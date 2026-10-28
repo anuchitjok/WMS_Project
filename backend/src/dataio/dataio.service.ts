@@ -41,7 +41,7 @@ export class DataioService {
   }
 
   // ── Export data to .xlsx or .csv ─────────────────────────────────────────
-  async export(type: ExportType, format: 'xlsx' | 'csv'): Promise<Buffer> {
+  async export(type: ExportType, format: 'xlsx' | 'csv', warehouse?: string | { in: string[] }): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'HSNT WMS';
     const ws = wb.addWorksheet(type);
@@ -59,6 +59,7 @@ export class DataioService {
         { header: 'Warehouse', key: 'wh', width: 16 },
       ];
       const items = await this.prisma.stockItem.findMany({
+        ...(warehouse ? { where: { warehouseId: warehouse } } : {}),
         include: { product: true, warehouse: true },
         orderBy: { updatedAt: 'desc' },
       });

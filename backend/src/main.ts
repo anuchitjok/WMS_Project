@@ -1,3 +1,4 @@
+import { trustProxyHops } from './common/guards/user-throttler.guard';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -20,7 +21,9 @@ async function bootstrap() {
   );
 
   // ── HTTPS-ready: trust reverse-proxy (Render/Vercel/NGINX) for real IPs ───
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  // Only the configured hop count is trusted, so X-Forwarded-For cannot be spoofed
+  // when the API is reached directly (TRUST_PROXY_HOPS; default 1 in production, 0 otherwise).
+  app.getHttpAdapter().getInstance().set('trust proxy', trustProxyHops());
 
   // ── CORS — explicit allow-list, credentials, limited methods ─────────────
   const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')

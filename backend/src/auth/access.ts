@@ -68,5 +68,9 @@ export const ACCESS = {
   dataImport:       { permissions: ['dataio.manage'], legacyRoles: SUPERVISORS },
   auditExport:      { permissions: ['audit.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, AUDITOR] },
   approvalRules:    { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },
+  settings:         { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },
+  /** Master data (reason codes, departments, units of measure). */
+  masterData:       { permissions: ['settings.manage', 'product.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  notificationTemplates: { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },
   approvalDecide:   { permissions: ['request.approve'], legacyRoles: APPROVERS },
 } satisfies Record<string, AccessRule>;

@@ -1,4 +1,6 @@
+import { assertSerialsFree } from '../common/serial-guard';
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { ScopePrincipal, assertWarehouseAccess } from '../common/warehouse-scope';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -159,7 +161,8 @@ export class ReceivingImportService {
   }
 
   // ── Commit: create ONE GoodsReceiving with all valid item lines ──────────
-  async commit(header: ReceivingImportHeader, file: Express.Multer.File, userId: string) {
+  async commit(header: ReceivingImportHeader, file: Express.Multer.File, userId: string, scope?: ScopePrincipal) {
+    if (header.warehouseId) assertWarehouseAccess(scope, header.warehouseId, 'the destination warehouse');
     if (!header.sourceType || !String(header.sourceType).trim()) {
       throw new BadRequestException('Source Type is required');
     }
@@ -175,6 +178,7 @@ export class ReceivingImportService {
     const refNumber = `GR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
 
     const gr = await this.prisma.$transaction(async (tx) => {
+      await assertSerialsFree(tx, validRows.map((d) => (d.serialNumber ? String(d.serialNumber).trim() : null)));
       const warehouses = await tx.warehouse.findMany({ select: { id: true, code: true } });
       const wMap = new Map(warehouses.map((w) => [w.code, w.id]));
 
@@ -201,6 +205,8 @@ export class ReceivingImportService {
         const warehouseId = d.warehouseCode
           ? wMap.get(String(d.warehouseCode).trim()) ?? null
           : header.warehouseId || null;
+        // Every row's destination must be one of the importer's warehouses (aborts the whole import).
+        if (warehouseId) assertWarehouseAccess(scope, warehouseId, `warehouse ${d.warehouseCode ?? ''}`.trim());
         const ownershipType = (d.ownershipType && String(d.ownershipType).trim() in OwnershipType
           ? String(d.ownershipType).trim()
           : 'OWN') as OwnershipType;

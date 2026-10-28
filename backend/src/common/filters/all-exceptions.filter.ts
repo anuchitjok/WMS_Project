@@ -26,6 +26,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let message: string | string[] = 'Internal server error';
     let error = 'InternalServerError';
+    // Structured details an app-thrown 4xx carries besides message (e.g. cycle-count `conflicts`).
+    let extra: Record<string, unknown> = {};
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -36,6 +38,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const r = res as Record<string, unknown>;
         message = (r.message as string | string[]) ?? exception.message;
         error = (r.error as string) ?? exception.name;
+        if (status < 500) {
+          const { statusCode: _s, message: _m, error: _e, ...rest } = r;
+          extra = rest;
+        }
       }
     } else if (exception instanceof Prisma.PrismaClientValidationError) {
       // Malformed query / missing required fields reaching Prisma → client error
@@ -79,6 +85,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       error,
       message,
+      ...extra,
       path: request.url,
       timestamp: new Date().toISOString(),
     });

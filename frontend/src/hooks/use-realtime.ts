@@ -9,9 +9,10 @@
 // It debounces the events into a single "go re-read your data" signal, and the
 // caller re-fetches through the normal authenticated REST API.
 //
-// That also keeps the socket from being a data channel: the gateway has no auth
-// and broadcasts to every connected client, so nothing here trusts it for
-// content — only for timing.
+// The gateway requires the same JWT as the REST API (sent in the handshake
+// `auth.token`), only delivers events the user is allowed to see, and strips
+// payloads to identifiers. Nothing here trusts the socket for content — only
+// for timing.
 
 import { useEffect, useRef } from 'react';
 import { io, type Socket } from 'socket.io-client';
@@ -52,10 +53,13 @@ export function useRealtime(
     };
 
     let socket: Socket | null = null;
-    if (SOCKET_URL) {
+    const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('wms_token');
+    if (SOCKET_URL && hasToken) {
       // Namespace and transport match the gateway (@WebSocketGateway namespace '/ws').
       socket = io(`${SOCKET_URL}/ws`, {
         transports: ['websocket', 'polling'],
+        // Read on every (re)connect so a refreshed token is picked up.
+        auth: (cb) => cb({ token: localStorage.getItem('wms_token') ?? '' }),
         reconnectionDelay: 2_000,
         reconnectionDelayMax: 30_000,
         timeout: 8_000,
@@ -63,6 +67,9 @@ export function useRealtime(
       // A dropped socket must not stall the UI — the poll below still runs, so a
       // failed connection degrades to periodic refresh rather than stale data.
       socket.on('connect_error', () => {});
+      // Token expired or revoked server-side: stop reconnecting with it; the
+      // poll keeps the page fresh and the next REST call handles re-login.
+      socket.on('session:expired', () => socket?.disconnect());
       for (const e of events) socket.on(e, fire);
     }
 

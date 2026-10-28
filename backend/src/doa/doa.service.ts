@@ -4,6 +4,8 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus, RTVStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { transitionStock } from '../common/stock-state';
+import { ScopePrincipal, assertStockInScope, warehouseFilter } from '../common/warehouse-scope';
+import { MasterDataService } from '../master-data/master-data.service';
 
 const DECLARABLE: StockStatus[] = [StockStatus.AVAILABLE, StockStatus.QUARANTINE, StockStatus.DAMAGED, StockStatus.PENDING_INSPECTION, StockStatus.RETURNED_UNUSED];
 const RTV_ELIGIBLE: StockStatus[] = [StockStatus.DOA, StockStatus.DAMAGED, StockStatus.QUARANTINE, StockStatus.RTV_PENDING];
@@ -13,12 +15,14 @@ export class DoaService {
   constructor(
     private prisma: PrismaService,
     private realtime: RealtimeGateway,
+    private masterData: MasterDataService,
   ) {}
 
   // DOA / defective / quarantine stock items
-  list() {
+  list(scope?: ScopePrincipal) {
+    const wh = warehouseFilter(scope);
     return this.prisma.stockItem.findMany({
-      where: { status: { in: [StockStatus.DOA, StockStatus.DAMAGED, StockStatus.QUARANTINE, StockStatus.RTV_PENDING] } },
+      where: { status: { in: [StockStatus.DOA, StockStatus.DAMAGED, StockStatus.QUARANTINE, StockStatus.RTV_PENDING] }, ...(wh ? { warehouseId: wh } : {}) },
       include: { product: { include: { brand: true } }, warehouse: true },
       orderBy: { updatedAt: 'desc' },
     });
@@ -26,7 +30,11 @@ export class DoaService {
 
   // Mark a stock item DOA (e.g. discovered during inspection).
   // Only stock on hand and not committed to an outbound task can be declared DOA.
-  async declare(stockItemId: string, reason: string, userId: string) {
+  async declare(stockItemId: string, input: { reason?: string; reasonCode?: string }, userId: string, scope?: ScopePrincipal) {
+    await assertStockInScope(this.prisma, scope, stockItemId);
+    // Requirement 7.4: a DOA declaration needs a reason — a managed code once DOA codes exist.
+    const resolved = await this.masterData.resolveReason('DOA', { reasonCode: input.reasonCode, reason: input.reason ?? (input.reasonCode ? undefined : 'DOA declared') });
+    const reason = resolved.reasonCode ? `[${resolved.reasonCode}] ${resolved.reason}` : resolved.reason;
     const updated = await this.prisma.$transaction(async (tx) => {
       await transitionStock(tx, stockItemId, DECLARABLE, StockStatus.DOA, { notes: reason });
       await tx.auditLog.create({

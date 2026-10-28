@@ -7,7 +7,7 @@ import {
   QrCode, LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle, Calculator, ArrowLeftRight,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Calculator as CountIcon, Trash2,
-  PackageCheck, Undo2, Building2, Handshake,
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -48,6 +48,9 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/users', label: 'Users', icon: Users, roles: ADMIN },
       { href: '/roles', label: 'Roles & Permissions', icon: ShieldCheck, roles: ['SYSTEM_ADMIN'] },
       { href: '/settings', label: 'System Settings', icon: Settings, roles: ['SYSTEM_ADMIN'] },
+      { href: '/system-master', label: 'Lists & Codes', icon: ListChecks, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
+      { href: '/approval-rules', label: 'Approval Rules', icon: GitBranch, roles: ['SYSTEM_ADMIN'] },
+      { href: '/notification-templates', label: 'Notification Templates', icon: BellRing, roles: ['SYSTEM_ADMIN'] },
     ],
   },
   {

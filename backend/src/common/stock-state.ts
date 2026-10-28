@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { assertNotCountLocked, leavesAvailable } from './count-lock';
 import { Prisma, StockStatus } from '@prisma/client';
 
 type Db = Prisma.TransactionClient;
@@ -27,6 +28,8 @@ export async function transitionStock(
   to: StockStatus,
   extra: Prisma.StockItemUncheckedUpdateManyInput = {},
 ): Promise<void> {
+  // A row being cycle-counted cannot leave AVAILABLE until the count is finished.
+  if (leavesAvailable(from)) await assertNotCountLocked(db, [stockItemId]);
   const res = await db.stockItem.updateMany({
     where: { id: stockItemId, status: { in: from } },
     data: { ...extra, status: to },

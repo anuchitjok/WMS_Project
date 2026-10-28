@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { NOT_COUNT_LOCKED } from '../common/count-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, StockStatus } from '@prisma/client';
 import { splitStockRow, transitionStock } from '../common/stock-state';
@@ -28,6 +29,7 @@ export class InventoryOrchestrationService {
       WHERE s."productId" = ${productId} AND s."status" = 'AVAILABLE' AND s."quantity" > 0
         AND (${warehouseId}::text IS NULL OR s."warehouseId" = ${warehouseId})
         AND s."id" <> ALL(${exclude}::text[])
+        AND ${NOT_COUNT_LOCKED}
       ORDER BY s."receivedDate" ASC
       LIMIT 1
       FOR UPDATE OF s SKIP LOCKED

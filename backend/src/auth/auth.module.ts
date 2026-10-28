@@ -21,6 +21,6 @@ import { TokenBlocklistService } from './token-blocklist.service';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, TokenBlocklistService],
-  exports: [AuthService, JwtModule, TokenBlocklistService],
+  exports: [AuthService, JwtModule, TokenBlocklistService, JwtStrategy],
 })
 export class AuthModule {}

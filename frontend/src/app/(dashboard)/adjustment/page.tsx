@@ -11,12 +11,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { ReasonCodeField, reasonFilled, type ReasonValue } from '@/components/reason-code-field';
 
 export default function AdjustmentPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ productLabel: '', reason: 'Cycle count variance', quantityBefore: 0, quantityAfter: 0 });
+  const [form, setForm] = useState({ productLabel: '', quantityBefore: 0, quantityAfter: 0 });
+  const [reason, setReason] = useState<ReasonValue>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -29,11 +31,11 @@ export default function AdjustmentPage() {
   const after = Number(form.quantityAfter);
   const qtyValid = Number.isFinite(before) && Number.isFinite(after) && before >= 0 && after >= 0;
   const noChange = qtyValid && before === after;
-  const formValid = !!form.productLabel.trim() && !!form.reason.trim() && qtyValid && !noChange;
+  const formValid = !!form.productLabel.trim() && reasonFilled(reason) && qtyValid && !noChange;
 
   async function submit() {
     if (!formValid) { toast.error('Enter a product, reason, and a valid quantity change'); return; }
-    try { await adjustmentApi.create({ ...form, productLabel: form.productLabel.trim(), reason: form.reason.trim(), quantityBefore: before, quantityAfter: after }); toast.success('Adjustment requested'); setOpen(false); load(); }
+    try { await adjustmentApi.create({ ...form, ...reason, reason: reason.reason?.trim(), productLabel: form.productLabel.trim(), quantityBefore: before, quantityAfter: after }); toast.success('Adjustment requested'); setOpen(false); setReason({}); load(); }
     catch (e: any) { toast.error(e.message); }
   }
   async function approve(id: string) {
@@ -55,7 +57,7 @@ export default function AdjustmentPage() {
               <DialogHeader><DialogTitle>Create Stock Adjustment</DialogTitle></DialogHeader>
               <div className="space-y-3">
                 <div className="space-y-1"><Label>Product Label</Label><Input value={form.productLabel} onChange={(e) => setForm((f) => ({ ...f, productLabel: e.target.value }))} placeholder="e.g. CAB-CAT5E — Cat5e Cable" /></div>
-                <div className="space-y-1"><Label>Reason</Label><Input value={form.reason} onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))} /></div>
+                <ReasonCodeField category="ADJUSTMENT" value={reason} onChange={setReason} placeholder="e.g. Data correction" />
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><Label>Qty Before</Label><Input type="number" min={0} value={form.quantityBefore} onChange={(e) => setForm((f) => ({ ...f, quantityBefore: Number(e.target.value) }))} /></div>
                   <div className="space-y-1"><Label>Qty After</Label><Input type="number" min={0} value={form.quantityAfter} onChange={(e) => setForm((f) => ({ ...f, quantityAfter: Number(e.target.value) }))} /></div>
@@ -85,7 +87,7 @@ export default function AdjustmentPage() {
                 <tr key={a.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{a.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{a.productLabel}</td>
-                  <td className="px-4 py-3 text-slate-600">{a.reason}</td>
+                  <td className="px-4 py-3 text-slate-600">{a.reason}{a.reasonCode && <span className="ml-1.5 text-[11px] text-slate-400">{a.reasonCode}</span>}</td>
                   <td className="px-4 py-3 font-medium">{a.quantityBefore} → {a.quantityAfter}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className={a.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : a.status === 'REJECTED' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}>{a.status.replace(/_/g, ' ')}</Badge></td>
                   <td className="px-4 py-3 space-x-1">{a.status === 'PENDING_APPROVAL' && (<>

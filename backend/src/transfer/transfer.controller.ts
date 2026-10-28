@@ -17,15 +17,15 @@ export class TransferController {
   constructor(private readonly service: TransferService) {}
 
   @Get()
-  findAll(@Query('status') status?: string) {
-    return this.service.findAll(status);
+  findAll(@Query('status') status: string | undefined, @CurrentUser() user: any) {
+    return this.service.findAll(status, user);
   }
 
   @Post()
   @UseGuards(AccessGuard)
   @Access(ACCESS.transfer)
-  create(@Body() dto: CreateTransferDto, @CurrentUser('id') userId: string) {
-    return this.service.create(dto, userId);
+  create(@Body() dto: CreateTransferDto, @CurrentUser() user: any) {
+    return this.service.create(dto, user.id, user);
   }
 
   @Patch(':id/complete')
@@ -34,8 +34,8 @@ export class TransferController {
   complete(
     @Param('id') id: string,
     @Body() dest: LocationDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.service.complete(id, dest, userId);
+    return this.service.complete(id, dest, user.id, user);
   }
 }

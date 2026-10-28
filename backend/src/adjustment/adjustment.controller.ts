@@ -16,25 +16,25 @@ export class AdjustmentController {
   constructor(private readonly service: AdjustmentService) {}
 
   @Get()
-  findAll(@Query('status') status?: string) {
-    return this.service.findAll(status);
+  findAll(@Query('status') status: string | undefined, @CurrentUser() user: any) {
+    return this.service.findAll(status, user);
   }
 
   @Post()
   @Access(ACCESS.adjustment)
-  create(@Body() dto: CreateAdjustmentDto, @CurrentUser('id') userId: string) {
-    return this.service.create(dto, userId);
+  create(@Body() dto: CreateAdjustmentDto, @CurrentUser() user: any) {
+    return this.service.create(dto, user.id, user);
   }
 
   @Patch(':id/approve')
   @Access(ACCESS.adjustment)
-  approve(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.service.approve(id, userId);
+  approve(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.approve(id, user.id, user);
   }
 
   @Patch(':id/reject')
   @Access(ACCESS.adjustment)
-  reject(@Param('id') id: string, @CurrentUser('id') userId: string) {
-    return this.service.reject(id, userId);
+  reject(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.reject(id, user.id, user);
   }
 }

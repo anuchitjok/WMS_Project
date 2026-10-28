@@ -1,3 +1,4 @@
+import { assertSerialsFree } from '../common/serial-guard';
 import { Injectable, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -146,6 +147,10 @@ export class ImportService {
 
     let inserted = 0;
     await this.prisma.$transaction(async (tx) => {
+      // Serials re-checked under per-serial locks (preview data can be stale or raced).
+      if (type === 'inventory' || type === 'serials') {
+        await assertSerialsFree(tx, validRows.map((d) => (d.serialNumber ? String(d.serialNumber).trim() : null)));
+      }
       if (type === 'products') {
         const brands = await tx.brand.findMany({ select: { id: true, code: true } });
         const brandMap = new Map(brands.map((b) => [b.code, b.id]));

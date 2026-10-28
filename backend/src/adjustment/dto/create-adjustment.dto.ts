@@ -14,8 +14,13 @@ export class CreateAdjustmentDto {
 
   @ApiProperty()
   @IsString()
-  @IsNotEmpty({ message: 'reason is required' })
-  reason: string;
+  @IsOptional()
+  reason?: string;
+
+  /** Managed reason code (category ADJUSTMENT). Required once codes are configured. */
+  @IsString()
+  @IsOptional()
+  reasonCode?: string;
 
   @ApiProperty({ minimum: 0 })
   @IsNumber()

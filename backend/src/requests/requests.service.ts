@@ -1,8 +1,12 @@
+import { splitStockRow } from '../common/stock-state';
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { NOT_COUNT_LOCKED } from '../common/count-lock';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RequestStatus, UserRole, StockStatus } from '@prisma/client';
+import { assertNotSelfApproval } from '../common/separation-of-duties';
+import { MasterDataService } from '../master-data/master-data.service';
 import { nanoid } from 'nanoid';
 import { isUnifiedReservationEnabled, isApprovalEngineEnabled } from '../common/feature-flags';
 import { ApprovalService } from '../approval/approval.service';
@@ -48,6 +52,7 @@ const REVIEWABLE: RequestStatus[] = [RequestStatus.SUBMITTED, RequestStatus.PEND
 @Injectable()
 export class RequestsService {
   constructor(
+    private masterData: MasterDataService,
     private prisma: PrismaService,
     private realtime: RealtimeGateway,
     private notifications: NotificationsService,
@@ -154,7 +159,8 @@ export class RequestsService {
     requesterId: string,
   ) {
     // Auto-fill department from the requester's profile when not supplied.
-    let department = data.department?.trim();
+    // An explicit department must be a managed, active one; the profile fallback was validated when it was set.
+    let department = (await this.masterData.assertDepartment(data.department)) ?? undefined;
     if (!department) {
       const user = await this.prisma.user.findUnique({ where: { id: requesterId }, select: { department: true } });
       department = user?.department ?? 'N/A';
@@ -250,7 +256,7 @@ export class RequestsService {
     // Phase 4: start a governance approval instance (best-effort, non-blocking).
     if (isApprovalEngineEnabled()) {
       this.approval
-        .startApproval('WithdrawalRequest', id, userId)
+        .ensurePendingInstance('WithdrawalRequest', id, userId)
         .catch(() => {}); // never block submit on the engine
     }
     return updated;
@@ -269,16 +275,11 @@ export class RequestsService {
     approved: boolean,
     notes?: string,
   ): Promise<'APPROVED' | 'REJECTED' | 'PENDING'> {
-    let instance: any = await this.approval.getByEntity('WithdrawalRequest', requestId);
-    if (!instance || instance.status !== 'PENDING') {
-      await this.approval.startApproval('WithdrawalRequest', requestId, requesterId);
-      // Re-fetch so `steps` are guaranteed loaded (the no-rule create path omits them).
-      instance = await this.approval.getByEntity('WithdrawalRequest', requestId);
-    }
+    const instance: any = await this.approval.ensurePendingInstance('WithdrawalRequest', requestId, requesterId);
     if (!instance || !instance.steps?.length) return 'PENDING';
     const step =
       instance.steps.find((s: any) => s.status === 'PENDING') ?? instance.steps[0];
-    const result = await this.approval.decide(instance.id, step.stepOrder, actorId, approved, notes);
+    const result = await this.approval.decide(instance.id, step.stepOrder, actorId, approved, notes, { internal: true });
     return (result?.status as 'APPROVED' | 'REJECTED' | 'PENDING') ?? 'PENDING';
   }
 
@@ -287,6 +288,8 @@ export class RequestsService {
     if (req.status !== RequestStatus.SUBMITTED && req.status !== RequestStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Request is not in a reviewable state');
     }
+    // Maker ≠ checker: a requester cannot approve their own request (rejecting it is harmless).
+    if (approved) assertNotSelfApproval(approverId, [req.requesterId], 'a request');
 
     // Phase 4: when the engine is enabled, the decision is recorded there first.
     // Multi-step rules may keep the request PENDING until all steps approve.
@@ -337,6 +340,7 @@ export class RequestsService {
       });
       if (claimed.count === 0) throw new ConflictException('Request was already decided');
 
+      const reservedSummary: string[] = [];
       if (unified) {
         // Governance only: set approved quantities, no stock mutation.
         for (const item of req.items) {
@@ -346,35 +350,49 @@ export class RequestsService {
           });
         }
       } else {
-        // Legacy: reserve stock atomically with row-level locking.
+        // Legacy: reserve stock atomically with row-level locking, by QUANTITY.
+        // Rows are taken FIFO until the approved units are covered; a bulk row
+        // larger than what is still needed is split — the reserved part keeps
+        // the row id, the remainder stays AVAILABLE (same model as allocation).
+        // Serial rows hold 1 unit each, so they behave exactly as before.
         for (const item of req.items) {
-          const needed = Math.ceil(item.quantityRequested);
-          for (let i = 0; i < needed; i++) {
-            // Lock one AVAILABLE stock row for this product. SKIP LOCKED lets
-            // concurrent approvals grab *different* rows instead of deadlocking,
-            // which is exactly what prevents the double-allocation race.
-            const rows = await tx.$queryRaw<{ id: string }[]>`
-              SELECT "id" FROM "StockItem"
-              WHERE "productId" = ${item.productId} AND "status" = 'AVAILABLE' AND "quantity" > 0
-              ORDER BY "receivedDate" ASC
-              FOR UPDATE SKIP LOCKED
+          const need = item.quantityRequested;
+          const taken: string[] = [];
+          let covered = 0;
+          while (covered < need) {
+            // SKIP LOCKED lets concurrent approvals grab *different* rows instead
+            // of deadlocking, which is what prevents double allocation.
+            const exclude = taken.length ? taken : [''];
+            const rows = await tx.$queryRaw<{ id: string; quantity: number }[]>`
+              SELECT s."id", s."quantity" FROM "StockItem" s
+              WHERE s."productId" = ${item.productId} AND s."status" = 'AVAILABLE' AND s."quantity" > 0
+                AND s."id" <> ALL(${exclude}::text[])
+                AND ${NOT_COUNT_LOCKED}
+              ORDER BY s."receivedDate" ASC
+              FOR UPDATE OF s SKIP LOCKED
               LIMIT 1
             `;
             if (rows.length === 0) {
               // Throwing aborts the transaction → previously reserved rows revert
               throw new BadRequestException(
-                `Insufficient available stock for product ${item.productId} (requested ${needed})`,
+                `Insufficient available stock for product ${item.productId} (requested ${need}, available ${covered})`,
               );
             }
-            await tx.stockItem.update({ where: { id: rows[0].id }, data: { status: StockStatus.RESERVED } });
-            // Link first reserved unit to the request item for traceability
-            if (i === 0) {
+            const row = rows[0];
+            const take = Math.min(Number(row.quantity), need - covered);
+            await splitStockRow(tx, row.id, take, StockStatus.AVAILABLE);
+            await tx.stockItem.update({ where: { id: row.id }, data: { status: StockStatus.RESERVED } });
+            // Link the first reserved row to the request item for traceability
+            if (taken.length === 0) {
               await tx.withdrawalRequestItem.update({
                 where: { id: item.id },
-                data: { stockItemId: rows[0].id, quantityApproved: item.quantityRequested },
+                data: { stockItemId: row.id, quantityApproved: item.quantityRequested },
               });
             }
+            taken.push(row.id);
+            covered += take;
           }
+          reservedSummary.push(`${item.productId}: ${covered} unit(s) in ${taken.length} row(s)`);
         }
       }
 
@@ -385,7 +403,7 @@ export class RequestsService {
           action: 'REQUEST_APPROVED',
           entityType: 'WithdrawalRequest',
           entityId: id,
-          detail: unified ? 'Approved (governance only — reservation deferred to allocation)' : 'Stock reserved',
+          detail: unified ? 'Approved (governance only — reservation deferred to allocation)' : `Stock reserved — ${reservedSummary.join('; ')}`,
         },
       });
       return result;
@@ -477,4 +495,61 @@ export class RequestsService {
     this.realtime.emitRequestUpdate({ action: RequestStatus.CANCELLED, requestId: id });
     return updated;
   }
+
+  /**
+   * Recovery for a request stranded in a fulfillment status with no live task —
+   * e.g. a task that was walked to CLOSED without picking anything (legacy
+   * data; the current fulfillment guard prevents new cases). Only when nothing
+   * was shipped or issued and no stock is still committed to it does the
+   * request move to CANCELLED, with a mandatory reason, audited.
+   */
+  async recoverStalled(id: string, reason: string, actorId: string) {
+    if (typeof reason !== 'string' || reason.trim().length < 5) {
+      throw new BadRequestException('A reason (at least 5 characters) is required for a recovery');
+    }
+    const STALLED: RequestStatus[] = [RequestStatus.PICKING, RequestStatus.PICKED, RequestStatus.PACKED, RequestStatus.READY_FOR_PICKUP];
+    const TERMINAL_TASK = ['CLOSED', 'CANCELLED', 'RETURNED'];
+    const COMMITTED: StockStatus[] = [StockStatus.RESERVED, StockStatus.PICKING, StockStatus.PICKED, StockStatus.PACKED, StockStatus.READY_FOR_PICKUP];
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "WithdrawalRequest" WHERE "id" = ${id} FOR UPDATE`;
+      const req = await tx.withdrawalRequest.findUnique({ where: { id }, include: { items: true } });
+      if (!req) throw new NotFoundException('Request not found');
+      if (!STALLED.includes(req.status)) {
+        throw new BadRequestException(`Only a request stuck in ${STALLED.join('/')} can be recovered (current: ${req.status})`);
+      }
+      const tasks = await tx.fulfillmentTask.findMany({
+        where: { requestId: id },
+        select: { id: true, refNumber: true, status: true, shipment: { select: { refNumber: true } }, items: { select: { stockItemId: true, qtyPicked: true } } },
+      });
+      const live = tasks.find((t) => !TERMINAL_TASK.includes(t.status));
+      if (live) throw new ConflictException(`Task ${live.refNumber} is still ${live.status} — finish or cancel it through fulfillment`);
+      const shipped = tasks.find((t) => t.shipment);
+      if (shipped) throw new ConflictException(`Task ${shipped.refNumber} has shipment ${shipped.shipment!.refNumber} — goods left the warehouse; use returns instead`);
+      const picked = tasks.find((t) => t.items.some((i) => (i.qtyPicked ?? 0) > 0));
+      if (picked) throw new ConflictException(`Task ${picked.refNumber} recorded picked quantities — resolve them through fulfillment`);
+
+      const linked = [...req.items.map((i) => i.stockItemId), ...tasks.flatMap((t) => t.items.map((i) => i.stockItemId))].filter((x): x is string => !!x);
+      const held = linked.length
+        ? await tx.stockItem.findMany({ where: { id: { in: linked }, status: { in: COMMITTED } }, select: { id: true, status: true } })
+        : [];
+      if (held.length) {
+        throw new ConflictException(`Stock ${held.map((h) => `${h.id} (${h.status})`).join(', ')} is still committed to this request — release it first (Inventory → Release Reservation)`);
+      }
+
+      const claimed = await tx.withdrawalRequest.updateMany({
+        where: { id, status: req.status },
+        data: { status: RequestStatus.CANCELLED, rejectReason: `Recovered: ${reason.trim()}`, version: { increment: 1 } },
+      });
+      if (claimed.count === 0) throw new ConflictException('Request changed concurrently — reload and retry');
+      await tx.auditLog.create({
+        data: {
+          userId: actorId, action: 'REQUEST_RECOVERED', entityType: 'WithdrawalRequest', entityId: id,
+          detail: `${req.refNumber}: ${req.status} → CANCELLED (no live task, nothing shipped or held). Tasks: ${tasks.map((t) => `${t.refNumber}=${t.status}`).join(', ') || 'none'}. Reason: ${reason.trim()}`,
+        },
+      });
+      return tx.withdrawalRequest.findUniqueOrThrow({ where: { id } });
+    });
+  }
+
 }

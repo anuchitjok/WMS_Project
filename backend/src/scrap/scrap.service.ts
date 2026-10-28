@@ -1,22 +1,27 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { assertNotCountLocked } from '../common/count-lock';
+import { assertNotSelfApproval } from '../common/separation-of-duties';
 import { PrismaService } from '../prisma/prisma.service';
 import { ScrapStatus, StockStatus } from '@prisma/client';
 import { ON_HAND_UNCOMMITTED, transitionStock } from '../common/stock-state';
 import { nanoid } from 'nanoid';
+import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
+import { MasterDataService } from '../master-data/master-data.service';
 
 @Injectable()
 export class ScrapService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private masterData: MasterDataService) {}
 
   private genRef() {
     return `SCRAP-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
   }
 
-  findAll(filter: { status?: ScrapStatus; page?: number; limit?: number }) {
+  findAll(filter: { status?: ScrapStatus; page?: number; limit?: number }, scope?: ScopePrincipal) {
     const { status, page = 1, limit = 20 } = filter;
     const skip = (page - 1) * limit;
+    const wh = warehouseFilter(scope);
     return this.prisma.scrapCase.findMany({
-      where: status ? { status } : {},
+      where: { ...(status ? { status } : {}), ...(wh ? { stockItem: { warehouseId: wh } } : {}) },
       include: {
         stockItem: { include: { product: { include: { brand: true } } } },
         requestedBy: { select: { fullName: true } },
@@ -42,12 +47,14 @@ export class ScrapService {
   }
 
   async create(
-    data: { stockItemId: string; reason: string; description?: string; disposalMethod?: string; quantity?: number },
+    data: { stockItemId: string; reason?: string; reasonCode?: string; description?: string; disposalMethod?: string; quantity?: number },
     requestedById: string,
+    scope?: ScopePrincipal,
   ) {
     const stock = await this.prisma.stockItem.findUnique({ where: { id: data.stockItemId } });
     if (!stock) throw new NotFoundException('Stock item not found');
-    if (!data.reason || typeof data.reason !== 'string') throw new BadRequestException('reason is required');
+    assertWarehouseAccess(scope, stock.warehouseId, 'this stock item');
+    const { reasonCode, reason } = await this.masterData.resolveReason('SCRAP', data);
     const quantity = data.quantity ?? 1;
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > stock.quantity) {
       throw new BadRequestException(`quantity must be a whole number between 1 and ${stock.quantity}`);
@@ -65,7 +72,8 @@ export class ScrapService {
       data: {
         refNumber: this.genRef(),
         stockItemId: data.stockItemId,
-        reason: data.reason,
+        reason,
+        reasonCode,
         description: data.description,
         disposalMethod: data.disposalMethod,
         quantity,
@@ -78,15 +86,16 @@ export class ScrapService {
         action: 'SCRAP_CASE_CREATED',
         entityType: 'ScrapCase',
         entityId: scrap.id,
-        detail: `${scrap.refNumber} · ${data.reason}`,
+        detail: `${scrap.refNumber} · ${reasonCode ? `[${reasonCode}] ` : ''}${reason}`,
       },
     });
     return scrap;
   }
 
-  async updateStatus(id: string, status: ScrapStatus, actorId: string) {
-    const scrap = await this.prisma.scrapCase.findUnique({ where: { id } });
+  async updateStatus(id: string, status: ScrapStatus, actorId: string, scope?: ScopePrincipal) {
+    const scrap = await this.prisma.scrapCase.findUnique({ where: { id }, include: { stockItem: { select: { warehouseId: true } } } });
     if (!scrap) throw new NotFoundException('Scrap case not found');
+    assertWarehouseAccess(scope, scrap.stockItem?.warehouseId, 'this scrap case');
 
     const allowed: Record<string, ScrapStatus[]> = {
       PENDING_REVIEW: ['APPROVED', 'REJECTED', 'CANCELLED'],
@@ -96,6 +105,7 @@ export class ScrapService {
       throw new BadRequestException(`Cannot transition from ${scrap.status} to ${status}`);
     }
 
+    if (status === 'APPROVED') assertNotSelfApproval(actorId, [scrap.requestedById], 'a scrap case');
     const extra: any = {};
     if (status === 'APPROVED') { extra.approvedById = actorId; extra.approvedAt = new Date(); }
     if (status === 'DISPOSED') extra.disposedAt = new Date();
@@ -110,6 +120,7 @@ export class ScrapService {
       if (status === 'DISPOSED') {
         const stock = await tx.stockItem.findUnique({ where: { id: scrap.stockItemId } });
         if (!stock) throw new NotFoundException('Stock item not found');
+        await assertNotCountLocked(tx, [stock.id]);
         if (stock.quantity > scrap.quantity && !stock.serialNumber) {
           const reduced = await tx.stockItem.updateMany({
             where: { id: stock.id, quantity: stock.quantity, status: { in: ON_HAND_UNCOMMITTED } },

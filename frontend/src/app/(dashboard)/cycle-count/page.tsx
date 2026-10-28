@@ -28,12 +28,13 @@ export default function CycleCountPage() {
   const [selected, setSelected] = useState<any>(null);
   const [form, setForm] = useState({ warehouseId: '', type: 'BLIND', notes: '' });
   const [countValues, setCountValues] = useState<Record<string, string>>({});
+  const [schedule, setSchedule] = useState<any>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, w] = await Promise.all([cycleCountApi.list(), warehouseApi.list()]);
-      setSessions(s); setWarehouses(w);
+      const [s, w, sch] = await Promise.all([cycleCountApi.list(), warehouseApi.list(), cycleCountApi.schedule().catch(() => null)]);
+      setSessions(s); setWarehouses(w); setSchedule(sch);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -61,8 +62,32 @@ export default function CycleCountPage() {
     try { setSelected(await cycleCountApi.submit(selected.id)); toast.success('Submitted for review'); } catch (e: any) { toast.error(e.message); }
   }
   async function approve() {
-    try { setSelected(await cycleCountApi.approve(selected.id)); toast.success('Approved — variances applied'); load(); } catch (e: any) { toast.error(e.message); }
+    try { setSelected(await cycleCountApi.approve(selected.id)); toast.success('Approved — variances applied'); load(); }
+    catch (e: any) {
+      // 409 with conflicts: nothing was applied; reload so the flagged lines show.
+      toast.error(e.message);
+      if (e.status === 409) setSelected(await cycleCountApi.get(selected.id));
+    }
   }
+  async function recount() {
+    try {
+      const r = await cycleCountApi.recountConflicts(selected.id);
+      setSelected(r);
+      toast.success(`${r.recount} line(s) ready to recount${r.excluded ? `, ${r.excluded} excluded` : ''}`);
+      load();
+    } catch (e: any) { toast.error(e.message); }
+  }
+  async function cancelSession() {
+    if (!window.confirm('Cancel this count? Counted stock is unlocked and no variance is applied.')) return;
+    try { await cycleCountApi.cancel(selected.id); toast.success('Count cancelled — stock unlocked'); setSelected(await cycleCountApi.get(selected.id)); load(); }
+    catch (e: any) { toast.error(e.message); }
+  }
+
+  const SCHEDULE_TONE: Record<string, string> = {
+    overdue: 'bg-red-50 text-red-700 border-red-200', due: 'bg-amber-50 text-amber-700 border-amber-200',
+    in_progress: 'bg-slate-50 text-slate-700 border-slate-200', ok: 'bg-green-50 text-green-700 border-green-200',
+    not_scheduled: 'bg-slate-50 text-slate-500 border-slate-200',
+  };
 
   return (
     <div className="p-6 space-y-5">
@@ -94,6 +119,20 @@ export default function CycleCountPage() {
           </Dialog>
         }
       />
+
+      {schedule && schedule.frequency && schedule.warehouses?.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Count schedule · {schedule.frequency}</p>
+          <div className="flex flex-wrap gap-2">
+            {schedule.warehouses.map((w: any) => (
+              <span key={w.id} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${SCHEDULE_TONE[w.status] ?? ''}`}>
+                <span className="font-medium">{w.code}</span>
+                <span>{w.status === 'in_progress' ? `counting (${w.activeCount})` : w.status === 'ok' ? `due ${formatDate(w.dueAt)}` : w.status.replace('_', ' ')}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Session list */}
@@ -129,13 +168,25 @@ export default function CycleCountPage() {
               <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                 <div>
                   <h3 className="font-semibold text-slate-800">{selected.refNumber}</h3>
-                  <p className="text-xs text-slate-400">{selected.summary?.counted}/{selected.summary?.total} counted · {selected.summary?.varianceCount} variances</p>
+                  <p className="text-xs text-slate-400">
+                    {selected.summary?.counted}/{selected.summary?.total} counted · {selected.summary?.varianceCount} variances
+                    {selected.summary?.excluded ? ` · ${selected.summary.excluded} excluded` : ''}
+                    {['OPEN', 'IN_PROGRESS', 'REVIEW'].includes(selected.status) && ' · counted stock is locked'}
+                  </p>
                 </div>
                 <div className="flex gap-2">
                   {selected.status === 'IN_PROGRESS' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={submit}>Submit for Review</Button>}
+                  {selected.status === 'REVIEW' && selected.summary?.conflictCount > 0 && <Button size="sm" variant="outline" onClick={recount}>Recount changed lines</Button>}
                   {selected.status === 'REVIEW' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={approve}>Approve & Apply</Button>}
+                  {['OPEN', 'IN_PROGRESS', 'REVIEW'].includes(selected.status) && <Button size="sm" variant="outline" onClick={cancelSession}>Cancel</Button>}
                 </div>
               </div>
+              {selected.summary?.conflictCount > 0 && (
+                <div className="px-4 py-2.5 border-b border-amber-200 bg-amber-50 text-xs text-amber-800 flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-px" />
+                  <span>{selected.summary.conflictCount} counted line(s) changed after counting, so nothing was applied. Use <b>Recount changed lines</b>, count them again, then submit.</span>
+                </div>
+              )}
               <div className="overflow-x-auto max-h-[55vh] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50">
@@ -150,15 +201,17 @@ export default function CycleCountPage() {
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {selected.lines?.map((l: any) => (
-                      <tr key={l.id} className={l.variance !== 0 && l.countedQty !== null ? 'bg-red-50/50' : ''}>
+                      <tr key={l.id} className={l.excludedAt ? 'opacity-50' : l.conflictReason ? 'bg-amber-50/60' : l.variance !== 0 && l.countedQty !== null ? 'bg-red-50/50' : ''}>
                         <td className="px-3 py-2 text-sm text-slate-700">
                           {l.productName ?? l.productCode ?? l.productId.slice(-8)}
                           {l.productCode && l.productName && <span className="block text-xs text-slate-400 font-mono">{l.productCode}</span>}
+                          {l.conflictReason && <span className="block text-xs text-amber-700">{l.conflictReason}</span>}
+                          {l.excludedAt && <span className="block text-xs text-slate-500">{l.notes ?? 'Excluded from count'}</span>}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-500">{l.locationKey || '—'}</td>
                         <td className="px-3 py-2 text-center font-medium">{l.expectedQty}</td>
                         <td className="px-3 py-2 text-center">
-                          {l.countedQty !== null ? <span className="font-medium">{l.countedQty}</span>
+                          {l.excludedAt ? <span className="text-slate-400">—</span> : l.countedQty !== null ? <span className="font-medium">{l.countedQty}</span>
                             : <Input type="number" min={0} className="h-7 w-20 text-center text-xs" value={countValues[l.id] ?? ''} onChange={(e) => setCountValues((v) => ({ ...v, [l.id]: e.target.value }))} />}
                         </td>
                         <td className="px-3 py-2 text-center">
@@ -169,7 +222,7 @@ export default function CycleCountPage() {
                           )}
                         </td>
                         <td className="px-3 py-2">
-                          {l.countedQty === null && ['OPEN', 'IN_PROGRESS'].includes(selected.status) && (
+                          {l.countedQty === null && !l.excludedAt && ['OPEN', 'IN_PROGRESS'].includes(selected.status) && (
                             <Button size="sm" className="h-6 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => submitCount(l.id)}>
                               <CheckCircle2 className="h-3 w-3" />
                             </Button>
