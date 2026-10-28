@@ -1,86 +1,124 @@
 'use client';
 
 import { Fragment, useState } from 'react';
-import { AlertTriangle, CheckCircle2, CircleHelp, XCircle } from 'lucide-react';
+import {
+  AlertTriangle, CalendarCheck, ClipboardCheck, Hammer, Sparkles, CalendarRange, CheckCircle2, ChevronRight, Circle, CircleHelp, Clock, Gauge, ListChecks, Package, PackageOpen, PackageX,
+  Search, ShieldCheck, Truck, Users, Wallet, Warehouse, Wrench, XCircle, type LucideIcon,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Explain, FLAG, FlagPills, Pill, RunStatusPill, Section, Stat, fmt, money } from './shared';
+import { Explain, FLAG, FlagPills, Pill, RUN_STATUS, RunStatusPill, Section, Stat, fmt, money } from './shared';
 
 const VIEWS = [
-  ['overview', 'Overview'], ['workflow', 'Workflow & timeline'], ['manpower', 'Manpower'], ['materials', 'Materials & stock'],
-  ['space', 'Warehouse space'], ['cost', 'Cost'], ['assumptions', 'Assumptions & data'],
+  ['risks', 'Risks & actions'], ['manpower', 'Manpower & labour'], ['materials', 'Materials & stock'], ['space', 'Warehouse & capacity'],
+  ['cost', 'Cost estimate'], ['timeline', 'Timeline & formulas'], ['assumptions', 'Assumptions & data'],
 ] as const;
 
-export function ResultsView({ run }: { run: any }) {
-  const [view, setView] = useState<string>('overview');
+/**
+ * Results dashboard: project card + KPIs + workflow on top, detail tabs below.
+ * Every number comes from the stored run; nothing is recalculated here.
+ */
+export function ResultsView({ run, aside }: { run: any; aside?: React.ReactNode }) {
+  const [view, setView] = useState<string>('risks');
   const r = run.result;
   const cur = r.summary.currency;
-
-  if (r.overallStatus === 'INSUFFICIENT_DATA' && !r.stages.length) {
-    return (
-      <Section title="The plan could not be calculated" hint="Complete these inputs and calculate again. Nothing was estimated in their place.">
-        <ul className="space-y-1.5">
-          {r.errors.map((e: any, i: number) => (
-            <li key={i} className="flex gap-2 text-sm text-slate-700"><XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />{e.message}</li>
-          ))}
-        </ul>
-      </Section>
-    );
-  }
+  const failed = r.overallStatus === 'INSUFFICIENT_DATA' && !r.stages.length;
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <RunStatusPill status={r.overallStatus} />
-            <span className="text-xs text-slate-500">Run #{run.runNumber} · {run.scenarioName} · data as of {r.asOf} · {r.engineVersion}</span>
-            {run.stale && <Pill className="bg-amber-50 text-amber-700 border-amber-200">Inputs changed since this run</Pill>}
-          </div>
-          <FlagPills flags={r.flags} />
-          {r.overallStatus === 'READY_FOR_PLANNING_REVIEW' && <p className="text-xs text-slate-500">Ready for planning review — this is not an approval or a release for execution.</p>}
+      <div className="flex flex-wrap items-center gap-2">
+        <RunStatusPill status={r.overallStatus} />
+        <span className="text-xs text-slate-500">Run #{run.runNumber} · {run.scenarioName} · data as of {r.asOf} · {r.engineVersion}</span>
+        {run.stale && <Pill className="bg-amber-50 text-amber-700 border-amber-200">Inputs changed since this run — calculate again</Pill>}
+        <FlagPills flags={r.flags} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)] items-start">
+        {aside}
+        <div className="space-y-4 min-w-0">
+          {failed ? (
+            <Section title="The plan could not be calculated" hint="Complete these inputs and calculate again. Nothing was estimated in their place.">
+              <ul className="space-y-1.5">
+                {r.errors.map((e: any, i: number) => (
+                  <li key={i} className="flex gap-2 text-sm text-slate-700"><XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />{e.message}</li>
+                ))}
+              </ul>
+            </Section>
+          ) : (
+            <>
+              <KpiTiles r={r} cur={cur} />
+              <WorkflowStrip r={r} />
+            </>
+          )}
         </div>
       </div>
 
-      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
-        {VIEWS.map(([k, label]) => (
-          <button key={k} onClick={() => setView(k)} className={cn('px-3 py-2 text-sm -mb-px border-b-2 whitespace-nowrap', view === k ? 'border-green-600 text-green-700 font-medium' : 'border-transparent text-slate-500 hover:text-slate-800')}>{label}</button>
-        ))}
-      </div>
-
-      {view === 'overview' && <Overview r={r} cur={cur} />}
-      {view === 'workflow' && <WorkflowView r={r} />}
-      {view === 'manpower' && <ManpowerView r={r} cur={cur} />}
-      {view === 'materials' && <MaterialsView r={r} cur={cur} />}
-      {view === 'space' && <SpaceView r={r} />}
-      {view === 'cost' && <CostView r={r} />}
-      {view === 'assumptions' && <AssumptionsView run={run} />}
+      {!failed && (
+        <>
+          <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
+            {VIEWS.map(([k, label]) => (
+              <button key={k} onClick={() => setView(k)} className={cn('px-3 py-2 text-sm -mb-px border-b-2 whitespace-nowrap', view === k ? 'border-green-600 text-green-700 font-medium' : 'border-transparent text-slate-500 hover:text-slate-800')}>{label}</button>
+            ))}
+          </div>
+          {r.overallStatus === 'READY_FOR_PLANNING_REVIEW' && <p className="text-xs text-slate-500">Ready for planning review — this is not an approval or a release for execution.</p>}
+          {view === 'risks' && <RisksView r={r} />}
+          {view === 'manpower' && <ManpowerView r={r} cur={cur} />}
+          {view === 'materials' && <MaterialsView r={r} cur={cur} />}
+          {view === 'space' && <SpaceView r={r} />}
+          {view === 'cost' && <CostView r={r} />}
+          {view === 'timeline' && <WorkflowView r={r} />}
+          {view === 'assumptions' && <AssumptionsView run={run} />}
+        </>
+      )}
     </div>
   );
 }
 
-function Overview({ r, cur }: { r: any; cur: string }) {
+type Tone = 'neutral' | 'good' | 'warn' | 'bad';
+const TONE: Record<Tone, string> = { neutral: 'text-slate-900', good: 'text-green-700', warn: 'text-amber-700', bad: 'text-red-700' };
+
+function Kpi({ icon: Icon, label, value, sub, tone = 'neutral' }: { icon: LucideIcon; label: string; value: React.ReactNode; sub?: React.ReactNode; tone?: Tone }) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex gap-3 min-w-0">
+      <span className="h-9 w-9 rounded-lg bg-green-50 text-green-700 grid place-items-center shrink-0"><Icon className="h-[18px] w-[18px]" /></span>
+      <div className="min-w-0">
+        <p className="text-xs text-slate-500">{label}</p>
+        <p className={cn('text-lg font-semibold leading-tight mt-0.5', TONE[tone])}>{value}</p>
+        {sub && <p className="text-[11px] text-slate-500 mt-1 leading-snug">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
+function KpiTiles({ r, cur }: { r: any; cur: string }) {
   const s = r.summary;
-  const late = (s.scheduleVarianceWorkingDays ?? 0) > 0;
   const mp = r.manpower;
+  const late = (s.scheduleVarianceWorkingDays ?? 0) > 0;
+  const short = r.materials.filter((m: any) => m.shortage > 0 || !m.arrivesInTime);
+  // Shortage value only when the user may see costs and every short line has a unit cost.
+  const valued = r.cost && short.length > 0 && short.every((m: any) => m.unitCost !== null && m.unitCost !== undefined);
+  const shortValue = valued ? short.reduce((t: number, m: any) => t + m.shortage * m.unitCost, 0) : null;
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-3">
+      <Kpi icon={CalendarCheck} label="Estimated completion" value={s.estimatedFinish ?? '—'} tone={s.estimatedFinish ? (late ? 'bad' : 'good') : 'warn'}
+        sub={`Target ${s.targetEnd} · ${late ? `${s.scheduleVarianceWorkingDays} working day(s) late` : `${Math.abs(s.scheduleVarianceWorkingDays ?? 0)} working day(s) to spare`}`} />
+      <Kpi icon={Users} label="People required / available" value={`${fmt(s.requiredHeadcount, 0)} / ${s.availableHeadcount ?? '—'}`}
+        tone={mp?.additionalWorkersNeeded ? 'bad' : mp?.additionalWorkersNeeded === 0 ? 'good' : 'warn'}
+        sub={`${fmt(mp?.requiredFte?.value)} FTE${mp?.additionalWorkersNeeded ? ` · ${mp.additionalWorkersNeeded} more needed` : ''}`} />
+      <Kpi icon={Clock} label="Total labour hours" value={fmt(s.totalLaborHours)} sub={`Line pace ${fmt(s.lineThroughputPerDay)} units/day`} />
+      <Kpi icon={PackageX} label="Material shortage" tone={short.length ? 'bad' : s.materialLines ? 'good' : 'neutral'}
+        value={!s.materialLines ? 'No materials' : short.length ? `${short.length} of ${s.materialLines} items` : 'None'}
+        sub={short.length
+          ? `${short.slice(0, 2).map((m: any) => `${m.code} short ${fmt(m.shortage, 0)}`).join(' · ')}${short.length > 2 ? ' …' : ''}${shortValue !== null ? ` · ${money(shortValue, cur)}` : ''}`
+          : s.materialLines ? 'All covered in time' : 'None defined for this scenario'} />
+      <Kpi icon={Wallet} label="Estimated cost" value={s.estimatedCost === null ? 'Hidden' : money(s.estimatedCost, cur)} tone={s.estimatedCost !== null && !s.costComplete ? 'warn' : 'neutral'}
+        sub={s.estimatedCost === null ? 'Requires cost permission' : s.costComplete ? `${money(r.cost?.costPerUnit, cur)} per unit` : 'Incomplete — see Cost estimate'} />
+    </div>
+  );
+}
+
+function RisksView({ r }: { r: any }) {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Stat label="Planned units" value={fmt(s.quantity, 0)} sub={`Line pace ${fmt(s.lineThroughputPerDay)} units/day (bottleneck: ${s.bottleneckStage})`} />
-        <Stat label="Estimated completion" value={s.estimatedFinish ?? '—'} tone={late ? 'bad' : 'good'}
-          sub={`Target ${s.targetEnd} · ${late ? `${s.scheduleVarianceWorkingDays} working day(s) late` : `${Math.abs(s.scheduleVarianceWorkingDays ?? 0)} working day(s) to spare`}`} />
-        <Stat label="People required / available" value={`${fmt(s.requiredHeadcount, 0)} / ${s.availableHeadcount ?? '—'}`}
-          tone={mp?.additionalWorkersNeeded ? 'bad' : mp?.additionalWorkersNeeded === 0 ? 'good' : 'warn'}
-          sub={`${fmt(s.totalLaborHours)} labour hours · ${fmt(mp?.requiredFte?.value)} FTE`} />
-        <Stat label="Estimated cost" value={s.estimatedCost === null ? 'Hidden' : money(s.estimatedCost, cur)} tone={s.costComplete ? 'neutral' : 'warn'}
-          sub={s.estimatedCost === null ? 'Requires cost permission' : s.costComplete ? `${money(r.cost?.costPerUnit, cur)} per unit` : 'Incomplete — see Cost'} />
-        <Stat label="Materials" value={`${s.materialLines - s.materialShortageLines} of ${s.materialLines} ready`} tone={s.materialShortageLines ? 'bad' : 'good'} sub={s.materialShortageLines ? `${s.materialShortageLines} short or late` : 'Covered in time'} />
-        <Stat label="Warehouse space" value={s.spaceStatus === 'OK' ? 'Sufficient' : s.spaceStatus.charAt(0) + s.spaceStatus.slice(1).toLowerCase()}
-          tone={s.spaceStatus === 'OK' ? 'good' : s.spaceStatus === 'INCOMPLETE' ? 'warn' : 'bad'}
-          sub={r.space.map((x: any) => `${x.label.split(' ')[0]} ${x.utilizationPct === null ? '—' : `${x.utilizationPct}%`}`).join(' · ')} />
-        <Stat label="Critical path" value={<span className="text-sm">{r.criticalPath.map((k: string) => r.stages.find((x: any) => x.key === k)?.name).join(' → ')}</span>} />
-        <Stat label="Planning window" value={`${r.calendar.windowWorkingDays} working days`} sub={`${r.calendar.clockHoursPerDay} working hours/day · batch ${r.calendar.transferBatchSize}`} />
-      </div>
-
       <div className="grid lg:grid-cols-2 gap-4">
         <Section title="Risks and recommended actions">
           {!r.risks.length ? <p className="text-sm text-slate-500">No risks found with the current inputs.</p> : (
@@ -130,35 +168,81 @@ function Overview({ r, cur }: { r: any; cur: string }) {
   );
 }
 
-function FlowDiagram({ stages, critical }: { stages: any[]; critical: string[] }) {
-  const levels = Math.max(...stages.map((s) => s.level)) + 1;
-  const cols = Array.from({ length: levels }, (_, l) => stages.filter((s) => s.level === l));
+const STAGE_ICON: Record<string, LucideIcon> = { RECV: PackageOpen, INSP: Search, REPAIR: Wrench, QA: ShieldCheck, PACK: Package, DISP: Truck, SHIP: Truck, PICK: ListChecks, PUT: Warehouse, GRADE: ClipboardCheck, CLEAN: Sparkles, REWORK: Hammer };
+
+type StageState = 'ON_TRACK' | 'AT_RISK' | 'DELAYED';
+const STATE: Record<StageState, { label: string; dot: string; rule: string }> = {
+  ON_TRACK: { label: 'On track', dot: 'bg-green-500', rule: 'finishes by the target' },
+  AT_RISK: { label: 'At risk', dot: 'bg-amber-500', rule: 'bottleneck or waiting for materials' },
+  DELAYED: { label: 'Delayed', dot: 'bg-red-500', rule: 'finishes after the target' },
+};
+function stageState(s: any, target: string): StageState {
+  if (s.finishDate > target) return 'DELAYED';
+  if (s.isBottleneck || s.startBoundBy === 'MATERIAL') return 'AT_RISK';
+  return 'ON_TRACK';
+}
+
+/** Stages left to right; stages that can run at the same time are stacked in one column. */
+function WorkflowStrip({ r }: { r: any }) {
+  const stages = r.stages;
+  const levels = Math.max(...stages.map((s: any) => s.level)) + 1;
+  const cols = Array.from({ length: levels }, (_, l) => stages.filter((s: any) => s.level === l));
+  const target = r.summary.targetEnd;
+  const lastHour = Math.max(...stages.map((s: any) => s.finishHour));
+  const spanDays = lastHour / r.calendar.clockHoursPerDay;
+  const late = (r.summary.scheduleVarianceWorkingDays ?? 0) > 0;
+  const space = r.summary.spaceStatus;
   return (
-    <div className="overflow-x-auto">
-      <div className="flex items-stretch gap-0 min-w-max py-2">
-        {cols.map((col, l) => (
-          <div key={l} className="flex items-center">
-            {l > 0 && <div className="w-8 h-px bg-slate-300 relative"><span className="absolute -right-1 -top-[4px] text-slate-300 text-[10px]">▶</span></div>}
-            <div className="flex flex-col gap-2 justify-center">
-              {col.map((s) => (
-                <div key={s.key} className={cn('w-48 rounded-lg border bg-white p-2.5', s.isBottleneck ? 'border-amber-400 ring-2 ring-amber-100' : critical.includes(s.key) ? 'border-green-400' : 'border-slate-200')}>
-                  <div className="flex items-center justify-between gap-1">
-                    <p className="text-sm font-medium text-slate-900 truncate">{s.name}</p>
-                    {s.isBottleneck && <span className="text-[11px] text-amber-700">bottleneck</span>}
-                  </div>
-                  <p className="text-[11px] text-slate-500">after {s.dependsOn.length ? s.dependsOn.join(', ') : 'start'}</p>
-                  <div className="grid grid-cols-2 gap-x-2 mt-1.5 text-[11px] text-slate-600">
-                    <span>In {s.inputQty}</span><span>Out {s.requiredOutput}</span>
-                    <span>{fmt(s.capacityPerDay)}/day</span><span>{fmt(s.durationWorkingDays)} days</span>
-                    <span>Crew {s.crewPerShift}</span><span>{s.reworkQty ? `Rework ${s.reworkQty}` : s.scrapQty ? `Scrap ${s.scrapQty}` : ''}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+    <Section title="Project workflow" action={
+      <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
+        {(Object.keys(STATE) as StageState[]).map((k) => <span key={k} className="inline-flex items-center gap-1.5" title={STATE[k].rule}><span className={cn('h-2 w-2 rounded-full', STATE[k].dot)} />{STATE[k].label}</span>)}
       </div>
-      <p className="text-[11px] text-slate-400">Green border = critical path. Stages in the same column can run at the same time.</p>
+    }>
+      <div className="overflow-x-auto">
+        <div className="flex items-center min-w-max pb-1">
+          {cols.map((col, l) => (
+            <div key={l} className="flex items-center">
+              {l > 0 && <ChevronRight className="h-4 w-4 text-slate-300 mx-1.5 shrink-0" />}
+              <div className="flex flex-col gap-2">
+                {col.map((s: any) => {
+                  const Icon = STAGE_ICON[s.key] ?? Circle;
+                  const st = STATE[stageState(s, target)];
+                  return (
+                    <div key={s.key} title={`${s.startDate} → ${s.finishDate} · ${st.rule}`}
+                      className={cn('w-36 rounded-lg border bg-white px-3 py-2.5 text-center', s.isBottleneck ? 'border-amber-300' : r.criticalPath.includes(s.key) ? 'border-green-300' : 'border-slate-200')}>
+                      <Icon className="h-5 w-5 text-green-700 mx-auto" />
+                      <p className="text-sm font-medium text-slate-900 mt-1.5 truncate">{s.name}</p>
+                      <p className="text-xs text-slate-600 mt-0.5">{fmt(s.processedQty, 0)} units</p>
+                      <p className="text-[11px] text-slate-500">{fmt(s.durationWorkingDays, 1)} working day(s)</p>
+                      <p className="mt-1.5 inline-flex items-center gap-1 text-[11px] text-slate-600"><span className={cn('h-1.5 w-1.5 rounded-full', st.dot)} />{s.isBottleneck ? 'Bottleneck' : st.label}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2">Units = units processed including rework. Green border = critical path; amber = bottleneck. Stacked stages can run at the same time.</p>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-100">
+        <Foot icon={CalendarRange} label="Total duration" value={`${fmt(spanDays, 1)} working days`} sub={`${r.summary.plannedStart} → ${r.summary.estimatedFinish ?? '—'}`} />
+        <Foot icon={Gauge} label="Line pace (bottleneck)" value={`${fmt(r.summary.lineThroughputPerDay)} units/day`} sub={r.summary.bottleneckStage ?? undefined} />
+        <Foot icon={Warehouse} label="Warehouse space" value={space === 'OK' ? 'Sufficient' : space.charAt(0) + space.slice(1).toLowerCase()} tone={space === 'OK' ? 'good' : space === 'INCOMPLETE' ? 'warn' : 'bad'} />
+        <Foot icon={late ? AlertTriangle : CheckCircle2} label="Schedule" value={late ? 'Behind target' : 'Meets target'} tone={late ? 'bad' : 'good'} sub={RUN_STATUS[r.overallStatus]?.label} />
+      </div>
+    </Section>
+  );
+}
+
+function Foot({ icon: Icon, label, value, sub, tone = 'neutral' }: { icon: LucideIcon; label: string; value: React.ReactNode; sub?: string; tone?: Tone }) {
+  return (
+    <div className="flex gap-2.5 min-w-0">
+      <Icon className="h-5 w-5 text-green-700 shrink-0 mt-0.5" />
+      <div className="min-w-0">
+        <p className="text-[11px] text-slate-500">{label}</p>
+        <p className={cn('text-sm font-semibold', TONE[tone])}>{value}</p>
+        {sub && <p className="text-[11px] text-slate-400 truncate">{sub}</p>}
+      </div>
     </div>
   );
 }
@@ -194,7 +278,6 @@ function WorkflowView({ r }: { r: any }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className="space-y-4">
-      <Section title="Process flow"><FlowDiagram stages={r.stages} critical={r.criticalPath} /></Section>
       <Section title="Timeline"><Gantt r={r} /></Section>
       <Section title="Milestones">
         <div className="flex flex-wrap gap-2">

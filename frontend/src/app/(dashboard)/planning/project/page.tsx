@@ -3,7 +3,9 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { ArrowLeft, Calculator, Copy, Save, ShieldCheck } from 'lucide-react';
+import {
+  ChevronRight, ClipboardList, Copy, GitCompare, History as History_, LayoutDashboard, Pencil, Play, Save, ShieldCheck, SlidersHorizontal, type LucideIcon,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { planningApi, productsApi, warehouseApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -14,16 +16,20 @@ import { Field, FlagPills, PROJECT_TYPES, Pill, PlanStatusPill, RunStatusPill, S
 import { Inputs, MaterialsEditor, SetupEditor, SpaceCostEditor, WorkflowEditor } from '@/components/planning/inputs-editor';
 import { ResultsView } from '@/components/planning/results-view';
 
-const TABS = [
-  ['project', 'Project'], ['setup', 'Calendar & manpower'], ['workflow', 'Workflow'], ['materials', 'Materials'],
-  ['space', 'Space & cost'], ['results', 'Results'], ['compare', 'Compare scenarios'], ['history', 'History'],
+type Mode = 'dashboard' | 'inputs' | 'compare' | 'history';
+const MODES: [Mode, string, LucideIcon][] = [
+  ['dashboard', 'Dashboard', LayoutDashboard], ['inputs', 'Edit inputs', SlidersHorizontal], ['compare', 'Compare scenarios', GitCompare], ['history', 'History', History_],
+];
+const INPUT_TABS = [
+  ['project', 'Project'], ['setup', 'Calendar & manpower'], ['workflow', 'Workflow'], ['materials', 'Materials'], ['space', 'Space & cost'],
 ] as const;
 
 function Workspace() {
   const id = useSearchParams().get('id') ?? '';
   const [p, setP] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<string>('setup');
+  const [mode, setMode] = useState<Mode | null>(null);
+  const [inputTab, setInputTab] = useState<string>('setup');
   const [scenarioId, setScenarioId] = useState<string>('');
   const [draft, setDraft] = useState<Inputs | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -39,6 +45,8 @@ function Workspace() {
     try {
       const data = await planningApi.get(id);
       setP(data);
+      // First load: open the dashboard when a calculation exists, otherwise the inputs.
+      setMode((m) => m ?? (data.runs.length ? 'dashboard' : 'inputs'));
       const sid = keepScenario && data.scenarios.some((s: any) => s.id === keepScenario) ? keepScenario : data.scenarios[0]?.id;
       setScenarioId(sid);
       setDraft(data.scenarios.find((s: any) => s.id === sid)?.inputs ?? null);
@@ -95,7 +103,7 @@ function Workspace() {
       const r = await planningApi.calculate(id, scenarioId);
       setRun(r);
       await load(scenarioId);
-      setTab('results');
+      setMode('dashboard');
       toast.success(`Run #${r.runNumber} calculated`);
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
   }
@@ -110,23 +118,33 @@ function Workspace() {
 
   const userName = (uid?: string | null) => p.users.find((u: any) => u.id === uid)?.fullName ?? '—';
 
+  const card = <ProjectCard p={p} quantity={draft?.quantity ?? run?.result?.summary?.quantity} userName={userName} onEdit={!readOnly ? () => { setMode('inputs'); setInputTab('project'); } : undefined} />;
+
   return (
     <div className="p-6 space-y-4">
-      <Link href="/planning" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"><ArrowLeft className="h-3.5 w-3.5" />All projects</Link>
+      <nav className="flex items-center gap-1.5 text-xs text-slate-500">
+        <Link href="/planning" className="text-green-700 hover:underline">Project Planning</Link>
+        <ChevronRight className="h-3.5 w-3.5" />
+        <span className="text-slate-700 truncate">{p.name}</span>
+      </nav>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 flex flex-wrap items-start justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl font-bold text-slate-900">{p.name}</h1>
-            <PlanStatusPill status={p.planStatus} />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex gap-3 min-w-0">
+          <span className="h-11 w-11 rounded-xl bg-green-50 text-green-700 grid place-items-center shrink-0"><ClipboardList className="h-6 w-6" /></span>
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl font-bold text-slate-900">{p.name}</h1>
+              <PlanStatusPill status={p.planStatus} />
+            </div>
+            <p className="text-xs text-slate-500">
+              <span className="font-mono">{p.code}</span> · {PROJECT_TYPES[p.projectType] ?? p.projectType} · {p.warehouse?.code} · {p.plannedStart.slice(0, 10)} → {p.targetEnd.slice(0, 10)}
+            </p>
+            {p.planStatus === 'IN_REVIEW' && <p className="text-xs text-amber-700">Submitted by {userName(p.submittedById)} — waiting for a reviewer. Return to draft to change inputs.</p>}
+            {p.reviewNote && p.planStatus !== 'IN_REVIEW' && <p className="text-xs text-slate-500">Review note: {p.reviewNote} ({userName(p.reviewedById)})</p>}
           </div>
-          <p className="text-xs text-slate-500">
-            <span className="font-mono">{p.code}</span> · {PROJECT_TYPES[p.projectType] ?? p.projectType} · {p.warehouse?.code} · {p.plannedStart.slice(0, 10)} → {p.targetEnd.slice(0, 10)} · owner {userName(p.ownerId)}
-          </p>
-          {p.planStatus === 'IN_REVIEW' && <p className="text-xs text-amber-700">Submitted by {userName(p.submittedById)} — waiting for a reviewer. Return to draft to change inputs.</p>}
-          {p.reviewNote && p.planStatus !== 'IN_REVIEW' && <p className="text-xs text-slate-500">Review note: {p.reviewNote} ({userName(p.reviewedById)})</p>}
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {dirty && <span className="text-xs text-amber-700">Unsaved changes</span>}
           {p.canManage && ['DRAFT', 'PLAN_REJECTED'].includes(p.planStatus) && run && run.overallStatus !== 'INSUFFICIENT_DATA' && !run.stale && !dirty && (
             <Button variant="outline" onClick={() => setDialog('submit')}>Submit for planning review</Button>
           )}
@@ -139,15 +157,21 @@ function Workspace() {
           {p.canManage && ['IN_REVIEW', 'PLAN_APPROVED', 'PLAN_REJECTED', 'ARCHIVED'].includes(p.planStatus) && (
             <Button variant="outline" onClick={() => act(() => planningApi.reopen(id), 'Returned to draft')}>Return to draft</Button>
           )}
+          {!readOnly && <Button variant="outline" className="border-green-600 text-green-700 hover:bg-green-50" disabled={!dirty || busy} onClick={save}><Save className="h-4 w-4 mr-1" />Save draft</Button>}
+          {p.canManage && p.planStatus !== 'ARCHIVED' && (
+            <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={busy || (dirty && readOnly)} onClick={calculate}>
+              <Play className="h-4 w-4 mr-1.5" />{busy ? 'Working…' : 'Run calculation'}
+            </Button>
+          )}
           {p.canManage && p.planStatus !== 'ARCHIVED' && (
             <Button variant="ghost" className="text-slate-500" onClick={() => confirm('Archive this project? It stays available under Archived.') && act(() => planningApi.archive(id), 'Archived')}>Archive</Button>
           )}
         </div>
       </div>
 
-      {/* Scenario bar */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium text-slate-500 mr-1">Scenario</span>
+      {/* Scenario + view switch */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium text-slate-500 ml-1 mr-1">Scenario</span>
         {p.scenarios.map((s: any) => (
           <button key={s.id} onClick={() => switchScenario(s.id)}
             className={cn('h-8 px-3 rounded-md border text-sm', s.id === scenarioId ? 'bg-green-50 border-green-300 text-green-800 font-medium' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}>
@@ -156,35 +180,43 @@ function Workspace() {
         ))}
         {p.canManage && p.planStatus !== 'ARCHIVED' && <Button size="sm" variant="ghost" className="h-8" onClick={() => setDialog('scenario')}><Copy className="h-3.5 w-3.5 mr-1" />Copy as new scenario</Button>}
         <div className="flex-1" />
-        {dirty && <span className="text-xs text-amber-700">Unsaved changes</span>}
-        {!readOnly && <Button size="sm" variant="outline" className="h-9" disabled={!dirty || busy} onClick={save}><Save className="h-4 w-4 mr-1" />Save</Button>}
-        {p.canManage && p.planStatus !== 'ARCHIVED' && (
-          <Button className="h-9 bg-green-600 hover:bg-green-700 text-white" disabled={busy || (dirty && readOnly)} onClick={calculate}>
-            <Calculator className="h-4 w-4 mr-1.5" />{busy ? 'Working…' : 'Calculate Project'}
-          </Button>
-        )}
+        <div className="flex max-w-full overflow-x-auto rounded-lg bg-slate-100 p-0.5">
+          {MODES.map(([k, label, Icon]) => (
+            <button key={k} onClick={() => setMode(k)}
+              className={cn('h-8 px-3 rounded-md text-sm inline-flex items-center gap-1.5 whitespace-nowrap', mode === k ? 'bg-white text-green-700 font-medium shadow-sm' : 'text-slate-500 hover:text-slate-800')}>
+              <Icon className="h-3.5 w-3.5" />{label}
+              {k === 'dashboard' && run && <span className={cn('inline-block h-2 w-2 rounded-full', run.overallStatus === 'READY_FOR_PLANNING_REVIEW' ? 'bg-green-500' : run.overallStatus === 'NOT_READY' ? 'bg-amber-500' : 'bg-slate-400')} />}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
-        {TABS.map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)} className={cn('px-4 py-2 text-sm -mb-px border-b-2 whitespace-nowrap', tab === k ? 'border-green-600 text-green-700 font-medium' : 'border-transparent text-slate-500 hover:text-slate-800')}>
-            {label}{k === 'results' && run && <span className={cn('ml-1.5 inline-block h-2 w-2 rounded-full', run.overallStatus === 'READY_FOR_PLANNING_REVIEW' ? 'bg-green-500' : run.overallStatus === 'NOT_READY' ? 'bg-amber-500' : 'bg-slate-400')} />}
-          </button>
-        ))}
-      </div>
+      {mode === 'dashboard' && (run ? <ResultsView run={run} aside={card} /> : (
+        <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)] items-start">
+          {card}
+          <Section title="No calculation yet"><p className="text-sm text-slate-500">Enter the inputs under Edit inputs, then click Run calculation.</p></Section>
+        </div>
+      ))}
 
-      {readOnly && ['setup', 'workflow', 'materials', 'space'].includes(tab) && (
-        <p className="text-xs text-slate-500">{p.canManage ? 'Inputs are locked while the plan is in review or archived.' : 'You can view this plan but not change it.'}</p>
+      {mode === 'inputs' && (
+        <>
+          <div className="flex gap-1 border-b border-slate-200 overflow-x-auto">
+            {INPUT_TABS.map(([k, label]) => (
+              <button key={k} onClick={() => setInputTab(k)} className={cn('px-4 py-2 text-sm -mb-px border-b-2 whitespace-nowrap', inputTab === k ? 'border-green-600 text-green-700 font-medium' : 'border-transparent text-slate-500 hover:text-slate-800')}>{label}</button>
+            ))}
+          </div>
+          {readOnly && (
+            <p className="text-xs text-slate-500">{p.canManage ? 'Inputs are locked while the plan is in review or archived.' : 'You can view this plan but not change it.'}</p>
+          )}
+          {inputTab === 'project' && <ProjectInfo p={p} warehouses={warehouses} readOnly={readOnly} onSaved={() => load(scenarioId)} />}
+          {draft && inputTab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
+          {draft && inputTab === 'workflow' && <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates} />}
+          {draft && inputTab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} />}
+          {draft && inputTab === 'space' && <SpaceCostEditor inputs={draft} set={set} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
+        </>
       )}
-
-      {tab === 'project' && <ProjectInfo p={p} warehouses={warehouses} readOnly={readOnly} onSaved={() => load(scenarioId)} />}
-      {draft && tab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
-      {draft && tab === 'workflow' && <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates} />}
-      {draft && tab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} />}
-      {draft && tab === 'space' && <SpaceCostEditor inputs={draft} set={set} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
-      {tab === 'results' && (run ? <ResultsView run={run} /> : <Section title="No calculation yet"><p className="text-sm text-slate-500">Enter the inputs, then click Calculate Project.</p></Section>)}
-      {tab === 'compare' && <Compare p={p} />}
-      {tab === 'history' && <History p={p} userName={userName} onOpen={(rid) => planningApi.run(id, rid).then((r) => { setRun(r); setScenarioId(r.scenarioId); setDraft(p.scenarios.find((s: any) => s.id === r.scenarioId)?.inputs ?? null); setDirty(false); setTab('results'); })} />}
+      {mode === 'compare' && <Compare p={p} />}
+      {mode === 'history' && <History p={p} userName={userName} onOpen={(rid) => planningApi.run(id, rid).then((r) => { setRun(r); setScenarioId(r.scenarioId); setDraft(p.scenarios.find((s: any) => s.id === r.scenarioId)?.inputs ?? null); setDirty(false); setMode('dashboard'); })} />}
 
       <NewScenarioDialog open={dialog === 'scenario'} onClose={() => setDialog(null)} busy={busy}
         onCreate={(name) => act(async () => { const s = await planningApi.createScenario(id, { name, cloneFromId: scenarioId }); setScenarioId(s.id); }, 'Scenario created')} />
@@ -197,6 +229,45 @@ function Workspace() {
       <DecisionDialog open={dialog === 'reject'} onClose={() => setDialog(null)} busy={busy} title="Reject plan" description="Give the reason so the planner can revise it."
         confirm="Reject" requireNote onConfirm={(note) => act(() => planningApi.reject(id, note), 'Plan rejected')} />
     </div>
+  );
+}
+
+const PRIORITY_CLS: Record<string, string> = {
+  LOW: 'bg-slate-50 text-slate-600 border-slate-200', NORMAL: 'bg-slate-50 text-slate-700 border-slate-200',
+  HIGH: 'bg-amber-50 text-amber-800 border-amber-200', URGENT: 'bg-red-50 text-red-700 border-red-200',
+};
+
+/** Read-only project summary shown beside the dashboard. Editing happens under Edit inputs → Project. */
+function ProjectCard({ p, quantity, userName, onEdit }: { p: any; quantity?: number | null; userName: (id?: string | null) => string; onEdit?: () => void }) {
+  const rows: [string, React.ReactNode][] = [
+    ['Project ID', <span key="c" className="font-mono">{p.code}</span>],
+    ['Project type', PROJECT_TYPES[p.projectType] ?? p.projectType],
+    ['Customer / business unit', p.customer || '—'],
+    ['Requesting department', p.department || '—'],
+    ['Product', p.product ? `${p.product.code} — ${p.product.name}` : '—'],
+    ['Planned quantity', quantity ? `${fmt(quantity, 0)} units` : '—'],
+    ['Planned start', p.plannedStart.slice(0, 10)],
+    ['Target completion', p.targetEnd.slice(0, 10)],
+    ['Warehouse', p.warehouse ? `${p.warehouse.code}${p.warehouse.name ? ` — ${p.warehouse.name}` : ''}` : '—'],
+    ['Work location', p.workLocation || '—'],
+    ['Priority', <Pill key="p" className={PRIORITY_CLS[p.priority] ?? PRIORITY_CLS.NORMAL}>{p.priority.charAt(0) + p.priority.slice(1).toLowerCase()}</Pill>],
+    ['Owner', userName(p.ownerId)],
+    ['Cost currency', p.currency],
+  ];
+  return (
+    <Section title="Project information" action={onEdit && (
+      <button onClick={onEdit} className="h-7 w-7 grid place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-green-700" aria-label="Edit project information"><Pencil className="h-3.5 w-3.5" /></button>
+    )}>
+      <dl className="space-y-2">
+        {rows.map(([k, v]) => (
+          <div key={k} className="grid grid-cols-[120px_minmax(0,1fr)] gap-2 text-xs">
+            <dt className="text-slate-500">{k}</dt>
+            <dd className="text-slate-800 break-words">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {p.scope && <p className="text-xs text-slate-600 mt-3 pt-3 border-t border-slate-100">{p.scope}</p>}
+    </Section>
   );
 }
 
