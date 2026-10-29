@@ -178,7 +178,7 @@ function RisksView({ r }: { r: any }) {
   );
 }
 
-const STAGE_ICON: Record<string, LucideIcon> = { RECV: PackageOpen, INSP: Search, REPAIR: Wrench, QA: ShieldCheck, PACK: Package, DISP: Truck, SHIP: Truck, PICK: ListChecks, PUT: Warehouse, GRADE: ClipboardCheck, CLEAN: Sparkles, REWORK: Hammer };
+export const STAGE_ICON: Record<string, LucideIcon> = { RECV: PackageOpen, INSP: Search, REPAIR: Wrench, QA: ShieldCheck, PACK: Package, DISP: Truck, SHIP: Truck, PICK: ListChecks, PUT: Warehouse, GRADE: ClipboardCheck, CLEAN: Sparkles, REWORK: Hammer };
 
 type StageState = 'ON_TRACK' | 'AT_RISK' | 'DELAYED';
 const STATE: Record<StageState, { label: string; dot: string; rule: string }> = {
