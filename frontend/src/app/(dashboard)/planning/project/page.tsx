@@ -13,7 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Field, FlagPills, PROJECT_TYPES, Pill, PlanStatusPill, RunStatusPill, SalesPill, Section, SelectInput, TextInput, fmt, money } from '@/components/planning/shared';
-import { Inputs, MaterialsEditor, SetupEditor, SpaceCostEditor, WorkflowEditor } from '@/components/planning/inputs-editor';
+import { Inputs, MaterialsEditor, SetupEditor, SpaceCostEditor } from '@/components/planning/inputs-editor';
+import { WorkflowEditor } from '@/components/planning/workflow-editor';
 import { ResultsView } from '@/components/planning/results-view';
 
 type Mode = 'dashboard' | 'inputs' | 'compare' | 'history';
@@ -96,14 +97,15 @@ function Workspace() {
     } catch (e: any) { toast.error(e.message); return false; } finally { setBusy(false); }
   }
 
-  async function calculate() {
+  /** `stay` keeps the user on the current view (the Workflow tab shows the new run in place). */
+  async function calculate(stay = false) {
     if (dirty && !(await save())) return;
     setBusy(true);
     try {
       const r = await planningApi.calculate(id, scenarioId);
       setRun(r);
       await load(scenarioId);
-      setMode('dashboard');
+      if (!stay) setMode('dashboard');
       toast.success(`Run #${r.runNumber} calculated`);
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
   }
@@ -169,7 +171,7 @@ function Workspace() {
           )}
           {!readOnly && <Button variant="outline" className="border-green-600 text-green-700 hover:bg-green-50" disabled={!dirty || busy} onClick={save}><Save className="h-4 w-4 mr-1" />Save draft</Button>}
           {p.canManage && p.planStatus !== 'ARCHIVED' && (
-            <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={busy || (dirty && readOnly)} onClick={calculate}>
+            <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={busy || (dirty && readOnly)} onClick={() => calculate()}>
               <Play className="h-4 w-4 mr-1.5" />{busy ? 'Working…' : 'Run calculation'}
             </Button>
           )}
@@ -225,7 +227,12 @@ function Workspace() {
             </div>
           )}
           {draft && inputTab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
-          {draft && inputTab === 'workflow' && <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates} />}
+          {draft && inputTab === 'workflow' && (
+            <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates}
+              run={run && run.scenarioId === scenarioId ? run : null} dirty={dirty} busy={busy}
+              canRun={p.canManage && p.planStatus !== 'ARCHIVED'} onRun={() => calculate(true)}
+              plannedStart={p.plannedStart.slice(0, 10)} targetEnd={p.targetEnd.slice(0, 10)} />
+          )}
           {draft && inputTab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
           {draft && inputTab === 'space' && <SpaceCostEditor inputs={draft} set={set} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
         </>
