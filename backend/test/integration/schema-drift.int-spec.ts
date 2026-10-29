@@ -194,6 +194,27 @@ describe('Schema drift and migration script', () => {
     expect(n.rows[0].n).toBe(0);
   });
 
+  it('26_warranty_mrp.sql applies cleanly after 25, twice, and only adds the permission catalogue', async () => {
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '26_warranty_mrp.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const perms = await db.query<{ code: string }>(
+      `SELECT code FROM "Permission" WHERE code LIKE 'mrp.%' OR code LIKE 'warranty.%' ORDER BY code`,
+    );
+    expect(perms.rows).toHaveLength(11);
+    const granted = await db.query<{ n: number }>(
+      `SELECT COUNT(*)::int AS n FROM "RolePermission" rp JOIN "Permission" p ON p.id = rp."permissionId" WHERE p.code LIKE 'mrp.%' OR p.code LIKE 'warranty.%'`,
+    );
+    expect(granted.rows[0].n).toBe(0);
+    for (const t of ['WarrantyRule', 'MrpRun', 'InboundSupplyLine', 'MaterialPlanningParam']) {
+      const r = await db.query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM "${t}"`);
+      expect(r.rows[0].n).toBe(0); // nothing seeded
+    }
+  });
+
   it('after the script, the database matches schema.prisma (no drift left)', async () => {
     const sql = (await diffToSchema()).replace(/^--.*$/gm, '').trim();
     expect(sql).toBe('');
