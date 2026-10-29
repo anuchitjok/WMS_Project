@@ -83,4 +83,20 @@ export const ACCESS = {
   planningApprove:  { permissions: ['planning.approve', 'warehouse.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
   /** Unit costs, labour rates and cost estimates. */
   planningCost:     { permissions: ['planning.cost', 'product.manage', 'report.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, UserRole.FINANCE_VIEWER, UserRole.MGMT_VIEWER] },
+
+  // ── Material planning (MRP) ── read-only planning; never writes purchasing data
+  mrpView:          { permissions: ['mrp.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, WAREHOUSE_SUPERVISOR, UserRole.MGMT_VIEWER] },
+  mrpParameters:    { permissions: ['mrp.parameters'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  mrpConfig:        { permissions: ['mrp.config'], legacyRoles: [SYSTEM_ADMIN] },
+  mrpForecast:      { permissions: ['mrp.forecast'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  mrpForecastApprove:{ permissions: ['mrp.forecastApprove'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  mrpRun:           { permissions: ['mrp.run'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  mrpExport:        { permissions: ['mrp.export'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  /** Unit cost, supplier prices, PO prices and replenishment cost. */
+  mrpCost:          { permissions: ['mrp.cost'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, UserRole.FINANCE_VIEWER] },
+  mrpSupply:        { permissions: ['mrp.supply'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+
+  // ── Warranty
+  warrantyView:     { permissions: ['warranty.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, WAREHOUSE_SUPERVISOR, RMA_TEAM, RTV_OFFICER] },
+  warrantyManage:   { permissions: ['warranty.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
 } satisfies Record<string, AccessRule>;

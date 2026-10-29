@@ -46,6 +46,12 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'report.read', 'audit.read', 'dataio.manage'],
   PICKER: ['inventory.read', 'request.read', 'putaway.manage', 'fulfillment.manage', 'receiving.manage'],
   REQUESTER: ['inventory.read', 'request.read', 'request.create', 'request.cancel', 'rma.manage'],
+  // Warranty / MRP test roles (database/schema/26_warranty_mrp.sql adds the codes; no role is seeded with them)
+  MRP_PLANNER: ['mrp.read', 'mrp.run', 'mrp.parameters', 'mrp.forecast', 'mrp.supply', 'mrp.export'],
+  MRP_APPROVER: ['mrp.read', 'mrp.forecastApprove', 'mrp.cost', 'mrp.export'],
+  MRP_VIEWER: ['mrp.read'],
+  WARRANTY_ADMIN: ['warranty.read', 'warranty.manage'],
+  WARRANTY_VIEWER: ['warranty.read'],
 };
 
 export interface TestUser { id: string; username: string; role: UserRole }
