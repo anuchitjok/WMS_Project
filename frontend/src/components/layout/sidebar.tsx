@@ -7,7 +7,7 @@ import {
   QrCode, LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle, Calculator, ArrowLeftRight,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Calculator as CountIcon, Trash2,
-  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, BadgeCheck,
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -69,6 +69,14 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/adjustment', label: 'Stock Adjustment', icon: Calculator, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
       { href: '/scanner', label: 'Barcode Scanner', icon: QrCode },
       { href: '/cycle-count', label: 'Cycle Count', icon: CountIcon, roles: WH },
+    ],
+  },
+  {
+    // Same legacy roles as the backend access rules (mrpView / warrantyView); the API enforces the real permission.
+    group: 'Planning',
+    items: [
+      { href: '/mrp', label: 'Material Planning', icon: Boxes, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER'] },
+      { href: '/warranty', label: 'Warranty', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'RMA_TEAM', 'RTV_OFFICER'] },
     ],
   },
   {

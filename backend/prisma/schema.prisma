@@ -1371,3 +1371,343 @@ model PlanningRun {
   @@unique([scenarioId, runNumber])
   @@index([projectId])
 }
+
+// ─── Warranty management (Oct 2026) ──────────────────────────────────────────
+// Rules are versioned: an ACTIVE rule is never edited in place — a change makes
+// a new DRAFT version (same ruleCode) that supersedes it when activated. Every
+// lookup is logged in WarrantyCheck with the exact rule version it matched.
+// No rule is seeded: durations and coverage are business decisions.
+
+enum WarrantyScope {
+  SERIAL
+  PRODUCT
+  PRODUCT_MODEL
+  CATEGORY
+  BRAND
+  VENDOR
+  PRODUCT_TYPE
+}
+
+enum WarrantyStartBasis {
+  RECEIPT_DATE      // StockItem.receivedDate (captured by the WMS)
+  GOODS_ISSUE_DATE  // Shipment.shippedAt of the unit (captured by the WMS)
+  INVOICE_DATE      // not captured by the WMS: recorded in WarrantyDateRecord
+  INSTALLATION_DATE // not captured by the WMS: recorded in WarrantyDateRecord
+  ACTIVATION_DATE   // not captured by the WMS: recorded in WarrantyDateRecord
+}
+
+enum WarrantyDurationUnit {
+  DAYS
+  MONTHS
+  YEARS
+}
+
+enum WarrantyRuleStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+  SUPERSEDED
+}
+
+model WarrantyRule {
+  id            String               @id @default(cuid())
+  ruleCode      String
+  version       Int                  @default(1)
+  name          String
+  warrantyType  String               // business-defined label, e.g. Manufacturer, Vendor
+  scopeType     WarrantyScope
+  scopeValue    String               // product id / model / category / brand id / vendor id / serial / product type
+  startBasis    WarrantyStartBasis
+  durationValue Int
+  durationUnit  WarrantyDurationUnit
+  terms         String?              @db.Text
+  priority      Int                  @default(0) // higher wins between equally specific rules
+  status        WarrantyRuleStatus   @default(DRAFT)
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  supersedesId  String?
+  changeNote    String?
+  createdById   String?
+  activatedById String?
+  activatedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@unique([ruleCode, version])
+  @@index([status, scopeType])
+}
+
+/// Warranty start dates the WMS does not capture itself (invoice / installation / activation).
+model WarrantyDateRecord {
+  id           String             @id @default(cuid())
+  serialNumber String
+  dateType     WarrantyStartBasis
+  date         DateTime
+  reference    String?            // e.g. invoice number, installation job
+  source       String?            // who or what supplied the date
+  notes        String?
+  recordedById String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([serialNumber, dateType])
+}
+
+/// Warranty decision log: one row per evaluation, with the matched rule version and the reasoning.
+model WarrantyCheck {
+  id           String    @id @default(cuid())
+  serialNumber String?
+  stockItemId  String?
+  productId    String?
+  ruleId       String?
+  ruleCode     String?
+  ruleVersion  Int?
+  status       String    // NOT_STARTED | ACTIVE | EXPIRED | NO_RULE | START_DATE_UNKNOWN | CONFLICT | NOT_FOUND
+  startBasis   String?
+  startDate    DateTime?
+  expiryDate   DateTime?
+  asOf         DateTime
+  explanation  Json
+  context      String    @default("LOOKUP") // LOOKUP | RTV | DOA | RECEIVING | RMA
+  contextRef   String?
+  checkedById  String?
+  createdAt    DateTime  @default(now())
+
+  @@index([serialNumber])
+  @@index([stockItemId])
+  @@index([createdAt])
+}
+
+// ─── Material requirements planning (Oct 2026) ───────────────────────────────
+// The WMS does not own purchasing: PO lines are a controlled, read-only import
+// (InboundSupplyLine) used for planning visibility only. MRP never creates or
+// changes purchasing transactions. Calculation inputs are snapshotted on each
+// run line so a run can be reproduced and compared.
+
+enum ReplenishmentMethod {
+  PURCHASE
+  TRANSFER
+  NONE
+}
+
+enum LotSizingPolicy {
+  LOT_FOR_LOT
+  MIN_MAX
+}
+
+enum MaterialCriticality {
+  CRITICAL
+  HIGH
+  NORMAL
+  LOW
+}
+
+/// Planning parameters per product, optionally per warehouse (null = all warehouses), effective-dated.
+model MaterialPlanningParam {
+  id                      String               @id @default(cuid())
+  productId               String
+  warehouseId             String?
+  planningEnabled         Boolean              @default(true)
+  replenishmentMethod     ReplenishmentMethod  @default(PURCHASE)
+  lotSizing               LotSizingPolicy      @default(LOT_FOR_LOT)
+  leadTimeDays            Int?
+  leadTimeVariabilityDays Int?
+  moq                     Float?
+  orderMultiple           Float?               // also the pack size
+  minStock                Float?
+  maxStock                Float?
+  safetyStock             Float?
+  reorderPoint            Float?
+  targetDaysOfSupply      Int?
+  unitCost                Float?
+  currency                String?
+  costBasis               String?              // STANDARD | QUOTE | CONTRACT | LAST_PO, as supplied by the business
+  criticality             MaterialCriticality?
+  forecastMethod          String?              // overrides the configured default method for this material
+  effectiveFrom           DateTime             @default(now())
+  effectiveTo             DateTime?
+  notes                   String?
+  updatedById             String?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+
+  @@index([productId])
+}
+
+/// Approved suppliers per material (preferred + alternatives) with supplier-specific terms.
+model MaterialSupplier {
+  id                 String    @id @default(cuid())
+  productId          String
+  vendorId           String
+  supplierPartNumber String?
+  isPreferred        Boolean   @default(false)
+  isApproved         Boolean   @default(true)
+  isActive           Boolean   @default(true)
+  leadTimeDays       Int?
+  moq                Float?
+  orderMultiple      Float?
+  unitPrice          Float?
+  currency           String?
+  priceSource        String?   // QUOTE | CONTRACT | PRICE_LIST
+  priceValidFrom     DateTime?
+  priceValidTo       DateTime?
+  purchaseUom        String?
+  uomConversion      Float?    // base units per purchase unit
+  notes              String?
+  updatedById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([productId, vendorId])
+  @@index([vendorId])
+}
+
+enum InboundSupplyStatus {
+  OPEN
+  PARTIAL
+  CLOSED
+  CANCELLED
+}
+
+/// Purchase-order lines imported from the purchasing system (read-only planning input).
+model InboundSupplyLine {
+  id              String              @id @default(cuid())
+  poNumber        String
+  lineNumber      String
+  vendorId        String?
+  vendorName      String?
+  productId       String
+  warehouseId     String?
+  orderedQty      Float
+  receivedQty     Float               @default(0) // as reported by the purchasing system
+  cancelledQty    Float               @default(0)
+  uom             String?
+  unitCost        Float?
+  currency        String?
+  orderDate       DateTime?
+  expectedDate    DateTime?
+  isConfirmed     Boolean             @default(false) // supplier confirmed the delivery date
+  lastReceiptDate DateTime?
+  status          InboundSupplyStatus @default(OPEN)
+  source          String              @default("IMPORT")
+  importBatchId   String?
+  notes           String?
+  updatedById     String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([poNumber, lineNumber])
+  @@index([productId, status])
+}
+
+enum ForecastOverrideStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Planner forecast adjustment for one period. The statistical forecast is kept alongside.
+model ForecastOverride {
+  id                String                 @id @default(cuid())
+  productId         String
+  warehouseId       String?
+  periodType        String                 // WEEK | MONTH
+  periodStart       DateTime
+  mode              String                 // REPLACE | ADD
+  quantity          Float
+  reason            String
+  category          String?                // PROJECT | LAUNCH | PHASE_OUT | CAMPAIGN | OTHER
+  statisticalQty    Float?
+  statisticalMethod String?
+  status            ForecastOverrideStatus @default(PENDING)
+  createdById       String?
+  decidedById       String?
+  decidedAt         DateTime?
+  decisionNote      String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([productId, periodStart])
+  @@index([status])
+}
+
+/// MRP configuration (forecast methods, horizon, thresholds). One row per key ("default").
+model MrpConfig {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  config      Json
+  version     Int      @default(1)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+model MrpRun {
+  id             String       @id @default(cuid())
+  runNumber      String       @unique
+  status         String       @default("COMPLETED")
+  asOf           DateTime
+  warehouseId    String?      // null = all warehouses in the runner's scope
+  scope          Json         // warehouse ids the run covered (null = unrestricted)
+  params         Json
+  configSnapshot Json
+  configVersion  Int?
+  inputHash      String
+  lineCount      Int          @default(0)
+  summary        Json
+  warnings       Json?
+  note           String?
+  startedById    String?
+  startedAt      DateTime     @default(now())
+  completedAt    DateTime?
+  durationMs     Int?
+
+  lines MrpRunLine[]
+
+  @@index([startedAt])
+}
+
+model MrpRunLine {
+  id                 String    @id @default(cuid())
+  runId              String
+  productId          String
+  warehouseId        String?
+  sku                String
+  description        String
+  category           String?
+  planningStatus     String    // ORDER | WATCH | OK | NOT_PLANNED | DATA_ISSUE
+  urgency            Int       @default(0)
+  forecastMethod     String?
+  forecastQty        Float     @default(0)
+  avgMonthlyUsage    Float?
+  movementClass      String?
+  onHand             Float     @default(0)
+  available          Float     @default(0)
+  allocated          Float     @default(0)
+  blocked            Float     @default(0)
+  safetyStock        Float     @default(0)
+  openPoQty          Float     @default(0)
+  nextInboundDate    DateTime?
+  grossReq           Float     @default(0)
+  netReq             Float     @default(0)
+  projectedShortage  Float     @default(0)
+  suggestedQty       Float     @default(0)
+  suggestedOrderDate DateTime?
+  requiredDate       DateTime?
+  leadTimeDays       Int?
+  moq                Float?
+  orderMultiple      Float?
+  vendorId           String?
+  vendorName         String?
+  unitCost           Float?
+  currency           String?
+  costSource         String?
+  estCost            Float?
+  exceptionCodes     String[]
+  detail             Json
+
+  run MrpRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([productId])
+}
