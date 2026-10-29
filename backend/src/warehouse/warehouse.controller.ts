@@ -71,6 +71,10 @@ export class WarehouseController {
   getStats(@Query('warehouseId') warehouseId: string | undefined, @CurrentUser() user: any) { return this.warehouseService.getStats(warehouseId, user); }
   @Get('slots/:id/detail') @ApiOperation({ summary: 'Slot detail with stock items' })
   getSlotDetail(@Param('id') id: string, @CurrentUser() user: any) { return this.warehouseService.getSlotDetail(id, user); }
+  // Read-only aggregate for the 3D view's Stock age mode. Same audience as the
+  // warehouse tree: any signed-in user, limited to their assigned warehouses.
+  @Get(':id/slot-stock-age') @ApiOperation({ summary: 'Oldest received date per occupied slot (3D stock age view)' })
+  getSlotStockAge(@Param('id') id: string, @CurrentUser() user: any) { return this.warehouseService.getSlotStockAge(id, user); }
   @Get(':id') findOne(@Param('id') id: string, @CurrentUser() user: any) { return this.warehouseService.findOne(id, user); }
 
   // ─── Rack ──────────────────────────────────────────────────────────────────

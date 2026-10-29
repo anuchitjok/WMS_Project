@@ -35,6 +35,8 @@ describe('WarehouseController — rack/slot write authorization', () => {
     findAll: jest.fn().mockResolvedValue([]),
     getStats: jest.fn().mockResolvedValue({}),
     getSlotDetail: jest.fn().mockResolvedValue({}),
+    getSlotStockAge: jest.fn().mockResolvedValue({ warehouseId: 'wh_1', asOf: '', slots: [] }),
+    findOne: jest.fn().mockResolvedValue({}),
     createRack: jest.fn().mockResolvedValue({ id: 'r1' }),
     updateRack: jest.fn().mockResolvedValue({ id: 'r1' }),
     deleteRack: jest.fn().mockResolvedValue({ id: 'r1' }),
@@ -133,6 +135,12 @@ describe('WarehouseController — rack/slot write authorization', () => {
     it('a REQUESTER can still read slot detail', async () => {
       currentRole = UserRole.REQUESTER;
       await request(srv()).get('/warehouse/slots/s1/detail').expect(200);
+    });
+    it('slot stock age is a read like the tree, routed to its own handler', async () => {
+      currentRole = UserRole.REQUESTER;
+      await request(srv()).get('/warehouse/wh_1/slot-stock-age').expect(200);
+      expect(service.getSlotStockAge).toHaveBeenCalledWith('wh_1', expect.objectContaining({ id: 'u1' }));
+      expect(service.findOne).not.toHaveBeenCalled();
     });
   });
 });

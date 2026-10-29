@@ -78,6 +78,43 @@ export class WarehouseService {
     return slot;
   }
 
+  /**
+   * Per-slot stock age for the 3D floor plan's "Stock age" view.
+   *
+   * One aggregate query, no stock rows on the wire: for every slot in the
+   * warehouse that still holds stock, the OLDEST `receivedDate` among the rows
+   * still in the location (same presence rule as occupancy) and the row count.
+   * The client turns `oldestReceivedDate` into "days since received". Read-only.
+   */
+  async getSlotStockAge(warehouseId: string, scope?: ScopePrincipal) {
+    assertWarehouseAccess(scope, warehouseId, 'this warehouse');
+    const wh = await this.prisma.warehouse.findUnique({ where: { id: warehouseId }, select: { id: true } });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    const groups = await this.prisma.stockItem.groupBy({
+      by: ['slotId'],
+      where: {
+        slotId: { not: null },
+        status: { notIn: NOT_IN_LOCATION },
+        slot: { isActive: true, rack: { warehouseId } },
+      },
+      _min: { receivedDate: true },
+      _count: { _all: true },
+    });
+
+    return {
+      warehouseId,
+      asOf: new Date().toISOString(),
+      slots: groups
+        .filter((g) => g.slotId && g._min.receivedDate)
+        .map((g) => ({
+          slotId: g.slotId as string,
+          oldestReceivedDate: (g._min.receivedDate as Date).toISOString(),
+          items: g._count._all,
+        })),
+    };
+  }
+
   async getStats(requestedWarehouseId?: string, scope?: ScopePrincipal) {
     const warehouseId = warehouseFilter(scope, requestedWarehouseId);
     const where = warehouseId

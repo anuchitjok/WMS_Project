@@ -224,6 +224,11 @@ export const auditApi = {
 };
 
 // Warehouse
+export interface SlotStockAge {
+  warehouseId: string;
+  asOf: string; // server time the ages are measured against
+  slots: { slotId: string; oldestReceivedDate: string; items: number }[];
+}
 export const warehouseApi = {
   list: () => request<any[]>('/warehouse'),
   get: (id: string) => request<any>(`/warehouse/${id}`),
@@ -241,6 +246,8 @@ export const warehouseApi = {
   updateSlot: (id: string, dto: any) => request<any>(`/warehouse/slots/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
   deleteSlot: (id: string) => request<any>(`/warehouse/slots/${id}`, { method: 'DELETE' }),
   getSlotDetail: (id: string) => request<any>(`/warehouse/slots/${id}/detail`),
+  // 3D view, Stock age mode: oldest receivedDate per occupied slot (stock still in location).
+  slotStockAge: (warehouseId: string) => request<SlotStockAge>(`/warehouse/${warehouseId}/slot-stock-age`),
   // Brand Master
   brandsManaged: () => request<any[]>('/warehouse/brands/managed'),
   createBrand: (dto: { code?: string; name: string; contact?: string }) => request<any>('/warehouse/brands', { method: 'POST', body: JSON.stringify(dto) }),
