@@ -11,6 +11,21 @@ import {
 
 const EPS = 1e-9;
 
+/** Identity of a material line: its product, or (sales simulation) its free-text item name. */
+export const materialKey = (m: { productId: string; itemName?: string }) =>
+  m.productId || `item:${(m.itemName ?? '').trim().toLowerCase()}`;
+
+/** True when a material input line belongs to a material result line. */
+export const sameMaterial = (
+  line: { productId: string; itemName?: string },
+  res: { productId: string; name: string },
+) =>
+  res.productId
+    ? line.productId === res.productId
+    : !line.productId &&
+      (line.itemName ?? '').trim().toLowerCase() ===
+        res.name.trim().toLowerCase();
+
 export interface MaterialOut {
   lines: MaterialResult[];
   /** Latest date all of a stage's materials are covered; null = unknown. */
@@ -30,6 +45,10 @@ export interface MaterialOut {
  * Reserved stock is already excluded from "on hand" (it belongs to approved
  * requests), so approved requests are not counted a second time. This
  * project's own earlier runs are never counted as demand.
+ *
+ * Sales simulation: stock is not read, so nothing is netted — the whole
+ * requirement is "to be procured" and the only check is whether the lead time
+ * (counted from today) delivers it before the consuming stage starts.
  */
 export function planMaterials(
   header: ProjectHeader,
@@ -39,17 +58,33 @@ export function planMaterials(
   stageStartDate: Map<string, string>,
 ): MaterialOut {
   const asOf = data.asOf;
+  const sales = header.purpose === 'SALES';
   const products = new Map(data.products.map((p) => [p.productId, p]));
   const missing: Issue[] = [];
   const groups = new Map<string, typeof inp.materials>();
   for (const m of inp.materials)
-    groups.set(m.productId, [...(groups.get(m.productId) ?? []), m]);
+    groups.set(materialKey(m), [...(groups.get(materialKey(m)) ?? []), m]);
 
   const lines: MaterialResult[] = [];
   const coverageByProduct = new Map<string, string | null>();
 
-  for (const [productId, ms] of groups) {
-    const p = products.get(productId)!;
+  for (const [key, ms] of groups) {
+    const productId = ms[0].productId;
+    const free = ms[0].itemName?.trim() || 'Item';
+    // Sales simulations never use stock figures, even for a Product Master item.
+    const found = productId ? products.get(productId) : undefined;
+    const p = {
+      code: found?.code ?? free,
+      name: found?.name ?? free,
+      unit: found?.unit ?? (ms[0].unit?.trim() || 'unit'),
+      standardUnitCost: found?.standardUnitCost ?? 0,
+      minimumStock: sales ? 0 : (found?.minimumStock ?? 0),
+      available: sales ? 0 : (found?.available ?? 0),
+      reserved: sales ? 0 : (found?.reserved ?? 0),
+      inInspection: sales ? 0 : (found?.inInspection ?? 0),
+      pendingRequestDemand: sales ? 0 : (found?.pendingRequestDemand ?? 0),
+      otherPlanDemand: sales ? 0 : (found?.otherPlanDemand ?? 0),
+    };
     let gross = 0;
     let scrap = 0;
     for (const m of ms) {
@@ -65,6 +100,10 @@ export function planMaterials(
       p.available - p.minimumStock - pending - p.otherPlanDemand,
     );
     const netRequirement = Math.max(0, total - netAvailable);
+    const leadTimeDays =
+      ms.map((m) => m.leadTimeDays).find((v) => v !== null) ?? null;
+    const packMultiple =
+      ms.map((m) => m.packMultiple).find((v) => v !== null) ?? null;
 
     const inbound: InboundLine[] = [];
     if (p.inInspection > 0)
@@ -76,7 +115,7 @@ export function planMaterials(
         arrivesInTime: asOf <= requiredBy,
       });
     for (const x of inp.manualInbound
-      .filter((i) => i.productId === productId)
+      .filter((i) => !sales && !!productId && i.productId === productId)
       .sort((a, b) => a.expectedDate.localeCompare(b.expectedDate)))
       inbound.push({
         source: 'MANUAL',
@@ -88,15 +127,14 @@ export function planMaterials(
     const eligibleInbound = inbound
       .filter((i) => i.arrivesInTime)
       .reduce((a, i) => a + i.quantity, 0);
-    const shortage = Math.max(0, netRequirement - eligibleInbound);
-
-    const leadTimeDays =
-      ms.map((m) => m.leadTimeDays).find((v) => v !== null) ?? null;
-    const packMultiple =
-      ms.map((m) => m.packMultiple).find((v) => v !== null) ?? null;
+    const shortage = sales
+      ? 0
+      : Math.max(0, netRequirement - eligibleInbound);
 
     let coverageDate: string | null = null;
-    if (netRequirement <= 0) coverageDate = asOf;
+    if (sales)
+      coverageDate = leadTimeDays === null ? null : addDays(asOf, leadTimeDays);
+    else if (netRequirement <= 0) coverageDate = asOf;
     else {
       let cum = 0;
       for (const i of inbound) {
@@ -109,18 +147,21 @@ export function planMaterials(
       if (!coverageDate && leadTimeDays !== null)
         coverageDate = addDays(asOf, leadTimeDays);
     }
-    const arrivesInTime = coverageDate !== null && coverageDate <= requiredBy;
-    coverageByProduct.set(productId, coverageDate);
+    // Sales: no lead time entered = timing not checked (not a failure).
+    const arrivesInTime =
+      coverageDate === null ? sales : coverageDate <= requiredBy;
+    coverageByProduct.set(key, coverageDate);
+    const toBuy = sales ? total : shortage;
     const orderByDate =
-      shortage > 0 && leadTimeDays !== null
+      toBuy > 0 && leadTimeDays !== null
         ? addDays(requiredBy, -leadTimeDays)
         : null;
     const orderDatePassed = orderByDate !== null && orderByDate < asOf;
     const suggested =
-      shortage > 0
+      toBuy > 0
         ? packMultiple
-          ? Math.ceil(shortage / packMultiple - EPS) * packMultiple
-          : shortage
+          ? Math.ceil(toBuy / packMultiple - EPS) * packMultiple
+          : toBuy
         : 0;
 
     // Unit cost: manual estimate > Product Master (only with a declared currency).
@@ -132,7 +173,7 @@ export function planMaterials(
     if (override !== null) {
       unitCost = override;
       unitCostSource = 'MANUAL_ESTIMATE';
-    } else if (p.standardUnitCost > 0) {
+    } else if (found && p.standardUnitCost > 0) {
       const cur = inp.costs.masterCostCurrency;
       if (cur && cur === header.currency) {
         unitCost = p.standardUnitCost;
@@ -147,14 +188,25 @@ export function planMaterials(
           : ' The currency of Product Master standard unit cost is not declared — cost excluded.';
       }
     } else
-      costNote =
-        ' No standard unit cost in Product Master and no manual estimate.';
+      costNote = found
+        ? ' No standard unit cost in Product Master and no manual estimate.'
+        : ' No unit cost entered.';
 
-    const parts: string[] = [
+    const parts: string[] = sales
+      ? [
+          `Needs ${total} ${p.unit} (${r2(gross)} gross + ${r2(scrap)} scrap allowance).`,
+          `Sales simulation: stock is not checked — the full quantity is treated as to be procured${packMultiple ? ` (${suggested} after rounding to multiples of ${packMultiple})` : ''}.`,
+          leadTimeDays === null
+            ? 'No lead time entered — material timing is not checked.'
+            : `Ordered today with ${leadTimeDays} days lead time it arrives ${coverageDate}${arrivesInTime ? `, before it is needed on ${requiredBy}` : ` — after it is needed on ${requiredBy}`}.`,
+        ]
+      : [
       `Needs ${total} ${p.unit} (${r2(gross)} gross + ${r2(scrap)} scrap allowance).`,
       `Usable now: ${p.available} available − ${p.minimumStock} safety stock − ${pending} pending requests − ${p.otherPlanDemand} other approved plans = ${netAvailable}.`,
     ];
-    if (netRequirement <= 0) parts.push('Covered from stock.');
+    if (sales) {
+      // procurement wording is already in `parts`
+    } else if (netRequirement <= 0) parts.push('Covered from stock.');
     else {
       parts.push(
         `Net requirement ${netRequirement}; inbound arriving by ${requiredBy}: ${eligibleInbound}.`,
@@ -186,6 +238,7 @@ export function planMaterials(
 
     lines.push({
       productId,
+      supplyCheck: sales ? 'NOT_CHECKED' : 'WMS',
       code: p.code,
       name: p.name,
       unit: p.unit,
@@ -221,7 +274,7 @@ export function planMaterials(
 
   const readyByStage = new Map<string, string | null>();
   for (const m of inp.materials) {
-    const cov = coverageByProduct.get(m.productId) ?? null;
+    const cov = coverageByProduct.get(materialKey(m)) ?? null;
     const prev = readyByStage.get(m.stageKey);
     if (prev === null) continue; // already unknown
     if (cov === null) readyByStage.set(m.stageKey, null);

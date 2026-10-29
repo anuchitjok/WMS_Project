@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
-  ChevronRight, ClipboardList, Copy, GitCompare, History as History_, LayoutDashboard, Pencil, Play, Save, ShieldCheck, SlidersHorizontal, type LucideIcon,
+  BookCheck, ChevronRight, ClipboardList, Copy, FileText, GitCompare, History as History_, LayoutDashboard, Pencil, Play, Save, ShieldCheck, SlidersHorizontal, type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { planningApi, productsApi, warehouseApi } from '@/lib/api';
@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Field, FlagPills, PROJECT_TYPES, Pill, PlanStatusPill, RunStatusPill, Section, SelectInput, TextInput, fmt, money } from '@/components/planning/shared';
+import { Field, FlagPills, PROJECT_TYPES, Pill, PlanStatusPill, RunStatusPill, SalesPill, Section, SelectInput, TextInput, fmt, money } from '@/components/planning/shared';
 import { Inputs, MaterialsEditor, SetupEditor, SpaceCostEditor, WorkflowEditor } from '@/components/planning/inputs-editor';
 import { ResultsView } from '@/components/planning/results-view';
 
@@ -38,7 +38,7 @@ function Workspace() {
   const [templates, setTemplates] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
-  const [dialog, setDialog] = useState<null | 'scenario' | 'submit' | 'approve' | 'reject'>(null);
+  const [dialog, setDialog] = useState<null | 'scenario' | 'submit' | 'approve' | 'reject' | 'template'>(null);
 
   const load = useCallback(async (keepScenario?: string) => {
     if (!id) return;
@@ -117,6 +117,7 @@ function Workspace() {
   if (loading || !p) return <div className="p-6 space-y-3"><Skeleton className="h-16" /><Skeleton className="h-64" /></div>;
 
   const userName = (uid?: string | null) => p.users.find((u: any) => u.id === uid)?.fullName ?? '—';
+  const sales = p.purpose === 'SALES';
 
   const card = <ProjectCard p={p} quantity={draft?.quantity ?? run?.result?.summary?.quantity} userName={userName} onEdit={!readOnly ? () => { setMode('inputs'); setInputTab('project'); } : undefined} />;
 
@@ -134,18 +135,27 @@ function Workspace() {
           <div className="min-w-0 space-y-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-xl font-bold text-slate-900">{p.name}</h1>
-              <PlanStatusPill status={p.planStatus} />
+              {sales ? <SalesPill status={p.planStatus} /> : <PlanStatusPill status={p.planStatus} />}
             </div>
             <p className="text-xs text-slate-500">
-              <span className="font-mono">{p.code}</span> · {PROJECT_TYPES[p.projectType] ?? p.projectType} · {p.warehouse?.code} · {p.plannedStart.slice(0, 10)} → {p.targetEnd.slice(0, 10)}
+              <span className="font-mono">{p.code}</span> · {PROJECT_TYPES[p.projectType] ?? p.projectType} · {p.warehouse?.code ?? 'No warehouse'} · {p.plannedStart.slice(0, 10)} → {p.targetEnd.slice(0, 10)}
             </p>
+            {sales && <p className="text-xs text-slate-500">Sales simulation — stock is not read, it is never submitted for approval and it never counts as demand for real plans.</p>}
             {p.planStatus === 'IN_REVIEW' && <p className="text-xs text-amber-700">Submitted by {userName(p.submittedById)} — waiting for a reviewer. Return to draft to change inputs.</p>}
             {p.reviewNote && p.planStatus !== 'IN_REVIEW' && <p className="text-xs text-slate-500">Review note: {p.reviewNote} ({userName(p.reviewedById)})</p>}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {dirty && <span className="text-xs text-amber-700">Unsaved changes</span>}
-          {p.canManage && ['DRAFT', 'PLAN_REJECTED'].includes(p.planStatus) && run && run.overallStatus !== 'INSUFFICIENT_DATA' && !run.stale && !dirty && (
+          {run && run.overallStatus !== 'INSUFFICIENT_DATA' && (
+            <Link href={`/planning/summary?id=${id}&run=${run.id}`} className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">
+              <FileText className="h-4 w-4 mr-1.5" />Customer summary
+            </Link>
+          )}
+          {p.canManage && run && run.overallStatus !== 'INSUFFICIENT_DATA' && !run.stale && !dirty && (
+            <Button variant="outline" onClick={() => setDialog('template')}><BookCheck className="h-4 w-4 mr-1.5" />Save as template</Button>
+          )}
+          {!sales && p.canManage && ['DRAFT', 'PLAN_REJECTED'].includes(p.planStatus) && run && run.overallStatus !== 'INSUFFICIENT_DATA' && !run.stale && !dirty && (
             <Button variant="outline" onClick={() => setDialog('submit')}>Submit for planning review</Button>
           )}
           {p.canApprove && p.planStatus === 'IN_REVIEW' && (
@@ -209,9 +219,9 @@ function Workspace() {
             <p className="text-xs text-slate-500">{p.canManage ? 'Inputs are locked while the plan is in review or archived.' : 'You can view this plan but not change it.'}</p>
           )}
           {inputTab === 'project' && <ProjectInfo p={p} warehouses={warehouses} readOnly={readOnly} onSaved={() => load(scenarioId)} />}
-          {draft && inputTab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
+          {draft && inputTab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
           {draft && inputTab === 'workflow' && <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates} />}
-          {draft && inputTab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} />}
+          {draft && inputTab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
           {draft && inputTab === 'space' && <SpaceCostEditor inputs={draft} set={set} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} />}
         </>
       )}
@@ -220,6 +230,7 @@ function Workspace() {
 
       <NewScenarioDialog open={dialog === 'scenario'} onClose={() => setDialog(null)} busy={busy}
         onCreate={(name) => act(async () => { const s = await planningApi.createScenario(id, { name, cloneFromId: scenarioId }); setScenarioId(s.id); }, 'Scenario created')} />
+      {dialog === 'template' && run && <SaveTemplateDialog p={p} run={run} onClose={() => setDialog(null)} />}
       <DecisionDialog open={dialog === 'submit'} onClose={() => setDialog(null)} busy={busy} title="Submit for planning review"
         description={`Run #${run?.runNumber} (${run?.scenarioName}) will be reviewed by someone else. Submitting does not reserve stock, create orders or start the project.`}
         confirm="Submit" onConfirm={(note) => act(() => planningApi.submit(id, run.id, note), 'Submitted for review')} />
@@ -241,6 +252,8 @@ const PRIORITY_CLS: Record<string, string> = {
 function ProjectCard({ p, quantity, userName, onEdit }: { p: any; quantity?: number | null; userName: (id?: string | null) => string; onEdit?: () => void }) {
   const rows: [string, React.ReactNode][] = [
     ['Project ID', <span key="c" className="font-mono">{p.code}</span>],
+    ['Purpose', p.purpose === 'SALES' ? 'Sales simulation' : 'Operational plan'],
+    ...(p.companyTemplate ? [['Started from', <Link key="t" href="/planning/templates" className="text-green-700 hover:underline">{p.companyTemplate.code} — {p.companyTemplate.name}{p.companyTemplate.status !== 'CONFIRMED' ? ` (${p.companyTemplate.status.toLowerCase()})` : ''}</Link>] as [string, React.ReactNode]] : []),
     ['Project type', PROJECT_TYPES[p.projectType] ?? p.projectType],
     ['Customer / business unit', p.customer || '—'],
     ['Requesting department', p.department || '—'],
@@ -274,7 +287,7 @@ function ProjectCard({ p, quantity, userName, onEdit }: { p: any; quantity?: num
 function ProjectInfo({ p, warehouses, readOnly, onSaved }: { p: any; warehouses: any[]; readOnly: boolean; onSaved: () => void }) {
   const [f, setF] = useState<any>(() => ({
     name: p.name, projectType: p.projectType, description: p.description ?? '', customer: p.customer ?? '', department: p.department ?? '', scope: p.scope ?? '',
-    warehouseId: p.warehouseId, workLocation: p.workLocation ?? '', priority: p.priority, teams: p.teams ?? '', plannedStart: p.plannedStart.slice(0, 10), targetEnd: p.targetEnd.slice(0, 10), currency: p.currency,
+    warehouseId: p.warehouseId ?? '', workLocation: p.workLocation ?? '', priority: p.priority, teams: p.teams ?? '', plannedStart: p.plannedStart.slice(0, 10), targetEnd: p.targetEnd.slice(0, 10), currency: p.currency,
   }));
   const [saving, setSaving] = useState(false);
   const set = (k: string, v: any) => setF((x: any) => ({ ...x, [k]: v }));
@@ -288,7 +301,10 @@ function ProjectInfo({ p, warehouses, readOnly, onSaved }: { p: any; warehouses:
         <Field label="Name" className="sm:col-span-2"><TextInput value={f.name} disabled={readOnly} onChange={(e) => set('name', e.target.value)} /></Field>
         <Field label="Type"><SelectInput value={f.projectType} disabled={readOnly} onChange={(e) => set('projectType', e.target.value)}>{Object.entries(PROJECT_TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</SelectInput></Field>
         <Field label="Priority"><SelectInput value={f.priority} disabled={readOnly} onChange={(e) => set('priority', e.target.value)}>{['LOW', 'NORMAL', 'HIGH', 'URGENT'].map((x) => <option key={x} value={x}>{x.charAt(0) + x.slice(1).toLowerCase()}</option>)}</SelectInput></Field>
-        <Field label="Warehouse"><SelectInput value={f.warehouseId} disabled={readOnly} onChange={(e) => set('warehouseId', e.target.value)}>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}</SelectInput></Field>
+        <Field label="Warehouse"><SelectInput value={f.warehouseId} disabled={readOnly} onChange={(e) => set('warehouseId', e.target.value)}>
+          {p.purpose === 'SALES' && <option value="">No warehouse</option>}
+          {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
+        </SelectInput></Field>
         <Field label="Work location"><TextInput value={f.workLocation} disabled={readOnly} onChange={(e) => set('workLocation', e.target.value)} /></Field>
         <Field label="Planned start"><TextInput type="date" value={f.plannedStart} disabled={readOnly} onChange={(e) => set('plannedStart', e.target.value)} /></Field>
         <Field label="Target completion"><TextInput type="date" value={f.targetEnd} disabled={readOnly} onChange={(e) => set('targetEnd', e.target.value)} /></Field>
@@ -403,6 +419,67 @@ function NewScenarioDialog({ open, onClose, onCreate, busy }: { open: boolean; o
         <DialogHeader><DialogTitle>New scenario</DialogTitle><DialogDescription>Copies the current scenario&apos;s saved inputs. Change one thing (shifts, headcount, warehouse…) to compare.</DialogDescription></DialogHeader>
         <Field label="Scenario name"><TextInput value={name} maxLength={80} onChange={(e) => setName(e.target.value)} placeholder="e.g. Two shifts" /></Field>
         <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button className="bg-green-600 hover:bg-green-700 text-white" disabled={!name.trim() || busy} onClick={() => { onCreate(name.trim()); setName(''); }}>Create</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Saves the calculated run's standards (never its costs) as a draft company template. */
+function SaveTemplateDialog({ p, run, onClose }: { p: any; run: any; onClose: () => void }) {
+  const [form, setForm] = useState({ name: p.name, description: '', basis: '', replacesId: '' });
+  const [confirmed, setConfirmed] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<any>(null);
+  useEffect(() => { planningApi.companyTemplates('CONFIRMED').then((r) => setConfirmed(r.rows)).catch(() => setConfirmed([])); }, []);
+  async function save() {
+    setBusy(true);
+    try {
+      const dto: any = { runId: run.id, name: form.name.trim(), projectType: p.projectType };
+      for (const k of ['description', 'basis', 'replacesId'] as const) if (form[k].trim()) dto[k] = form[k].trim();
+      setSaved(await planningApi.createTemplate(dto));
+    } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Save as company template</DialogTitle>
+          <DialogDescription>
+            Saves the stage times, workstations, yields, calendar, labour factors, packaging and per-unit materials of run #{run.runNumber}.
+            Costs, rates, prices, headcount and holidays are not saved. The template is a draft until a second person with approval rights confirms it.
+          </DialogDescription>
+        </DialogHeader>
+        {saved ? (
+          <div className="space-y-3 text-sm">
+            <p className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-green-800"><b>{saved.code}</b> saved as a draft. Ask an approver to confirm it on the Company templates page.</p>
+            <DialogFooter>
+              <Link href="/planning/templates" className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50">Open Company templates</Link>
+              <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={onClose}>Done</Button>
+            </DialogFooter>
+          </div>
+        ) : (
+          <>
+            <div className="space-y-3">
+              <Field label="Template name"><TextInput value={form.name} maxLength={120} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+              <Field label="Description (optional)"><TextInput value={form.description} maxLength={2000} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="e.g. Laptop main board repair, standard line" /></Field>
+              <Field label="Basis of the standard values" hint="Required before it can be confirmed: time study, completed project, supplier agreement…">
+                <TextInput value={form.basis} maxLength={1000} onChange={(e) => setForm({ ...form, basis: e.target.value })} placeholder="e.g. Time study line A, Sep 2026" />
+              </Field>
+              {!!confirmed.length && (
+                <Field label="Replaces (optional)" hint="The selected template is retired when this one is confirmed">
+                  <SelectInput value={form.replacesId} onChange={(e) => setForm({ ...form, replacesId: e.target.value })}>
+                    <option value="">Nothing — a new template</option>
+                    {confirmed.map((t) => <option key={t.id} value={t.id}>{t.code} — {t.name}</option>)}
+                  </SelectInput>
+                </Field>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+              <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={!form.name.trim() || busy} onClick={save}>{busy ? 'Saving…' : 'Save draft template'}</Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

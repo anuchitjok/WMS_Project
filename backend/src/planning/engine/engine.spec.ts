@@ -752,3 +752,194 @@ describe('input validation', () => {
     expect(r.assumptions.some((a) => /transfer batch/.test(a))).toBe(true);
   });
 });
+
+describe('sales simulation', () => {
+  const sales = header({ purpose: 'SALES', warehouseId: null });
+  const noWarehouse = (o: Partial<DataSnapshot> = {}) =>
+    data({ layout: { ...data().layout, warehouseId: null, warehouseCode: null }, ...o });
+
+  it('never nets stock — the whole requirement is to be procured', () => {
+    // Stock in the snapshot is ignored on purpose: 500 available, 10 safety.
+    // gross 100 × 2 = 200, scrap 5% = 10 → 210; rounded to multiples of 50 → 250.
+    // Lead 3 days from 2026-10-28 = 2026-10-31, before the stage starts 2026-11-02.
+    const r = calculatePlan(
+      sales,
+      inputs({
+        materials: [
+          {
+            productId: 'p1',
+            stageKey: 'S1',
+            qtyPerUnit: 2,
+            scrapPct: 5,
+            leadTimeDays: 3,
+            packMultiple: 50,
+            unitCostOverride: 12,
+          },
+        ],
+      }),
+      noWarehouse({ products: [product({ available: 500, minimumStock: 10 })] }),
+    );
+    const m = r.materials[0];
+    expect(m.supplyCheck).toBe('NOT_CHECKED');
+    expect([m.totalRequirement, m.onHand, m.netAvailable, m.netRequirement]).toEqual([210, 0, 0, 210]);
+    expect([m.shortage, m.suggestedReplenishment]).toEqual([0, 250]);
+    expect([m.coverageDate, m.arrivesInTime]).toEqual(['2026-10-31', true]);
+    expect(m.totalCost).toBe(2520); // 210 × 12
+    expect(r.flags).not.toContain('MATERIAL_SHORTAGE');
+  });
+
+  it('accepts a free-text item and holds the stage until its lead time', () => {
+    // Lead 10 days → 2026-11-07 (Saturday), so S1 starts Mon 2026-11-09.
+    // 100 units ÷ (8 h × 60 ÷ 12 = 40/day) = 20 h → finishes Wed 2026-11-11.
+    const r = calculatePlan(
+      sales,
+      inputs({
+        materials: [
+          {
+            productId: '',
+            itemName: 'Thermal paste',
+            unit: 'g',
+            stageKey: 'S1',
+            qtyPerUnit: 1,
+            leadTimeDays: 10,
+            unitCostOverride: 3,
+          },
+        ],
+      }),
+      noWarehouse({ products: [] }),
+    );
+    expect(r.errors).toEqual([]);
+    const m = r.materials[0];
+    expect([m.code, m.unit, m.totalRequirement, m.totalCost]).toEqual(['Thermal paste', 'g', 100, 300]);
+    expect(m.arrivesInTime).toBe(false);
+    expect(r.stages[0].startBoundBy).toBe('MATERIAL');
+    expect(r.summary.estimatedFinish).toBe('2026-11-11');
+    expect(r.flags).toContain('MATERIAL_SHORTAGE');
+    expect(r.risks.find((x) => x.area === 'Material')?.message).toContain('ordered today with 10 days lead time');
+  });
+
+  it('treats a missing lead time as not checked, not as a shortage', () => {
+    const r = calculatePlan(
+      sales,
+      inputs({ materials: [{ productId: '', itemName: 'Label', stageKey: 'S1', qtyPerUnit: 1 }] }),
+      noWarehouse({ products: [] }),
+    );
+    expect(r.materials[0].coverageDate).toBeNull();
+    expect(r.materials[0].arrivesInTime).toBe(true);
+    expect(r.flags).not.toContain('MATERIAL_SHORTAGE');
+  });
+
+  it('without a warehouse, capacity is not checked and not reported as missing data', () => {
+    const { space } = inputs();
+    const noOverrides = Object.fromEntries(
+      Object.entries(space as Record<string, unknown>).filter(([k]) => !k.startsWith('override')),
+    );
+    const r = calculatePlan(sales, inputs({ space: noOverrides }), noWarehouse({ products: [] }));
+    expect(r.space.map((s) => s.status)).toEqual(['NOT_CHECKED', 'NOT_CHECKED', 'NOT_CHECKED', 'NOT_CHECKED']);
+    expect(r.space[0].required).toBe(5); // ⌈100 ÷ (5 × 4)⌉ pallets
+    expect(r.summary.spaceStatus).toBe('NOT_CHECKED');
+    expect(r.space.every((x) => x.detail.endsWith('not checked.') && !/Available|Floor Plan/.test(x.detail))).toBe(true);
+    expect(r.flags).not.toContain('WAREHOUSE_CAPACITY_RISK');
+    expect(r.flags).not.toContain('INSUFFICIENT_DATA');
+    // A capacity the planner enters is still checked.
+    const r2 = calculatePlan(
+      sales,
+      inputs({ space: { ...noOverrides, overrideStoragePalletPositions: 4 } }),
+      noWarehouse({ products: [] }),
+    );
+    expect(r2.space[0].status).toBe('SHORTAGE');
+  });
+
+  it('free-text items are only for sales simulations, need a name and are not duplicated', () => {
+    const free = { productId: '', itemName: 'Glue', stageKey: 'S1', qtyPerUnit: 1 };
+    const op = calculatePlan(header(), inputs({ materials: [free] }), data());
+    expect(op.errors.map((e) => e.path)).toContain('materials[0].productId');
+    const unnamed = calculatePlan(sales, inputs({ materials: [{ ...free, itemName: ' ' }] }), noWarehouse());
+    expect(unnamed.errors.map((e) => e.path)).toContain('materials[0].itemName');
+    const twice = calculatePlan(sales, inputs({ materials: [free, { ...free, itemName: 'glue' }] }), noWarehouse());
+    expect(twice.errors.map((e) => e.path)).toContain('materials[1].itemName');
+  });
+});
+
+describe('pricing and quote', () => {
+  /*
+   * Base inputs: 100 units × 12 min = 20 h × 200 THB/h = 4,000 THB, no other cost.
+   */
+  const d = data({ products: [] });
+  const priced = (pricing: Record<string, unknown>, o: Record<string, unknown> = {}) =>
+    calculatePlan(header(), inputs({ costs: { masterCostCurrency: 'THB', pricing }, ...o }), d);
+
+  it('no pricing method → no quote', () => {
+    const r = calculatePlan(header(), inputs(), d);
+    expect(r.cost!.total).toBe(4000);
+    expect(r.cost!.complete).toBe(true);
+    expect(r.cost!.quote).toBeNull();
+  });
+
+  it('margin on price, with contingency, rounding, VAT and validity', () => {
+    // 4,000 + 5% = 4,200 ÷ (1 − 20%) = 5,250 → rounded up to 100 = 5,300
+    // margin 5,300 − 4,200 = 1,100 = 20.75% of price, 26.19% of cost
+    // VAT 7% = 371 → 5,671; valid 30 days from 2026-10-28 = 2026-11-27
+    const q = priced({ method: 'MARGIN', marginPct: 20, contingencyPct: 5, roundTo: 100, vatPct: 7, validityDays: 30 }).cost!.quote!;
+    expect(q.costWithContingency).toBe(4200);
+    expect(q.price).toBe(5300);
+    expect(q.pricePerUnit).toBe(53);
+    expect(q.marginAmount).toBe(1100);
+    expect(q.marginPct).toBe(20.75);
+    expect(q.markupPct).toBe(26.19);
+    expect(q.vatAmount).toBe(371);
+    expect(q.priceIncludingVat).toBe(5671);
+    expect(q.validUntil).toBe('2026-11-27');
+    expect(q.complete).toBe(true);
+    expect(q.belowCost).toBe(false);
+    expect(q.formula).toContain('÷ (1 − 20%)');
+  });
+
+  it('markup on cost', () => {
+    // 4,000 × 1.25 = 5,000; margin 1,000 = 20% of price
+    const q = priced({ method: 'MARKUP', markupPct: 25 }).cost!.quote!;
+    expect(q.price).toBe(5000);
+    expect(q.marginPct).toBe(20);
+    expect(q.markupPct).toBe(25);
+    expect(q.vatAmount).toBeNull();
+    expect(q.validUntil).toBeNull();
+  });
+
+  it('a fixed price below cost is reported as a loss', () => {
+    const r = priced({ method: 'FIXED', fixedPrice: 3500 });
+    const q = r.cost!.quote!;
+    expect(q.price).toBe(3500);
+    expect(q.marginAmount).toBe(-500);
+    expect(q.belowCost).toBe(true);
+    expect(r.risks.find((x) => x.area === 'Cost' && x.level === 'HIGH')!.message).toContain('below the estimated cost');
+    // Contingency also counts against a fixed price: 4,000 + 10% = 4,400 > 4,300.
+    const c = priced({ method: 'FIXED', fixedPrice: 4300, contingencyPct: 10 });
+    expect([c.cost!.quote!.costWithContingency, c.cost!.quote!.marginAmount, c.cost!.quote!.belowCost]).toEqual([4400, -100, true]);
+    expect(c.risks.find((x) => x.level === 'HIGH')!.message).toBe(
+      'Selling price 4,300 THB is below the estimated cost of 4,400 THB (loss 100).',
+    );
+  });
+
+  it('never prices from an incomplete cost', () => {
+    const noRate = { labor: { availableHeadcount: 10, absencePct: 0, utilizationPct: 100, laborRatePerHour: null } };
+    const m = priced({ method: 'MARGIN', marginPct: 20 }, noRate);
+    expect(m.cost!.quote!.price).toBeNull();
+    expect(m.cost!.quote!.reason).toContain('Cost estimate incomplete');
+    expect(m.risks.some((x) => x.message.startsWith('No quoted price'))).toBe(true);
+    // A fixed price stays, but its margin cannot be checked.
+    const f = priced({ method: 'FIXED', fixedPrice: 9000 }, noRate).cost!.quote!;
+    expect(f.price).toBe(9000);
+    expect(f.marginPct).toBeNull();
+    expect(f.complete).toBe(false);
+    // Method chosen but its value missing.
+    expect(priced({ method: 'MARGIN' }).cost!.quote!.reason).toBe('Margin % not entered.');
+  });
+
+  it('rejects impossible pricing values', () => {
+    const paths = (p: Record<string, unknown>) => priced(p).errors.map((e) => e.path);
+    expect(paths({ method: 'MARGIN', marginPct: 100 })).toContain('costs.pricing.marginPct');
+    expect(paths({ method: 'FIXED', fixedPrice: 0 })).toContain('costs.pricing.fixedPrice');
+    expect(paths({ method: 'MARKUP', markupPct: 10, vatPct: 150 })).toContain('costs.pricing.vatPct');
+    expect(paths({ method: 'MARKUP', markupPct: 10, validityDays: 2.5 })).toContain('costs.pricing.validityDays');
+  });
+});

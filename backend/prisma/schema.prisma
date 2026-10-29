@@ -1230,7 +1230,10 @@ model PlanningProject {
   department     String?
   productId      String? // main product / model being processed (optional)
   scope          String?   @db.Text
-  warehouseId    String // default warehouse (scenarios may plan an alternative)
+  /// OPERATIONAL = a real planned project; SALES = a sales simulation (never
+  /// approved, never reads stock, never counted as demand by other plans)
+  purpose        String    @default("OPERATIONAL")
+  warehouseId    String? // default warehouse (scenarios may plan an alternative); optional for SALES
   workLocation   String?
   priority       Priority  @default(NORMAL)
   ownerId        String?
@@ -1246,6 +1249,8 @@ model PlanningProject {
   reviewedAt     DateTime?
   reviewNote     String?
   approvedRunId  String? // the calculation run the review decision refers to
+  /// Company template the baseline scenario was started from (PlanningTemplate.id)
+  companyTemplateId String?
   createdById    String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -1256,6 +1261,41 @@ model PlanningProject {
 
   @@index([warehouseId])
   @@index([planStatus])
+}
+
+/// Company-confirmed planning template for a job type that is sold often:
+/// workflow stages WITH their standard values (times, workstations, yields),
+/// calendar, labour factors, packaging and the per-unit material list.
+/// Never holds costs, rates or prices. Values come from a calculated scenario;
+/// nothing is seeded. DRAFT → CONFIRMED (second person, planning.approve, with
+/// the basis of the numbers) → RETIRED. Only CONFIRMED templates start projects.
+model PlanningTemplate {
+  id              String    @id @default(cuid())
+  code            String    @unique // TPL-NNNN
+  name            String
+  projectType     String
+  description     String?   @db.Text
+  /// DRAFT | CONFIRMED | RETIRED
+  status          String    @default("DRAFT")
+  /// Where the standard values come from (time study, completed project …). Required to confirm.
+  basis           String?   @db.Text
+  /// JSON: { stages, calendar, labor, space, materials, transferBatchSize }
+  content         String    @db.Text
+  sourceProjectId String?
+  sourceScenarioId String?
+  sourceRunId     String?
+  /// A confirmed template this one replaces; it is retired when this one is confirmed.
+  replacesId      String?
+  createdById     String?
+  confirmedById   String?
+  confirmedAt     DateTime?
+  retiredById     String?
+  retiredAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  version         Int       @default(0)
+
+  @@index([status])
 }
 
 /// One set of planning inputs (workflow, labour, materials, space, cost

@@ -94,6 +94,8 @@ function KpiTiles({ r, cur }: { r: any; cur: string }) {
   const mp = r.manpower;
   const late = (s.scheduleVarianceWorkingDays ?? 0) > 0;
   const short = r.materials.filter((m: any) => m.shortage > 0 || !m.arrivesInTime);
+  // Sales simulation: stock is not checked, everything is to be procured.
+  const procure = r.materials.length > 0 && r.materials.every((m: any) => m.supplyCheck === 'NOT_CHECKED');
   // Shortage value only when the user may see costs and every short line has a unit cost.
   const valued = r.cost && short.length > 0 && short.every((m: any) => m.unitCost !== null && m.unitCost !== undefined);
   const shortValue = valued ? short.reduce((t: number, m: any) => t + m.shortage * m.unitCost, 0) : null;
@@ -105,13 +107,21 @@ function KpiTiles({ r, cur }: { r: any; cur: string }) {
         tone={mp?.additionalWorkersNeeded ? 'bad' : mp?.additionalWorkersNeeded === 0 ? 'good' : 'warn'}
         sub={`${fmt(mp?.requiredFte?.value)} FTE${mp?.additionalWorkersNeeded ? ` · ${mp.additionalWorkersNeeded} more needed` : ''}`} />
       <Kpi icon={Clock} label="Total labour hours" value={fmt(s.totalLaborHours)} sub={`Line pace ${fmt(s.lineThroughputPerDay)} units/day`} />
+      {procure ? (
+        <Kpi icon={PackageX} label="Materials to procure" tone={short.length ? 'bad' : 'neutral'}
+          value={`${s.materialLines} item${s.materialLines > 1 ? 's' : ''}`}
+          sub={short.length ? `${short.length} arrive after they are needed` : 'Stock not checked (sales simulation)'} />
+      ) : (
       <Kpi icon={PackageX} label="Material shortage" tone={short.length ? 'bad' : s.materialLines ? 'good' : 'neutral'}
         value={!s.materialLines ? 'No materials' : short.length ? `${short.length} of ${s.materialLines} items` : 'None'}
         sub={short.length
           ? `${short.slice(0, 2).map((m: any) => `${m.code} short ${fmt(m.shortage, 0)}`).join(' · ')}${short.length > 2 ? ' …' : ''}${shortValue !== null ? ` · ${money(shortValue, cur)}` : ''}`
           : s.materialLines ? 'All covered in time' : 'None defined for this scenario'} />
+      )}
       <Kpi icon={Wallet} label="Estimated cost" value={s.estimatedCost === null ? 'Hidden' : money(s.estimatedCost, cur)} tone={s.estimatedCost !== null && !s.costComplete ? 'warn' : 'neutral'}
-        sub={s.estimatedCost === null ? 'Requires cost permission' : s.costComplete ? `${money(r.cost?.costPerUnit, cur)} per unit` : 'Incomplete — see Cost estimate'} />
+        sub={s.estimatedCost === null ? 'Requires cost permission'
+          : r.cost?.quote?.price != null ? `Quote ${money(r.cost.quote.price, cur)}${r.cost.quote.marginPct != null ? ` · margin ${fmt(r.cost.quote.marginPct)}%` : ''}`
+          : s.costComplete ? `${money(r.cost?.costPerUnit, cur)} per unit` : 'Incomplete — see Cost estimate'} />
     </div>
   );
 }
@@ -227,7 +237,7 @@ function WorkflowStrip({ r }: { r: any }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4 pt-4 border-t border-slate-100">
         <Foot icon={CalendarRange} label="Total duration" value={`${fmt(spanDays, 1)} working days`} sub={`${r.summary.plannedStart} → ${r.summary.estimatedFinish ?? '—'}`} />
         <Foot icon={Gauge} label="Line pace (bottleneck)" value={`${fmt(r.summary.lineThroughputPerDay)} units/day`} sub={r.summary.bottleneckStage ?? undefined} />
-        <Foot icon={Warehouse} label="Warehouse space" value={space === 'OK' ? 'Sufficient' : space.charAt(0) + space.slice(1).toLowerCase()} tone={space === 'OK' ? 'good' : space === 'INCOMPLETE' ? 'warn' : 'bad'} />
+        <Foot icon={Warehouse} label="Warehouse space" value={space === 'OK' ? 'Sufficient' : space === 'NOT_CHECKED' ? 'Not checked' : space.charAt(0) + space.slice(1).toLowerCase()} tone={space === 'OK' ? 'good' : space === 'INCOMPLETE' || space === 'NOT_CHECKED' ? 'warn' : 'bad'} />
         <Foot icon={late ? AlertTriangle : CheckCircle2} label="Schedule" value={late ? 'Behind target' : 'Meets target'} tone={late ? 'bad' : 'good'} sub={RUN_STATUS[r.overallStatus]?.label} />
       </div>
     </Section>
@@ -369,9 +379,11 @@ function ManpowerView({ r, cur }: { r: any; cur: string }) {
 function MaterialsView({ r, cur }: { r: any; cur: string }) {
   if (!r.materials.length) return <Section title="Materials"><p className="text-sm text-slate-500">No materials defined for this scenario.</p></Section>;
   return (
-    <Section title="Material requirements and availability" hint="Source: manually defined project list. Stock figures are for the planning warehouse at the time of the run.">
+    <Section title="Material requirements and availability" hint={r.materials.every((m: any) => m.supplyCheck === 'NOT_CHECKED')
+      ? 'Sales simulation: stock is not read, so every quantity is shown as to be procured. Lead times are counted from the day of the calculation.'
+      : 'Source: manually defined project list. Stock figures are for the planning warehouse at the time of the run.'}>
       <div className="space-y-3">
-        {r.materials.map((m: any) => (
+        {r.materials.map((m: any) => m.supplyCheck === 'NOT_CHECKED' ? <ProcureCard key={m.productId || m.code} m={m} cur={cur} /> : (
           <div key={m.productId} className="rounded-lg border border-slate-200 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -407,6 +419,31 @@ function MaterialsView({ r, cur }: { r: any; cur: string }) {
   );
 }
 
+/** A material in a sales simulation: nothing is netted against stock. */
+function ProcureCard({ m, cur }: { m: any; cur: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium text-slate-900">{m.code}{m.name !== m.code && <span className="text-slate-500 font-normal"> {m.name}</span>}</p>
+          <p className="text-[11px] text-slate-400">{m.productId ? 'Product Master item' : 'Free-text item'} · stock not checked · used at {m.stages.join(', ')}</p>
+        </div>
+        {!m.arrivesInTime
+          ? <Pill className="bg-red-50 text-red-700 border-red-200">Arrives after it is needed</Pill>
+          : <Pill className="bg-slate-50 text-slate-600 border-slate-200">To procure {fmt(m.suggestedReplenishment, 0)} {m.unit}</Pill>}
+      </div>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-3 text-xs">
+        {[
+          ['Total need', m.totalRequirement], ['To procure', m.suggestedReplenishment], ['Required by', m.requiredByDate],
+          ['Lead time', m.leadTimeDays === null ? 'not entered' : `${m.leadTimeDays} days`], ['Arrives if ordered today', m.coverageDate ?? 'not checked'], ['Order by', m.orderByDate ?? '—'],
+        ].map(([k, v]) => <div key={k as string}><p className="text-slate-400">{k}</p><p className="text-slate-800 font-medium">{typeof v === 'number' ? fmt(v) : v}</p></div>)}
+      </div>
+      <p className="text-xs text-slate-600 mt-2">{m.explanation}</p>
+      {m.totalCost !== null && <p className="text-[11px] text-slate-400 mt-1">{money(m.unitCost, cur)} × {m.totalRequirement} = {money(m.totalCost, cur)} ({m.unitCostSource === 'MANUAL_ESTIMATE' ? 'manual estimate' : 'Product Master standard cost'})</p>}
+    </div>
+  );
+}
+
 function SpaceView({ r }: { r: any }) {
   return (
     <Section title="Warehouse capacity" hint="Storage, staging and work areas are separate spaces and are checked separately.">
@@ -417,11 +454,13 @@ function SpaceView({ r }: { r: any }) {
             <div key={s.key} className="rounded-lg border border-slate-200 p-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium text-slate-900">{s.label}</p>
-                <Pill className={s.status === 'OK' ? 'bg-green-50 text-green-700 border-green-200' : s.status === 'INCOMPLETE' ? 'bg-slate-50 text-slate-500 border-slate-200' : s.status === 'RISK' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'}>
-                  {s.status === 'OK' ? 'Sufficient' : s.status === 'INCOMPLETE' ? 'Incomplete data' : s.status === 'RISK' ? 'At risk' : `Short ${fmt(s.shortfall)} ${s.unit}`}
+                <Pill className={s.status === 'OK' ? 'bg-green-50 text-green-700 border-green-200' : s.status === 'INCOMPLETE' || s.status === 'NOT_CHECKED' ? 'bg-slate-50 text-slate-500 border-slate-200' : s.status === 'RISK' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-red-50 text-red-700 border-red-200'}>
+                  {s.status === 'OK' ? 'Sufficient' : s.status === 'INCOMPLETE' ? 'Incomplete data' : s.status === 'NOT_CHECKED' ? 'Not checked' : s.status === 'RISK' ? 'At risk' : `Short ${fmt(s.shortfall)} ${s.unit}`}
                 </Pill>
               </div>
-              <p className="text-xs text-slate-600 mt-2">Required <b>{fmt(s.required)}</b> · available <b>{fmt(s.available)}</b> {s.unit} <span className="text-slate-400">({s.availableSource === 'WMS' ? 'from WMS' : s.availableSource === 'MANUAL_OVERRIDE' ? 'entered manually' : 'no data'})</span></p>
+              {s.status === 'NOT_CHECKED'
+                ? <p className="text-xs text-slate-600 mt-2">Required <b>{fmt(s.required)}</b> {s.unit} <span className="text-slate-400">(no warehouse chosen — enter the available space under Space &amp; cost to check it)</span></p>
+                : <p className="text-xs text-slate-600 mt-2">Required <b>{fmt(s.required)}</b> · available <b>{fmt(s.available)}</b> {s.unit} <span className="text-slate-400">({s.availableSource === 'WMS' ? 'from WMS' : s.availableSource === 'MANUAL_OVERRIDE' ? 'entered manually' : 'no data'})</span></p>}
               {pct !== null && <div className="h-1.5 bg-slate-100 rounded mt-2"><div className={cn('h-1.5 rounded', pct > 100 ? 'bg-red-500' : s.status === 'RISK' ? 'bg-amber-500' : 'bg-green-500')} style={{ width: `${Math.min(100, pct)}%` }} /></div>}
               <div className="mt-2"><Explain formula={s.formula} detail={s.detail} /></div>
             </div>
@@ -437,6 +476,7 @@ function CostView({ r }: { r: any }) {
   if (!c) return <Section title="Cost"><p className="text-sm text-slate-500">You do not have permission to see costs for this project.</p></Section>;
   return (
     <div className="grid lg:grid-cols-2 gap-4">
+      {c.quote && <QuoteCard q={c.quote} />}
       <Section title={`Estimated cost (${c.currency})`} hint={c.note}>
         <table className="w-full text-sm">
           <tbody className="divide-y divide-slate-50">
@@ -459,6 +499,39 @@ function CostView({ r }: { r: any }) {
         </table>
       </Section>
     </div>
+  );
+}
+
+/** Internal quote view: price, cost basis and margin. Never shown on the customer summary. */
+function QuoteCard({ q }: { q: any }) {
+  const cur = q.currency;
+  const method = { MARGIN: 'Margin on price', MARKUP: 'Markup on cost', FIXED: 'Fixed selling price' }[q.method as string];
+  return (
+    <Section title={`Quoted price (${cur})`} hint={`${method}. ${q.formula}`} className="lg:col-span-2">
+      {q.price === null ? (
+        <p className="text-sm text-amber-800 bg-amber-50 rounded-md px-3 py-2">No price yet: {q.reason}</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+            {[
+              ['Price (excl. VAT)', money(q.price, cur), `${money(q.pricePerUnit, cur)} per unit`],
+              ['Cost incl. contingency', money(q.costWithContingency, cur), q.contingencyPct ? `${money(q.costBase, cur)} + ${q.contingencyPct}% (${money(q.contingencyAmount, cur)})` : 'No contingency'],
+              ['Margin', q.marginAmount === null ? 'not checked' : money(q.marginAmount, cur), q.marginPct === null ? 'Cost estimate incomplete' : `${fmt(q.marginPct)}% of price · ${fmt(q.markupPct)}% markup`],
+              ['Price incl. VAT', q.priceIncludingVat === null ? '—' : money(q.priceIncludingVat, cur), q.vatPct === null ? 'VAT not shown' : `VAT ${q.vatPct}% = ${money(q.vatAmount, cur)}`],
+            ].map(([k, v, sub]) => (
+              <div key={k} className="rounded-lg border border-slate-200 px-3 py-2">
+                <p className="text-xs text-slate-500">{k}</p>
+                <p className={cn('font-semibold', k === 'Margin' && q.belowCost ? 'text-red-700' : 'text-slate-900')}>{v}</p>
+                <p className="text-[11px] text-slate-500">{sub}</p>
+              </div>
+            ))}
+          </div>
+          {q.belowCost && <p className="text-xs text-red-800 bg-red-50 rounded-md px-3 py-2 mt-3">The selling price is below the estimated cost — this quote makes a loss.</p>}
+          {q.reason && !q.belowCost && <p className="text-xs text-amber-800 bg-amber-50 rounded-md px-3 py-2 mt-3">{q.reason}</p>}
+          <p className="text-[11px] text-slate-400 mt-2">{q.validUntil ? `Valid until ${q.validUntil}. ` : ''}A planning quote only — not an order, invoice or accounting entry.</p>
+        </>
+      )}
+    </Section>
   );
 }
 

@@ -7,6 +7,7 @@ import {
   LaborInput,
   ManualInboundInput,
   MaterialInput,
+  PricingMethod,
   ProjectHeader,
   ScenarioInputs,
   SpaceInput,
@@ -114,6 +115,8 @@ export function normalizeInputs(raw: unknown): Normalized {
     const m = obj(m0);
     return {
       productId: str(m.productId),
+      ...(str(m.itemName) ? { itemName: str(m.itemName) } : {}),
+      ...(str(m.unit) ? { unit: str(m.unit) } : {}),
       stageKey: str(m.stageKey),
       qtyPerUnit: num(m.qtyPerUnit) ?? NaN,
       scrapPct: num(m.scrapPct) ?? 0,
@@ -183,6 +186,22 @@ export function normalizeInputs(raw: unknown): Normalized {
         amount: num(o.amount) ?? NaN,
       };
     }),
+    pricing: (() => {
+      const pr = obj(co.pricing);
+      const m = str(pr.method).toUpperCase();
+      return {
+        method: (['MARGIN', 'MARKUP', 'FIXED'].includes(m)
+          ? m
+          : 'NONE') as PricingMethod,
+        marginPct: num(pr.marginPct),
+        markupPct: num(pr.markupPct),
+        fixedPrice: num(pr.fixedPrice),
+        contingencyPct: num(pr.contingencyPct),
+        roundTo: num(pr.roundTo),
+        vatPct: num(pr.vatPct),
+        validityDays: num(pr.validityDays),
+      };
+    })(),
   };
 
   const rd = obj(r.readiness);
@@ -494,15 +513,35 @@ export function validateInputs(
     );
 
   // Materials
+  const sales = header.purpose === 'SALES';
   const products = new Map(data.products.map((p) => [p.productId, p]));
+  const seenFree = new Set<string>();
   inp.materials.forEach((m, i) => {
     const p = `materials[${i}]`;
     const prod = products.get(m.productId);
-    if (!m.productId || !prod)
+    if (sales && !m.productId) {
+      // Sales simulation: a free-text item is allowed instead of a product.
+      const name = (m.itemName ?? '').trim();
+      if (!name)
+        err(
+          'MATERIAL',
+          `${p}.itemName`,
+          `Material line ${i + 1}: choose a product or enter an item name`,
+        );
+      else if (seenFree.has(name.toLowerCase()))
+        err(
+          'MATERIAL',
+          `${p}.itemName`,
+          `Material line ${i + 1}: "${name}" is listed twice — combine the lines`,
+        );
+      seenFree.add(name.toLowerCase());
+    } else if (!m.productId || !prod)
       err(
         'MATERIAL',
         `${p}.productId`,
-        `Material line ${i + 1}: choose a product from Product Master`,
+        sales
+          ? `Material line ${i + 1}: product not found — choose another or enter an item name`
+          : `Material line ${i + 1}: choose a product from Product Master`,
       );
     else if (!prod.isActive)
       warn(
@@ -556,7 +595,13 @@ export function validateInputs(
         `Material line ${i + 1}: units per pallet must be more than 0`,
       );
   });
-  inp.manualInbound.forEach((x, i) => {
+  if (sales && inp.manualInbound.length)
+    warn(
+      'MATERIAL',
+      'manualInbound',
+      'Expected supply is ignored in a sales simulation — stock is not checked',
+    );
+  if (!sales) inp.manualInbound.forEach((x, i) => {
     const p = `manualInbound[${i}]`;
     if (!products.has(x.productId))
       err(
@@ -638,6 +683,23 @@ export function validateInputs(
   }))
     if (v !== null && v < 0)
       err('COST', `costs.${k}`, `${k} cannot be negative`);
+
+  // Pricing
+  const pr = co.pricing;
+  if (pr.method === 'MARGIN' && pr.marginPct !== null && !(pr.marginPct >= 0 && pr.marginPct < 100))
+    err('COST', 'costs.pricing.marginPct', 'Margin must be at least 0% and below 100%');
+  if (pr.method === 'MARKUP' && pr.markupPct !== null && !(pr.markupPct >= 0))
+    err('COST', 'costs.pricing.markupPct', 'Markup cannot be negative');
+  if (pr.method === 'FIXED' && pr.fixedPrice !== null && !(pr.fixedPrice > 0))
+    err('COST', 'costs.pricing.fixedPrice', 'Selling price must be more than 0');
+  if (pr.contingencyPct !== null && !(pr.contingencyPct >= 0 && pr.contingencyPct <= 100))
+    err('COST', 'costs.pricing.contingencyPct', 'Contingency must be between 0% and 100%');
+  if (pr.roundTo !== null && !(pr.roundTo > 0))
+    err('COST', 'costs.pricing.roundTo', 'Round-to amount must be more than 0');
+  if (pr.vatPct !== null && !(pr.vatPct >= 0 && pr.vatPct <= 100))
+    err('COST', 'costs.pricing.vatPct', 'VAT must be between 0% and 100%');
+  if (pr.validityDays !== null && !(Number.isInteger(pr.validityDays) && pr.validityDays >= 1 && pr.validityDays <= 365))
+    err('COST', 'costs.pricing.validityDays', 'Validity must be a whole number of days from 1 to 365');
 
   return { errors, warnings };
 }

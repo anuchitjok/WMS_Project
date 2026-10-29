@@ -831,6 +831,7 @@ export const planningApi = {
   deleteScenario: (id: string, sid: string) => request<any>(`/planning/projects/${id}/scenarios/${sid}`, { method: 'DELETE' }),
   calculate: (id: string, sid: string) => request<any>(`/planning/projects/${id}/scenarios/${sid}/calculate`, { method: 'POST' }),
   run: (id: string, runId: string) => request<any>(`/planning/projects/${id}/runs/${runId}`),
+  customerSummary: (id: string, runId: string) => request<any>(`/planning/projects/${id}/runs/${runId}/customer-summary`),
   verify: (id: string, runId: string) => request<any>(`/planning/projects/${id}/runs/${runId}/verify`, { method: 'POST' }),
   compare: (id: string, runIds: string[]) => request<any[]>(`/planning/projects/${id}/compare?runIds=${runIds.join(',')}`),
   submit: (id: string, runId: string, note?: string) => request<any>(`/planning/projects/${id}/submit`, { method: 'POST', body: JSON.stringify({ runId, note }) }),
@@ -838,4 +839,16 @@ export const planningApi = {
   reject: (id: string, note: string) => request<any>(`/planning/projects/${id}/reject`, { method: 'POST', body: JSON.stringify({ note }) }),
   reopen: (id: string) => request<any>(`/planning/projects/${id}/reopen`, { method: 'POST' }),
   archive: (id: string) => request<any>(`/planning/projects/${id}/archive`, { method: 'POST' }),
+  // Company templates: confirmed standard values, never costs.
+  companyTemplates: (status?: string) =>
+    request<{ rows: any[]; userId: string; canManage: boolean; canApprove: boolean }>(`/planning/company-templates${status ? `?status=${status}` : ''}`),
+  companyTemplate: (tid: string) => request<any>(`/planning/company-templates/${tid}`),
+  createTemplate: (dto: { runId: string; name: string; projectType?: string; description?: string; basis?: string; replacesId?: string }) =>
+    request<any>('/planning/company-templates', { method: 'POST', body: JSON.stringify(dto) }),
+  updateTemplate: (tid: string, dto: any) => request<any>(`/planning/company-templates/${tid}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  confirmTemplate: (tid: string, dto: { basis?: string; note?: string; version?: number }) =>
+    request<any>(`/planning/company-templates/${tid}/confirm`, { method: 'POST', body: JSON.stringify(dto) }),
+  retireTemplate: (tid: string, dto: { note?: string; version?: number }) =>
+    request<any>(`/planning/company-templates/${tid}/retire`, { method: 'POST', body: JSON.stringify(dto) }),
+  deleteTemplate: (tid: string) => request<any>(`/planning/company-templates/${tid}`, { method: 'DELETE' }),
 };

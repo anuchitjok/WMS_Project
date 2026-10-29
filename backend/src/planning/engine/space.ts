@@ -1,3 +1,4 @@
+import { sameMaterial } from './materials';
 import { r2 } from './workflow';
 import {
   DataSnapshot,
@@ -51,9 +52,18 @@ export function planSpace(
   receivedUnits: number,
   lineThroughputPerDay: number,
   materials: MaterialResult[],
+  /** Sales simulation with no warehouse: capacity is only checked where the planner entered it. */
+  notChecked = false,
 ): SpaceOut {
   const sp = inp.space;
   const lay = data.layout;
+  const lineStatus = (
+    required: number | null,
+    available: number | null,
+  ): Pick<SpaceLine, 'utilizationPct' | 'shortfall' | 'status'> =>
+    notChecked && available === null
+      ? { utilizationPct: null, shortfall: null, status: 'NOT_CHECKED' }
+      : status(required, available, sp.capacityRiskPct);
   const missing: Issue[] = [];
   const Q = inp.quantity;
   const unitsPerPallet =
@@ -90,13 +100,13 @@ export function planSpace(
   const incoming = materials.filter((m) => m.netRequirement > 0);
   const matNoPallet = incoming.filter((m) => {
     const line = inp.materials.find(
-      (x) => x.productId === m.productId && x.unitsPerPallet,
+      (x) => sameMaterial(x, m) && x.unitsPerPallet,
     );
     return !line;
   });
   const matPallets = incoming.reduce((a, m) => {
     const upp = inp.materials.find(
-      (x) => x.productId === m.productId && x.unitsPerPallet,
+      (x) => sameMaterial(x, m) && x.unitsPerPallet,
     )?.unitsPerPallet;
     return upp ? a + ceil(m.netRequirement / upp) : a;
   }, 0);
@@ -112,7 +122,7 @@ export function planSpace(
   const storageAvail =
     sp.overrideStoragePalletPositions ??
     (lay.palletSlotCount > 0 ? lay.palletSlotFreeCapacity : null);
-  if (storageAvail === null)
+  if (storageAvail === null && !notChecked)
     missing.push({
       area: 'SPACE',
       message:
@@ -130,7 +140,7 @@ export function planSpace(
         : storageAvail === null
           ? 'MISSING'
           : 'WMS',
-    ...status(storageReq, storageAvail, sp.capacityRiskPct),
+    ...lineStatus(storageReq, storageAvail),
     formula:
       sp.receiptPattern === 'ALL_AT_START'
         ? 'pallets = ⌈ units received ÷ units per pallet ⌉ + Σ ⌈ incoming material ÷ units per pallet ⌉'
@@ -169,7 +179,7 @@ export function planSpace(
         : recvAvail === null
           ? 'MISSING'
           : 'WMS',
-    ...status(recvReq, recvAvail, sp.capacityRiskPct),
+    ...lineStatus(recvReq, recvAvail),
     formula:
       'm² = ⌈ pallets staged ÷ stack levels ⌉ × pallet length × pallet width',
     detail:
@@ -182,7 +192,7 @@ export function planSpace(
             ? 'No RECEIVING_AREA on the Floor Plan — general STAGING_AREA used.'
             : 'No receiving area on the Floor Plan.'),
   });
-  if (recvAvail === null)
+  if (recvAvail === null && !notChecked)
     missing.push({
       area: 'SPACE',
       message:
@@ -214,12 +224,12 @@ export function planSpace(
         : dispAvail === null
           ? 'MISSING'
           : 'WMS',
-    ...status(dispReq, dispAvail, sp.capacityRiskPct),
+    ...lineStatus(dispReq, dispAvail),
     formula:
       'm² = ⌈ ⌈ output per day × dispatch dwell days ÷ units per pallet ⌉ ÷ stack levels ⌉ × pallet area',
     detail: `${r2(lineThroughputPerDay)} units/day × ${sp.dispatchDwellDays} day(s) ÷ ${unitsPerPallet ?? '?'} = ${stagedOut ?? '?'} pallets.`,
   });
-  if (dispAvail === null)
+  if (dispAvail === null && !notChecked)
     missing.push({
       area: 'SPACE',
       message:
@@ -259,17 +269,24 @@ export function planSpace(
         : workAvail === null
           ? 'MISSING'
           : 'WMS',
-    ...status(workReq, workAvail, sp.capacityRiskPct),
+    ...lineStatus(workReq, workAvail),
     formula:
       'm² = Σ workstations × bench m² + ⌈ WIP queue pallets ÷ stack levels ⌉ × pallet area',
     detail: `Benches ${r2(bench)} m² + WIP ${queuePallets ?? '?'} pallets (${wipM2 === null ? '?' : r2(wipM2)} m²). Available = WORK_AREA / QC_AREA on the Floor Plan unless entered manually.`,
   });
-  if (workAvail === null)
+  if (workAvail === null && !notChecked)
     missing.push({
       area: 'SPACE',
       message:
         'No work or QC area is drawn on the Floor Plan (in metres) and none was entered',
     });
+
+  // Lines that were not checked must not describe WMS availability that was never read.
+  for (const l of lines.filter((x) => x.status === 'NOT_CHECKED'))
+    l.detail =
+      l.detail
+        .replace(/\s*(Available[^.]*\.|No RECEIVING_AREA[^.]*\.|No receiving area[^.]*\.)\s*$/, '')
+        .trim() + ' No warehouse chosen and no available space entered — not checked.';
 
   const outboundPallets = unitsPerPallet ? ceil(Q / unitsPerPallet) : null;
   return {

@@ -38,6 +38,11 @@ export function PlanStatusPill({ status }: { status: string }) {
   return <Pill className={s.cls}>{s.label}</Pill>;
 }
 
+/** A sales simulation has no approval status — only active or archived. */
+export function SalesPill({ status }: { status?: string }) {
+  return <Pill className="bg-slate-100 text-slate-700 border-slate-300">Sales simulation{status === 'ARCHIVED' ? ' · archived' : ''}</Pill>;
+}
+
 export function RunStatusPill({ status }: { status: string }) {
   const s = RUN_STATUS[status] ?? { label: status, dot: 'bg-slate-400' };
   return (

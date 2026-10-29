@@ -16,11 +16,15 @@ import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { PlanningService } from './planning.service';
+import { PlanningTemplatesService } from './planning-templates.service';
 import type { Principal } from './planning.service';
 import {
   CreateProjectDto,
   CreateScenarioDto,
+  CreateTemplateDto,
   DecisionDto,
+  TemplateDecisionDto,
+  UpdateTemplateDto,
   SubmitPlanDto,
   UpdateProjectDto,
   UpdateScenarioDto,
@@ -37,7 +41,68 @@ import {
 @Access(ACCESS.planningRead)
 @Controller('planning')
 export class PlanningController {
-  constructor(private readonly svc: PlanningService) {}
+  constructor(
+    private readonly svc: PlanningService,
+    private readonly tpl: PlanningTemplatesService,
+  ) {}
+
+  // ── company templates (confirmed standard values; never costs) ──────────
+  @Get('company-templates')
+  listTemplates(@CurrentUser() u: Principal, @Query('status') status?: string) {
+    return this.tpl.list(
+      u,
+      ['DRAFT', 'CONFIRMED', 'RETIRED'].includes(status ?? '') ? status : undefined,
+    );
+  }
+
+  @Get('company-templates/:id')
+  template(@Param('id') id: string) {
+    return this.tpl.detail(id);
+  }
+
+  @Post('company-templates')
+  @Access(ACCESS.planningManage)
+  @ApiOperation({ summary: 'Save a calculated run as a draft company template' })
+  createTemplate(@Body() dto: CreateTemplateDto, @CurrentUser() u: Principal) {
+    return this.tpl.create(dto, u);
+  }
+
+  @Patch('company-templates/:id')
+  @Access(ACCESS.planningManage)
+  updateTemplate(
+    @Param('id') id: string,
+    @Body() dto: UpdateTemplateDto,
+    @CurrentUser() u: Principal,
+  ) {
+    return this.tpl.update(id, dto, u);
+  }
+
+  @Post('company-templates/:id/confirm')
+  @Access(ACCESS.planningApprove)
+  @ApiOperation({ summary: 'Confirm a draft template (second person; basis required)' })
+  confirmTemplate(
+    @Param('id') id: string,
+    @Body() dto: TemplateDecisionDto,
+    @CurrentUser() u: Principal,
+  ) {
+    return this.tpl.confirm(id, dto, u);
+  }
+
+  @Post('company-templates/:id/retire')
+  @Access(ACCESS.planningApprove)
+  retireTemplate(
+    @Param('id') id: string,
+    @Body() dto: TemplateDecisionDto,
+    @CurrentUser() u: Principal,
+  ) {
+    return this.tpl.retire(id, dto, u);
+  }
+
+  @Delete('company-templates/:id')
+  @Access(ACCESS.planningManage)
+  deleteTemplate(@Param('id') id: string, @CurrentUser() u: Principal) {
+    return this.tpl.remove(id, u);
+  }
 
   @Get('templates')
   @ApiOperation({
@@ -59,8 +124,14 @@ export class PlanningController {
     @Query('warehouseId') warehouseId?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('purpose') purpose?: string,
   ) {
-    return this.svc.listProjects(u, { warehouseId, status, search });
+    return this.svc.listProjects(u, {
+      warehouseId,
+      status,
+      search,
+      purpose: purpose === 'SALES' || purpose === 'OPERATIONAL' ? purpose : undefined,
+    });
   }
 
   @Post('projects')
@@ -136,6 +207,19 @@ export class PlanningController {
     @CurrentUser() u: Principal,
   ) {
     return this.svc.getRun(id, runId, u);
+  }
+
+  @Get('projects/:id/runs/:runId/customer-summary')
+  @ApiOperation({
+    summary:
+      'Customer-facing one-page summary of a run (whitelisted: no costs, rates, stock or internal risks)',
+  })
+  customerSummary(
+    @Param('id') id: string,
+    @Param('runId') runId: string,
+    @CurrentUser() u: Principal,
+  ) {
+    return this.svc.customerSummary(id, runId, u);
   }
 
   @Post('projects/:id/runs/:runId/verify')

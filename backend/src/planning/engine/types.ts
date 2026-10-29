@@ -13,7 +13,7 @@
  *  - money: the project currency (`ProjectHeader.currency`).
  */
 
-export const ENGINE_VERSION = 'planning-engine/1.0.0';
+export const ENGINE_VERSION = 'planning-engine/1.1.0';
 
 // ── Inputs ───────────────────────────────────────────────────────────────────
 
@@ -24,9 +24,15 @@ export interface ProjectHeader {
   plannedStart: string;
   targetEnd: string;
   currency: string; // ISO 4217
-  warehouseId: string;
+  warehouseId: string | null; // null only for a sales simulation
   /** PLANNED = forecast demand; PLAN_APPROVED = confirmed planning demand. */
   demandType: 'PLANNED' | 'PLAN_APPROVED';
+  /**
+   * SALES = sales simulation: stock is not read or netted, materials may be
+   * free-text items, and warehouse capacity is only checked against figures
+   * the planner enters. Missing (older runs) = OPERATIONAL.
+   */
+  purpose?: 'OPERATIONAL' | 'SALES';
 }
 
 export interface CalendarInput {
@@ -83,7 +89,10 @@ export interface StageInput {
 }
 
 export interface MaterialInput {
+  /** Product Master item. Sales simulations may leave it empty and name the item instead. */
   productId: string;
+  itemName?: string; // free-text item (sales simulation only)
+  unit?: string; // unit of a free-text item
   stageKey: string; // stage that consumes it (sets the required-by date)
   qtyPerUnit: number; // per unit entering the stage
   scrapPct: number; // extra allowance, % of gross
@@ -131,6 +140,31 @@ export interface CostInput {
   handlingCostPerPallet: number | null;
   delayCostPerDay: number | null;
   otherCosts: { label: string; amount: number }[];
+  pricing: PricingInput;
+}
+
+/**
+ * How a quoted price is derived from the estimated cost. Every figure is
+ * entered by the user — nothing is defaulted except "no quote".
+ *  MARGIN  price = cost ÷ (1 − margin %)   (margin as a share of the price)
+ *  MARKUP  price = cost × (1 + markup %)   (markup as a share of the cost)
+ *  FIXED   price entered directly; the resulting margin is reported
+ */
+export type PricingMethod = 'NONE' | 'MARGIN' | 'MARKUP' | 'FIXED';
+
+export interface PricingInput {
+  method: PricingMethod;
+  marginPct: number | null;
+  markupPct: number | null;
+  fixedPrice: number | null;
+  /** Reserve added to the estimated cost before margin/markup. */
+  contingencyPct: number | null;
+  /** Rounds the calculated price up to a multiple of this amount. */
+  roundTo: number | null;
+  /** null = VAT not shown. */
+  vatPct: number | null;
+  /** Calendar days from the calculation date. null = no validity date. */
+  validityDays: number | null;
 }
 
 export interface ReadinessInput {
@@ -177,7 +211,7 @@ export interface ProductSnapshot {
 }
 
 export interface LayoutSnapshot {
-  warehouseId: string;
+  warehouseId: string | null;
   warehouseCode: string | null;
   palletSlotCount: number; // active PALLET/BULK slots
   palletSlotFreeCapacity: number; // Σ max(0, capacity − stock rows in location)
@@ -315,7 +349,9 @@ export interface InboundLine {
 }
 
 export interface MaterialResult {
-  productId: string;
+  productId: string; // '' for a free-text item
+  /** WMS = netted against live stock; NOT_CHECKED = sales simulation (all to be procured). */
+  supplyCheck: 'WMS' | 'NOT_CHECKED';
   code: string;
   name: string;
   unit: string;
@@ -357,7 +393,8 @@ export interface SpaceLine {
   availableSource: 'WMS' | 'MANUAL_OVERRIDE' | 'MISSING';
   utilizationPct: number | null;
   shortfall: number | null;
-  status: 'OK' | 'RISK' | 'SHORTAGE' | 'INCOMPLETE';
+  /** NOT_CHECKED = sales simulation with no warehouse and no capacity entered. */
+  status: 'OK' | 'RISK' | 'SHORTAGE' | 'INCOMPLETE' | 'NOT_CHECKED';
   formula: string;
   detail: string;
 }
@@ -384,6 +421,34 @@ export interface CostResult {
     material: number | null;
   }[];
   note: string;
+  /** null when no pricing method is chosen. */
+  quote: QuoteResult | null;
+}
+
+export interface QuoteResult {
+  method: Exclude<PricingMethod, 'NONE'>;
+  currency: string;
+  costBase: number;
+  contingencyPct: number;
+  contingencyAmount: number;
+  costWithContingency: number;
+  /** null when it cannot be derived (cost incomplete or method value missing). */
+  price: number | null;
+  pricePerUnit: number | null;
+  marginAmount: number | null;
+  /** Margin as % of the price. */
+  marginPct: number | null;
+  /** Markup as % of the cost (incl. contingency). */
+  markupPct: number | null;
+  vatPct: number | null;
+  vatAmount: number | null;
+  priceIncludingVat: number | null;
+  validUntil: string | null;
+  /** True only when the price rests on a complete cost estimate. */
+  complete: boolean;
+  belowCost: boolean;
+  formula: string;
+  reason: string | null;
 }
 
 export interface Milestone {
@@ -419,7 +484,7 @@ export interface PlanResult {
   assumptions: string[];
   summary: {
     quantity: number;
-    warehouseId: string;
+    warehouseId: string | null;
     plannedStart: string;
     targetEnd: string;
     estimatedFinish: string | null;
