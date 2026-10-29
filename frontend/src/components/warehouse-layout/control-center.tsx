@@ -400,8 +400,10 @@ function printLabel(wh: WarehouseData | null, rack: RackData | null, slot: SlotD
 const STRUCTURE_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
 const OPS_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF'];
 
-export function ControlCenter({ wh, loading, onReload }: {
+export function ControlCenter({ wh, loading, onReload, focus }: {
   wh: WarehouseData | null; loading: boolean; onReload: () => void | Promise<void>;
+  /** Open this slot on arrival (from the 3D view's "View Stock Detail"). `n` makes repeat requests distinct. */
+  focus?: { slotId: string; n: number } | null;
 }) {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
@@ -448,6 +450,19 @@ export function ControlCenter({ wh, loading, onReload }: {
       setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
     }
   }
+
+  // Arriving from the 3D view: open the slot's rack and select it, once per request.
+  const focusDone = useRef(0);
+  useEffect(() => {
+    if (!focus || focus.n === focusDone.current) return;
+    const hit = slotIndex.get(focus.slotId);
+    if (!hit) return; // tree not loaded yet, or the slot belongs to another warehouse
+    focusDone.current = focus.n;
+    setExpanded((cur) => new Set(cur).add(hit.rack.id));
+    setSelectedSlotId(hit.slot.id);
+    loadDetail(hit.slot.id);
+    setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  }, [focus, slotIndex, loadDetail]);
 
   async function refreshAfterChange(slotId: string) {
     await onReload();

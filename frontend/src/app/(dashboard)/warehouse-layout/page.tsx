@@ -6,7 +6,7 @@
 // (physical layout). Occupancy is derived from actual stock placement.
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle } from 'lucide-react';
+import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box } from 'lucide-react';
 import { warehouseApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -17,6 +17,7 @@ import {
 } from '@/components/warehouse-layout/occupancy';
 import { ControlCenter } from '@/components/warehouse-layout/control-center';
 import { FloorPlan } from '@/components/warehouse-layout/floor-plan';
+import { Warehouse3D } from '@/components/warehouse-layout/warehouse-3d';
 
 // ─── Warehouse selector (chips) ─────────────────────────────────────────────────
 
@@ -88,6 +89,12 @@ export default function WarehouseOperationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedWhId, setSelectedWhId] = useState('');
   const [tab, setTab] = useState('control');
+  // "View Stock Detail" in the 3D tab hands a slot to the Racks & slots tab.
+  const [focus, setFocus] = useState<{ slotId: string; n: number } | null>(null);
+  const viewStock = useCallback((slotId: string) => {
+    setFocus((f) => ({ slotId, n: (f?.n ?? 0) + 1 }));
+    setTab('control');
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,7 +143,7 @@ export default function WarehouseOperationsPage() {
           No warehouses are available to you. Ask an administrator to assign one.
         </div>
       ) : (
-        <WarehouseChips warehouses={warehouses} selectedId={selectedWhId} onSelect={setSelectedWhId} />
+        <WarehouseChips warehouses={warehouses} selectedId={selectedWhId} onSelect={(id) => { setSelectedWhId(id); setFocus(null); }} />
       )}
 
       <KpiStrip wh={selectedWh} loading={loading && warehouses.length === 0} />
@@ -146,15 +153,24 @@ export default function WarehouseOperationsPage() {
         <TabsList>
           <TabsTrigger value="control"><Grid3x3 className="h-4 w-4" /> Racks &amp; slots</TabsTrigger>
           <TabsTrigger value="floor"><Map className="h-4 w-4" /> Floor plan</TabsTrigger>
+          <TabsTrigger value="3d"><Box className="h-4 w-4" /> 3D view</TabsTrigger>
         </TabsList>
 
         <TabsContent value="control" className="mt-4">
           {/* Remounting on warehouse change resets expanded rack / selected slot. */}
-          <ControlCenter key={selectedWhId} wh={selectedWh} loading={loading && warehouses.length === 0} onReload={load} />
+          <ControlCenter key={selectedWhId} wh={selectedWh} loading={loading && warehouses.length === 0} onReload={load} focus={focus} />
         </TabsContent>
 
         <TabsContent value="floor" className="mt-4">
           {tab === 'floor' && <FloorPlan warehouseId={selectedWhId} />}
+        </TabsContent>
+
+        <TabsContent value="3d" className="mt-4">
+          {/* Mounted only while open: three.js loads on first visit to this tab. */}
+          {tab === '3d' && (
+            <Warehouse3D key={selectedWhId} wh={selectedWh} loading={loading && warehouses.length === 0}
+              onReload={load} onViewStock={viewStock} />
+          )}
         </TabsContent>
       </Tabs>
     </div>
