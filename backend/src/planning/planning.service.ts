@@ -28,6 +28,7 @@ import {
   ProjectHeader,
 } from './engine/types';
 import { PlanningDataService } from './planning-data.service';
+import { PlanningTemplatesService } from './planning-templates.service';
 import { WORKFLOW_TEMPLATES, templateStageInput } from './templates';
 import {
   CreateProjectDto,
@@ -54,6 +55,7 @@ export class PlanningService {
   constructor(
     private prisma: PrismaService,
     private data: PlanningDataService,
+    private companyTemplates: PlanningTemplatesService,
   ) {}
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -75,7 +77,9 @@ export class PlanningService {
   private async project(id: string, u: Principal): Promise<PlanningProject> {
     const p = await this.prisma.planningProject.findUnique({ where: { id } });
     if (!p) throw new NotFoundException('Project not found');
-    assertWarehouseAccess(u, p.warehouseId, "this project's warehouse");
+    // A sales simulation without a warehouse holds no warehouse data.
+    if (p.warehouseId)
+      assertWarehouseAccess(u, p.warehouseId, "this project's warehouse");
     return p;
   }
 
@@ -154,20 +158,35 @@ export class PlanningService {
   // ── projects ─────────────────────────────────────────────────────────────
   async listProjects(
     u: Principal,
-    q: { warehouseId?: string; status?: string; search?: string },
+    q: {
+      warehouseId?: string;
+      status?: string;
+      search?: string;
+      purpose?: string;
+    },
   ) {
     const wh = warehouseFilter(u, q.warehouseId);
     const rows = await this.prisma.planningProject.findMany({
       where: {
-        ...(wh ? { warehouseId: wh } : {}),
+        // Scoped users also see sales simulations that name no warehouse.
+        ...(wh
+          ? q.warehouseId
+            ? { warehouseId: wh }
+            : { OR: [{ warehouseId: wh }, { warehouseId: null }] }
+          : {}),
+        ...(q.purpose ? { purpose: q.purpose } : {}),
         ...(q.status
           ? { planStatus: q.status }
           : { planStatus: { not: 'ARCHIVED' } }),
         ...(q.search
           ? {
-              OR: [
-                { name: { contains: q.search, mode: 'insensitive' } },
-                { code: { contains: q.search, mode: 'insensitive' } },
+              AND: [
+                {
+                  OR: [
+                    { name: { contains: q.search, mode: 'insensitive' } },
+                    { code: { contains: q.search, mode: 'insensitive' } },
+                  ],
+                },
               ],
             }
           : {}),
@@ -189,7 +208,15 @@ export class PlanningService {
       },
     });
     const whs = await this.prisma.warehouse.findMany({
-      where: { id: { in: [...new Set(rows.map((r) => r.warehouseId))] } },
+      where: {
+        id: {
+          in: [
+            ...new Set(
+              rows.map((r) => r.warehouseId).filter((x): x is string => !!x),
+            ),
+          ],
+        },
+      },
       select: { id: true, code: true, name: true },
     });
     return rows.map(({ runs, ...p }) => ({
@@ -225,10 +252,12 @@ export class PlanningService {
           createdAt: true,
         },
       }),
-      this.prisma.warehouse.findUnique({
-        where: { id: p.warehouseId },
-        select: { id: true, code: true, name: true },
-      }),
+      p.warehouseId
+        ? this.prisma.warehouse.findUnique({
+            where: { id: p.warehouseId },
+            select: { id: true, code: true, name: true },
+          })
+        : null,
       p.productId
         ? this.prisma.product.findUnique({
             where: { id: p.productId },
@@ -252,10 +281,17 @@ export class PlanningService {
       where: { id: { in: userIds } },
       select: { id: true, fullName: true, username: true },
     });
+    const companyTemplate = p.companyTemplateId
+      ? await this.prisma.planningTemplate.findUnique({
+          where: { id: p.companyTemplateId },
+          select: { id: true, code: true, name: true, status: true, confirmedAt: true },
+        })
+      : null;
     return {
       ...p,
       warehouse,
       product,
+      companyTemplate,
       users,
       canViewCost: cost,
       canManage: hasAccess(u, ACCESS.planningManage),
@@ -274,7 +310,10 @@ export class PlanningService {
   }
 
   async createProject(dto: CreateProjectDto, u: Principal) {
-    await this.checkWarehouse(dto.warehouseId, u);
+    const purpose = dto.purpose ?? 'OPERATIONAL';
+    if (dto.warehouseId) await this.checkWarehouse(dto.warehouseId, u);
+    else if (purpose === 'OPERATIONAL')
+      throw new BadRequestException('Choose the warehouse for this project');
     if (
       dto.productId &&
       !(await this.prisma.product.findUnique({
@@ -291,7 +330,10 @@ export class PlanningService {
       WORKFLOW_TEMPLATES.find(
         (t) => t.key === (dto.templateKey ?? dto.projectType),
       ) ?? WORKFLOW_TEMPLATES.find((t) => t.key === 'CUSTOM')!;
-    const inputs = {
+    const company = dto.companyTemplateId
+      ? await this.companyTemplates.startingInputs(dto.companyTemplateId, purpose)
+      : null;
+    const inputs: Record<string, any> = {
       quantity: dto.quantity,
       warehouseId: null,
       transferBatchSize: null,
@@ -323,6 +365,16 @@ export class PlanningService {
       readiness: { workstationsConfirmed: false, equipmentConfirmed: false },
       includePendingRequests: true,
     };
+    if (company) {
+      // Company-confirmed standards; holidays, headcount, costs and prices stay per project.
+      const c = company.content;
+      inputs.transferBatchSize = c.transferBatchSize;
+      inputs.calendar = { ...inputs.calendar, ...c.calendar };
+      inputs.labor = { ...inputs.labor, ...c.labor };
+      inputs.space = { ...inputs.space, ...c.space };
+      inputs.stages = company.stages;
+      inputs.materials = company.materials;
+    }
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     for (let attempt = 0; attempt < 4; attempt++) {
       const n =
@@ -343,7 +395,8 @@ export class PlanningService {
             department: dto.department,
             productId: dto.productId || null,
             scope: dto.scope,
-            warehouseId: dto.warehouseId,
+            purpose,
+            warehouseId: dto.warehouseId || null,
             workLocation: dto.workLocation,
             priority: dto.priority,
             ownerId: dto.ownerId || u.id,
@@ -351,11 +404,13 @@ export class PlanningService {
             plannedStart: new Date(`${dto.plannedStart}T00:00:00Z`),
             targetEnd: new Date(`${dto.targetEnd}T00:00:00Z`),
             currency: dto.currency ?? 'THB',
+            companyTemplateId: company?.template.id ?? null,
             createdById: u.id,
             scenarios: {
               create: {
                 name: 'Baseline',
                 isBaseline: true,
+                notes: company?.note || null,
                 inputs: JSON.stringify(inputs),
                 createdById: u.id,
               },
@@ -366,7 +421,7 @@ export class PlanningService {
           u.id,
           'PLANNING_PROJECT_CREATE',
           p.id,
-          `${code} "${p.name}" created (template ${template.key}, quantity ${dto.quantity})`,
+          `${code} "${p.name}" created${purpose === 'SALES' ? ' as a sales simulation' : ''} (${company ? `company template ${company.template.code}` : `template ${template.key}`}, quantity ${dto.quantity})`,
         );
         return p;
       } catch (e) {
@@ -389,6 +444,8 @@ export class PlanningService {
       throw new ConflictException(
         'The project was changed by someone else — reload and try again',
       );
+    if (dto.warehouseId === '' && p.purpose !== 'SALES')
+      throw new BadRequestException('An operational project needs a warehouse');
     if (dto.warehouseId && dto.warehouseId !== p.warehouseId)
       await this.checkWarehouse(dto.warehouseId, u);
     if (
@@ -411,12 +468,15 @@ export class PlanningService {
       where: { id },
       select: { version: true },
     });
-    const { version, plannedStart, targetEnd, ...rest } = dto;
+    const { version, plannedStart, targetEnd, warehouseId, ...rest } = dto;
     void version;
     const res = await this.prisma.planningProject.updateMany({
       where: { id, version: current.version },
       data: {
         ...rest,
+        ...(warehouseId !== undefined
+          ? { warehouseId: warehouseId || null }
+          : {}),
         ...(plannedStart
           ? { plannedStart: new Date(`${plannedStart}T00:00:00Z`) }
           : {}),
@@ -609,6 +669,7 @@ export class PlanningService {
       warehouseId: p.warehouseId,
       demandType:
         p.planStatus === 'PLAN_APPROVED' ? 'PLAN_APPROVED' : 'PLANNED',
+      purpose: p.purpose === 'SALES' ? 'SALES' : 'OPERATIONAL',
     };
   }
 
@@ -626,7 +687,10 @@ export class PlanningService {
       typeof inputs.warehouseId === 'string' && inputs.warehouseId
         ? inputs.warehouseId
         : p.warehouseId;
-    assertWarehouseAccess(u, warehouseId, 'the planning warehouse');
+    if (warehouseId)
+      assertWarehouseAccess(u, warehouseId, 'the planning warehouse');
+    else if (p.purpose !== 'SALES')
+      throw new BadRequestException('Choose the warehouse for this project');
 
     const header = {
       ...this.header(p),
@@ -646,6 +710,7 @@ export class PlanningService {
       productIds,
       excludeProjectId: projectId,
       asOf,
+      sales: p.purpose === 'SALES',
     });
     const result = calculatePlan(header, inputs, snapshot);
     const inputSnapshot = JSON.stringify({ header, inputs });
@@ -776,6 +841,117 @@ export class PlanningService {
     };
   }
 
+  /**
+   * One-page summary to show or hand to a customer. Built from a whitelist, so
+   * it never carries costs, labour rates, margins, stock levels, warehouse
+   * capacity, other projects or internal risks — whatever the caller may see.
+   */
+  async customerSummary(projectId: string, runId: string, u: Principal) {
+    const p = await this.project(projectId, u);
+    const run = await this.prisma.planningRun.findFirst({
+      where: { id: runId, projectId },
+      include: { scenario: { select: { name: true, updatedAt: true } } },
+    });
+    if (!run) throw new NotFoundException('Calculation run not found');
+    const r = JSON.parse(run.result) as PlanResult;
+    if (r.overallStatus === 'INSUFFICIENT_DATA' || !r.summary.estimatedFinish)
+      throw new BadRequestException(
+        'This run has no complete schedule — fix the inputs and recalculate first',
+      );
+    const { inputs } = JSON.parse(run.inputSnapshot) as {
+      inputs: Record<string, any>;
+    };
+    const stageIn = new Map<string, any>(
+      (Array.isArray(inputs.stages) ? inputs.stages : []).map((s: any) => [
+        String(s?.key),
+        s,
+      ]),
+    );
+    const [product, preparer] = await Promise.all([
+      p.productId
+        ? this.prisma.product.findUnique({
+            where: { id: p.productId },
+            select: { code: true, name: true },
+          })
+        : null,
+      this.prisma.user.findUnique({
+        where: { id: u.id },
+        select: { fullName: true },
+      }),
+    ]);
+    const cal = inputs.calendar ?? {};
+    const lastHour = Math.max(0, ...r.stages.map((s) => s.finishHour));
+    const durationWorkingDays =
+      r.calendar.clockHoursPerDay > 0
+        ? Math.ceil(lastHour / r.calendar.clockHoursPerDay - 1e-9)
+        : null;
+    const WEEKDAY = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const days: number[] = Array.isArray(cal.workingDays)
+      ? cal.workingDays.map(Number).filter((d: number) => d >= 1 && d <= 7)
+      : [];
+    const gates = r.stages.filter((s) => stageIn.get(s.key)?.isQualityGate);
+    const q = r.cost?.quote ?? null;
+    const notes = [
+      `Working calendar: ${days.map((d) => WEEKDAY[d]).join(', ') || '—'}; ${cal.shiftsPerDay ?? '—'} shift(s) per day of ${cal.hoursPerShift ?? '—'} hours.`,
+      ...(Array.isArray(cal.holidays) && cal.holidays.length
+        ? [`${cal.holidays.length} holiday(s) are excluded from working days.`]
+        : []),
+      ...(gates.length
+        ? [`Quality check at: ${gates.map((s) => s.name).join(', ')}.`]
+        : []),
+      'Dates are planning estimates based on the working calendar and the agreed process times. They are confirmed only after the order and start date are agreed.',
+    ];
+    return {
+      runId: run.id,
+      runNumber: run.runNumber,
+      scenarioName: run.scenario.name,
+      stale: run.scenario.updatedAt > run.createdAt,
+      asOf: r.asOf,
+      generatedAt: new Date().toISOString(),
+      preparedBy: preparer?.fullName ?? null,
+      project: {
+        code: p.code,
+        name: p.name,
+        projectType: p.projectType,
+        customer: p.customer,
+        scope: p.scope,
+        product: product ? `${product.code} — ${product.name}` : null,
+      },
+      quantity: r.summary.quantity,
+      plannedStart: r.summary.plannedStart,
+      targetEnd: r.summary.targetEnd,
+      estimatedFinish: r.summary.estimatedFinish,
+      meetsTarget: (r.summary.scheduleVarianceWorkingDays ?? 0) <= 0,
+      durationWorkingDays,
+      outputPerDay: r.summary.lineThroughputPerDay,
+      teamSize: r.summary.requiredHeadcount,
+      shiftsPerDay: cal.shiftsPerDay ?? null,
+      stages: r.stages.map((s) => ({
+        name: s.name,
+        startDate: s.startDate,
+        finishDate: s.finishDate,
+        workingDays: s.durationWorkingDays,
+        isQualityGate: !!stageIn.get(s.key)?.isQualityGate,
+        completionCriteria: String(stageIn.get(s.key)?.completionCriteria ?? ''),
+      })),
+      notes,
+      // Customer-facing price only: never the cost, contingency or margin.
+      quote:
+        q && q.price !== null
+          ? {
+              price: q.price,
+              pricePerUnit: q.pricePerUnit,
+              currency: q.currency,
+              vatPct: q.vatPct,
+              vatAmount: q.vatAmount,
+              priceIncludingVat: q.priceIncludingVat,
+              validUntil: q.validUntil,
+              complete: q.complete,
+            }
+          : null,
+    };
+  }
+
   async compare(projectId: string, runIds: string[], u: Principal) {
     await this.project(projectId, u);
     if (!runIds.length || runIds.length > 6)
@@ -863,6 +1039,10 @@ export class PlanningService {
     u: Principal,
   ) {
     const p = await this.project(projectId, u);
+    if (p.purpose === 'SALES')
+      throw new ConflictException(
+        'A sales simulation is not submitted for planning approval — create an operational project when the work is confirmed',
+      );
     if (!['DRAFT', 'PLAN_REJECTED'].includes(p.planStatus))
       throw new ConflictException(
         `A plan in status ${p.planStatus} cannot be submitted`,

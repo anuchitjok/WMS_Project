@@ -13,8 +13,8 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const patch = (set: Set, key: string) => (k: string, v: unknown) => set((i) => ({ ...i, [key]: { ...(i[key] ?? {}), [k]: v } }));
 
 // ── Calendar & labour ────────────────────────────────────────────────────────
-export function SetupEditor({ inputs, set, warehouses, defaultWarehouseId, readOnly, canCost, currency }: {
-  inputs: Inputs; set: Set; warehouses: any[]; defaultWarehouseId: string; readOnly: boolean; canCost: boolean; currency: string;
+export function SetupEditor({ inputs, set, warehouses, defaultWarehouseId, readOnly, canCost, currency, sales }: {
+  inputs: Inputs; set: Set; warehouses: any[]; defaultWarehouseId: string | null; readOnly: boolean; canCost: boolean; currency: string; sales?: boolean;
 }) {
   const cal = inputs.calendar ?? {};
   const lab = inputs.labor ?? {};
@@ -28,18 +28,20 @@ export function SetupEditor({ inputs, set, warehouses, defaultWarehouseId, readO
       <Section title="Quantity and warehouse" hint="Quantity is the number of good units the project must deliver.">
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Planned quantity"><NumInput value={inputs.quantity} disabled={readOnly} step="1" onChange={(v) => set((i) => ({ ...i, quantity: v }))} /></Field>
-          <Field label="Plan in warehouse" hint="Choose another warehouse to test an alternative">
+          <Field label="Plan in warehouse" hint={sales ? 'Optional. A warehouse is used only for its space figures — stock is never read in a sales simulation.' : 'Choose another warehouse to test an alternative'}>
             <SelectInput value={inputs.warehouseId ?? ''} disabled={readOnly} onChange={(e) => set((i) => ({ ...i, warehouseId: e.target.value || null }))}>
-              <option value="">Project warehouse ({warehouses.find((w) => w.id === defaultWarehouseId)?.code ?? '—'})</option>
+              <option value="">{defaultWarehouseId ? `Project warehouse (${warehouses.find((w) => w.id === defaultWarehouseId)?.code ?? '—'})` : 'No warehouse — space not checked'}</option>
               {warehouses.filter((w) => w.id !== defaultWarehouseId).map((w) => <option key={w.id} value={w.id}>{w.code} — {w.name}</option>)}
             </SelectInput>
           </Field>
           <Field label="Transfer batch size" hint="Units moved to the next stage together. Empty = the whole quantity (stages do not overlap).">
             <NumInput value={inputs.transferBatchSize} disabled={readOnly} step="1" onChange={(v) => set((i) => ({ ...i, transferBatchSize: v }))} />
           </Field>
-          <div className="flex items-end pb-2">
-            <Check label="Count submitted withdrawal requests as demand" checked={inputs.includePendingRequests !== false} disabled={readOnly} onChange={(v) => set((i) => ({ ...i, includePendingRequests: v }))} />
-          </div>
+          {!sales && (
+            <div className="flex items-end pb-2">
+              <Check label="Count submitted withdrawal requests as demand" checked={inputs.includePendingRequests !== false} disabled={readOnly} onChange={(v) => set((i) => ({ ...i, includePendingRequests: v }))} />
+            </div>
+          )}
         </div>
       </Section>
 
@@ -227,16 +229,16 @@ export function WorkflowEditor({ inputs, set, readOnly, templates }: { inputs: I
 }
 
 // ── Materials ────────────────────────────────────────────────────────────────
-export function MaterialsEditor({ inputs, set, readOnly, products, canCost, currency }: { inputs: Inputs; set: Set; readOnly: boolean; products: any[]; canCost: boolean; currency: string }) {
+export function MaterialsEditor({ inputs, set, readOnly, products, canCost, currency, sales }: { inputs: Inputs; set: Set; readOnly: boolean; products: any[]; canCost: boolean; currency: string; sales?: boolean }) {
   const mats: any[] = inputs.materials ?? [];
   const inbound: any[] = inputs.manualInbound ?? [];
   const stages: any[] = inputs.stages ?? [];
   const pmap = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const updM = (idx: number, k: string, v: unknown) => set((i) => ({ ...i, materials: i.materials.map((m: any, j: number) => (j === idx ? { ...m, [k]: v } : m)) }));
   const updI = (idx: number, k: string, v: unknown) => set((i) => ({ ...i, manualInbound: i.manualInbound.map((m: any, j: number) => (j === idx ? { ...m, [k]: v } : m)) }));
-  const productSelect = (value: string, onChange: (v: string) => void) => (
+  const productSelect = (value: string, onChange: (v: string) => void, allowFree = false) => (
     <SelectInput value={value} disabled={readOnly} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Choose product…</option>
+      <option value="">{allowFree ? 'Free-text item (not in Product Master)' : 'Choose product…'}</option>
       {value && !pmap.has(value) && <option value={value}>{value} (not in list)</option>}
       {products.map((p) => <option key={p.id} value={p.id}>{p.code} — {p.name}</option>)}
     </SelectInput>
@@ -244,17 +246,30 @@ export function MaterialsEditor({ inputs, set, readOnly, products, canCost, curr
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-        This WMS has no bill of materials, MRP run or purchase-order module yet. Materials below are a <b>manually defined</b> project list,
-        and expected supply is entered by hand. Stock, reservations, items awaiting inspection and submitted requests are read live from the WMS when you calculate.
-      </div>
+      {sales ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
+          <b>Sales simulation:</b> stock is never read. Every material is treated as <b>to be procured</b>, so the quote does not depend on today&apos;s stock.
+          Pick a Product Master item, or choose &quot;Free-text item&quot; and type the name for anything that is not in the system.
+        </div>
+      ) : (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+          This WMS has no bill of materials, MRP run or purchase-order module yet. Materials below are a <b>manually defined</b> project list,
+          and expected supply is entered by hand. Stock, reservations, items awaiting inspection and submitted requests are read live from the WMS when you calculate.
+        </div>
+      )}
       <Section title="Material requirements (manually defined)" hint="Quantity per unit entering the consuming stage. Product Master minimum stock is kept back as safety stock."
         action={!readOnly && <Button size="sm" variant="outline" className="h-8" onClick={() => set((i) => ({ ...i, materials: [...(i.materials ?? []), { productId: '', stageKey: stages[0]?.key ?? '', qtyPerUnit: null, scrapPct: 0, leadTimeDays: null, packMultiple: null, unitCostOverride: null, unitsPerPallet: null, source: 'MANUAL' }] }))}><Plus className="h-3.5 w-3.5 mr-1" />Material</Button>}>
         {!mats.length ? <p className="text-sm text-slate-400 py-4 text-center">No materials — the plan will not check material availability.</p> : (
           <div className="space-y-2">
             {mats.map((m, idx) => (
               <div key={idx} className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-2 items-end rounded-lg border border-slate-100 p-2">
-                <Field label="Product" className="col-span-2 lg:col-span-2">{productSelect(m.productId, (v) => updM(idx, 'productId', v))}</Field>
+                <Field label="Product" className="col-span-2 lg:col-span-2">{productSelect(m.productId, (v) => updM(idx, 'productId', v), sales)}</Field>
+                {sales && !m.productId && (
+                  <>
+                    <Field label="Item name" className="col-span-2 lg:col-span-2"><TextInput value={m.itemName ?? ''} maxLength={120} disabled={readOnly} placeholder="e.g. Thermal pad" onChange={(e) => updM(idx, 'itemName', e.target.value)} /></Field>
+                    <Field label="Unit"><TextInput value={m.unit ?? ''} maxLength={20} disabled={readOnly} placeholder="pcs" onChange={(e) => updM(idx, 'unit', e.target.value)} /></Field>
+                  </>
+                )}
                 <Field label="Used at stage">
                   <SelectInput value={m.stageKey} disabled={readOnly} onChange={(e) => updM(idx, 'stageKey', e.target.value)}>
                     {stages.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
@@ -275,7 +290,7 @@ export function MaterialsEditor({ inputs, set, readOnly, products, canCost, curr
         )}
       </Section>
 
-      <Section title="Expected supply (manual)" hint="Open supplier orders or transfers known outside the WMS. Only quantities arriving by the required-by date reduce the shortage."
+      {!sales && <Section title="Expected supply (manual)" hint="Open supplier orders or transfers known outside the WMS. Only quantities arriving by the required-by date reduce the shortage."
         action={!readOnly && <Button size="sm" variant="outline" className="h-8" onClick={() => set((i) => ({ ...i, manualInbound: [...(i.manualInbound ?? []), { productId: '', quantity: null, expectedDate: '', reference: '' }] }))}><Plus className="h-3.5 w-3.5 mr-1" />Expected supply</Button>}>
         {!inbound.length ? <p className="text-sm text-slate-400 py-4 text-center">None entered.</p> : (
           <div className="space-y-2">
@@ -292,7 +307,7 @@ export function MaterialsEditor({ inputs, set, readOnly, products, canCost, curr
             ))}
           </div>
         )}
-      </Section>
+      </Section>}
     </div>
   );
 }
@@ -356,6 +371,40 @@ export function SpaceCostEditor({ inputs, set, readOnly, canCost, currency }: { 
           </div>
         </Section>
       )}
+
+      {canCost && <PricingEditor pricing={co.pricing ?? {}} set={(v) => setCo('pricing', v)} readOnly={readOnly} currency={currency} />}
     </div>
+  );
+}
+
+/** Selling price from cost. Only users who can see costs get here — a margin reveals the cost. */
+function PricingEditor({ pricing: pr, set, readOnly, currency }: { pricing: any; set: (v: any) => void; readOnly: boolean; currency: string }) {
+  const method = pr.method ?? 'NONE';
+  const up = (k: string, v: any) => set({ ...pr, [k]: v });
+  return (
+    <Section title="Selling price (quote)" className="lg:col-span-2"
+      hint="The price is worked out from the cost estimate above when you calculate. A margin or markup is applied only when the cost estimate is complete. The customer summary shows the price, never the cost or margin.">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Field label="Pricing method">
+          <SelectInput value={method} disabled={readOnly} onChange={(e) => up('method', e.target.value)}>
+            <option value="NONE">No price</option>
+            <option value="MARGIN">Margin % of price</option>
+            <option value="MARKUP">Markup % on cost</option>
+            <option value="FIXED">Fixed selling price</option>
+          </SelectInput>
+        </Field>
+        {method === 'MARGIN' && <Field label="Margin %" hint="Price = cost ÷ (1 − margin)"><NumInput value={pr.marginPct} disabled={readOnly} onChange={(v) => up('marginPct', v)} /></Field>}
+        {method === 'MARKUP' && <Field label="Markup %" hint="Price = cost × (1 + markup)"><NumInput value={pr.markupPct} disabled={readOnly} onChange={(v) => up('markupPct', v)} /></Field>}
+        {method === 'FIXED' && <Field label={`Selling price (${currency})`} hint="Excluding VAT"><NumInput value={pr.fixedPrice} disabled={readOnly} onChange={(v) => up('fixedPrice', v)} /></Field>}
+        {method !== 'NONE' && (
+          <>
+            <Field label="Contingency %" hint={method === 'FIXED' ? 'Added to cost before the margin check' : 'Added to cost first'}><NumInput value={pr.contingencyPct} disabled={readOnly} onChange={(v) => up('contingencyPct', v)} /></Field>
+            {method !== 'FIXED' && <Field label="Round price up to" hint={`e.g. 100 ${currency}`}><NumInput value={pr.roundTo} disabled={readOnly} onChange={(v) => up('roundTo', v)} /></Field>}
+            <Field label="VAT %" hint="Leave empty to hide VAT"><NumInput value={pr.vatPct} disabled={readOnly} onChange={(v) => up('vatPct', v)} /></Field>
+            <Field label="Price valid for (days)" hint="From the calculation date"><NumInput value={pr.validityDays} step="1" disabled={readOnly} onChange={(v) => up('validityDays', v)} /></Field>
+          </>
+        )}
+      </div>
+    </Section>
   );
 }

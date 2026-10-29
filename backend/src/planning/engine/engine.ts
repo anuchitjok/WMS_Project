@@ -1,5 +1,5 @@
 import { WorkCalendar, addDays, daysBetween } from './calendar';
-import { planCost } from './cost';
+import { fm, planCost } from './cost';
 import { planMaterials } from './materials';
 import { planSpace } from './space';
 import {
@@ -272,6 +272,7 @@ function calculateValid(
     wf.receivedUnits,
     wf.lineThroughputPerDay,
     mats.lines,
+    header.purpose === 'SALES' && !data.layout.warehouseId,
   );
   missing.push(...space.missing);
   const handled =
@@ -286,6 +287,7 @@ function calculateValid(
     mats.lines,
     handled,
     late ? variance : 0,
+    data.asOf,
   );
 
   // Staffing-limited alternative: stages run one after another with only the available people.
@@ -348,7 +350,15 @@ function calculateValid(
       message: `${mp.requiredHeadcount} people needed, ${mp.availableHeadcount} available.`,
       action: `Add ${mp.additionalWorkersNeeded} worker(s)${mp.overtime?.authorized ? ', or use authorized overtime for the hour gap' : ''}, or reduce workstations running at the same time.`,
     });
-  for (const m of matShort)
+  for (const m of matShort.filter((x) => x.supplyCheck === 'NOT_CHECKED'))
+    risks.push({
+      level: 'HIGH',
+      area: 'Material',
+      message: `${m.code}: ordered today with ${m.leadTimeDays} days lead time it arrives ${m.coverageDate}, after it is needed on ${m.requiredByDate}.`,
+      action:
+        'Agree a later start date, a shorter supplier lead time, or ask the customer to supply this item.',
+    });
+  for (const m of matShort.filter((x) => x.supplyCheck !== 'NOT_CHECKED'))
     risks.push({
       level: m.coverageDate === null || !m.arrivesInTime ? 'HIGH' : 'MEDIUM',
       area: 'Material',
@@ -378,6 +388,20 @@ function calculateValid(
       area: 'Workflow',
       message: `Bottleneck ${bn.name}: about ${bn.queueEstimate} units may queue in front of it.`,
       action: `Add workstations or people at ${bn.name} to balance the line.`,
+    });
+  if (cost.quote?.belowCost)
+    risks.push({
+      level: 'HIGH',
+      area: 'Cost',
+      message: `Selling price ${fm(cost.quote.price!)} ${cost.currency} is below the estimated cost of ${fm(cost.quote.costWithContingency)} ${cost.currency} (loss ${fm(-cost.quote.marginAmount!)}).`,
+      action: 'Raise the price or reduce the cost before quoting.',
+    });
+  if (cost.quote && cost.quote.price === null)
+    risks.push({
+      level: 'MEDIUM',
+      area: 'Cost',
+      message: `No quoted price: ${cost.quote.reason}`,
+      action: 'Complete the pricing inputs on the Space & cost tab.',
     });
   if (!cost.complete)
     risks.push({
@@ -434,7 +458,9 @@ function calculateValid(
     {
       key: 'capacity',
       label: 'Warehouse capacity sufficient',
-      status: space.lines.some((s) => s.status === 'INCOMPLETE')
+      status: space.lines.some(
+        (s) => s.status === 'INCOMPLETE' || s.status === 'NOT_CHECKED',
+      )
         ? 'UNKNOWN'
         : flags.includes('WAREHOUSE_CAPACITY_RISK')
           ? 'NOT_MET'
@@ -496,7 +522,9 @@ function calculateValid(
           ? 'RISK'
           : space.lines.some((s) => s.status === 'INCOMPLETE')
             ? 'INCOMPLETE'
-            : 'OK',
+            : space.lines.some((s) => s.status === 'NOT_CHECKED')
+              ? 'NOT_CHECKED'
+              : 'OK',
       estimatedCost: cost.total,
       costComplete: cost.complete,
     },

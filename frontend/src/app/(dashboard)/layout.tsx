@@ -48,14 +48,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   if (!isAuthenticated) return null;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50">
+    <div className="flex h-screen overflow-hidden bg-slate-50 print:block print:h-auto print:overflow-visible print:bg-white">
       {/* Desktop sidebar */}
-      <div className="hidden lg:block flex-shrink-0">
+      <div className="hidden lg:block flex-shrink-0 print:hidden">
         <Sidebar />
       </div>
 
       {/* Mobile drawer */}
-      <div className={cn('fixed inset-0 z-50 lg:hidden', mobileOpen ? '' : 'pointer-events-none')}>
+      <div className={cn('fixed inset-0 z-50 lg:hidden print:hidden', mobileOpen ? '' : 'pointer-events-none')}>
         <div
           className={cn('absolute inset-0 bg-black/50 transition-opacity', mobileOpen ? 'opacity-100' : 'opacity-0')}
           onClick={() => setMobileOpen(false)}
@@ -65,9 +65,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden print:block print:overflow-visible">
         {/* Mobile top bar */}
-        <header className="lg:hidden flex items-center gap-3 px-4 h-14 bg-white text-slate-900 border-b border-slate-200 flex-shrink-0">
+        <header className="lg:hidden print:hidden flex items-center gap-3 px-4 h-14 bg-white text-slate-900 border-b border-slate-200 flex-shrink-0">
           <button onClick={() => setMobileOpen((v) => !v)} aria-label="Toggle menu" className="p-1 text-slate-600">
             {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
@@ -79,9 +79,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </header>
 
         {/* Desktop sticky header */}
-        <AppHeader />
+        <div className="print:hidden"><AppHeader /></div>
 
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto print:overflow-visible">{children}</main>
       </div>
     </div>
   );

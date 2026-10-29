@@ -31,6 +31,19 @@ const UNRESERVED_REQUEST: RequestStatus[] = [
   RequestStatus.PENDING_APPROVAL,
 ];
 const PALLET_SLOTS: SlotType[] = [SlotType.PALLET, SlotType.BULK];
+const EMPTY_LAYOUT: LayoutSnapshot = {
+  warehouseId: null,
+  warehouseCode: null,
+  palletSlotCount: 0,
+  palletSlotFreeCapacity: 0,
+  otherSlotCount: 0,
+  hasLayout: false,
+  layoutUnit: null,
+  receivingAreaM2: null,
+  dispatchAreaM2: null,
+  stagingAreaM2: null,
+  workAreaM2: null,
+};
 
 type Tx = Prisma.TransactionClient;
 
@@ -43,20 +56,71 @@ type Tx = Prisma.TransactionClient;
 export class PlanningDataService {
   constructor(private prisma: PrismaService) {}
 
+  /**
+   * `sales`: a sales simulation reads Product Master names, units and standard
+   * cost only — never stock, requests or other plans — and reads the layout
+   * only when a warehouse was chosen.
+   */
   async snapshot(opts: {
-    warehouseId: string;
+    warehouseId: string | null;
     productIds: string[];
     excludeProjectId: string;
     asOf: string;
+    sales?: boolean;
   }): Promise<DataSnapshot> {
     return this.prisma.$transaction(
       async (tx) => ({
         asOf: opts.asOf,
-        products: await this.products(tx, opts),
-        layout: await this.layout(tx, opts.warehouseId),
+        products:
+          opts.sales || !opts.warehouseId
+            ? await this.masterOnly(tx, opts.productIds)
+            : await this.products(tx, {
+                ...opts,
+                warehouseId: opts.warehouseId,
+              }),
+        layout: opts.warehouseId
+          ? await this.layout(tx, opts.warehouseId)
+          : EMPTY_LAYOUT,
       }),
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
+  }
+
+  /** Product Master fields only; every stock and demand figure is 0. */
+  private async masterOnly(
+    tx: Tx,
+    productIds: string[],
+  ): Promise<ProductSnapshot[]> {
+    const ids = [...new Set(productIds.filter(Boolean))];
+    if (!ids.length) return [];
+    const products = await tx.product.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        unit: true,
+        unitCost: true,
+        isActive: true,
+        productStatus: true,
+      },
+    });
+    return products.map((p) => ({
+      productId: p.id,
+      code: p.code,
+      name: p.name,
+      unit: p.unit,
+      standardUnitCost: p.unitCost,
+      minimumStock: 0,
+      isActive: p.isActive && p.productStatus === 'ACTIVE',
+      available: 0,
+      reserved: 0,
+      inInspection: 0,
+      blocked: 0,
+      pendingRequestDemand: 0,
+      otherPlanDemand: 0,
+      otherPlanRefs: [],
+    }));
   }
 
   private async products(
@@ -104,6 +168,7 @@ export class PlanningDataService {
     const others = await tx.planningProject.findMany({
       where: {
         planStatus: 'PLAN_APPROVED',
+        purpose: 'OPERATIONAL', // sales simulations are never demand
         id: { not: opts.excludeProjectId },
         approvedRunId: { not: null },
       },

@@ -16,6 +16,7 @@ import {
 import { PROJECT_TYPES, WORKFLOW_TEMPLATES } from '../templates';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+export const PURPOSES = ['OPERATIONAL', 'SALES'] as const;
 const CURRENCY = /^[A-Z]{3}$/;
 
 export class CreateProjectDto {
@@ -44,7 +45,13 @@ export class CreateProjectDto {
   @IsString()
   @MaxLength(2000)
   scope?: string;
-  @ApiProperty() @IsString() @IsNotEmpty() warehouseId!: string;
+  /** OPERATIONAL (default) = real project plan; SALES = sales simulation. */
+  @ApiPropertyOptional({ enum: PURPOSES })
+  @IsOptional()
+  @IsIn(PURPOSES)
+  purpose?: (typeof PURPOSES)[number];
+  /** Required for OPERATIONAL projects; optional for a SALES simulation. */
+  @ApiPropertyOptional() @IsOptional() @IsString() warehouseId?: string;
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -75,6 +82,8 @@ export class CreateProjectDto {
   @IsOptional()
   @IsIn(WORKFLOW_TEMPLATES.map((t) => t.key))
   templateKey?: string;
+  /** A CONFIRMED company template: its stages and standard values pre-fill the baseline. */
+  @ApiPropertyOptional() @IsOptional() @IsString() companyTemplateId?: string;
 }
 
 export class UpdateProjectDto {
@@ -109,10 +118,10 @@ export class UpdateProjectDto {
   @IsString()
   @MaxLength(2000)
   scope?: string;
+  /** Empty string clears it (SALES simulations only). */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
   warehouseId?: string;
   @ApiPropertyOptional()
   @IsOptional()
@@ -187,4 +196,65 @@ export class DecisionDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+}
+
+/** Save a calculated run's inputs as a DRAFT company template. */
+export class CreateTemplateDto {
+  @ApiProperty() @IsString() @IsNotEmpty() runId!: string;
+  @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(120) name!: string;
+  @ApiPropertyOptional({ enum: PROJECT_TYPES })
+  @IsOptional()
+  @IsIn(PROJECT_TYPES)
+  projectType?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+  /** Where the standard values come from — required before confirmation. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  basis?: string;
+  /** A confirmed template this one will replace once confirmed. */
+  @ApiPropertyOptional() @IsOptional() @IsString() replacesId?: string;
+}
+
+export class UpdateTemplateDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name?: string;
+  @ApiPropertyOptional({ enum: PROJECT_TYPES })
+  @IsOptional()
+  @IsIn(PROJECT_TYPES)
+  projectType?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  description?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  basis?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) version?: number;
+}
+
+export class TemplateDecisionDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  basis?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) version?: number;
 }

@@ -148,6 +148,42 @@ describe('Schema drift and migration script', () => {
     expect(grants.rows[0].n).toBe(0);
   });
 
+  it('23_planning_sales.sql applies cleanly to an existing database, twice', async () => {
+    await db.exec(
+      `INSERT INTO "PlanningProject" ("id","code","name","projectType","warehouseId","plannedStart","targetEnd","updatedAt") VALUES ('pp-old','PRJ-OLD','Old','REPAIR','wh-x',now(),now(),now())`,
+    );
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '23_planning_sales.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const old = await db.query<{ purpose: string; warehouseId: string }>(
+      `SELECT "purpose", "warehouseId" FROM "PlanningProject" WHERE id = 'pp-old'`,
+    );
+    expect(old.rows[0]).toEqual({ purpose: 'OPERATIONAL', warehouseId: 'wh-x' });
+    await db.exec(`DELETE FROM "PlanningProject" WHERE id = 'pp-old'`);
+  });
+
+  it('24_planning_templates.sql applies cleanly after 23, twice, and leaves old projects untouched', async () => {
+    await db.exec(
+      `INSERT INTO "PlanningProject" ("id","code","name","projectType","warehouseId","plannedStart","targetEnd","updatedAt") VALUES ('pp-old2','PRJ-OLD2','Old','REPAIR','wh-x',now(),now(),now())`,
+    );
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '24_planning_templates.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const old = await db.query<{ companyTemplateId: string | null; purpose: string }>(
+      `SELECT "companyTemplateId", "purpose" FROM "PlanningProject" WHERE id = 'pp-old2'`,
+    );
+    expect(old.rows[0]).toEqual({ companyTemplateId: null, purpose: 'OPERATIONAL' });
+    const n = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM "PlanningTemplate"`);
+    expect(n.rows[0].n).toBe(0); // nothing seeded
+    await db.exec(`DELETE FROM "PlanningProject" WHERE id = 'pp-old2'`);
+  });
+
   it('after the script, the database matches schema.prisma (no drift left)', async () => {
     const sql = (await diffToSchema()).replace(/^--.*$/gm, '').trim();
     expect(sql).toBe('');

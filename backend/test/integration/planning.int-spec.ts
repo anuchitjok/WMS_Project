@@ -296,6 +296,56 @@ describe('Project Planning', () => {
     });
   });
 
+  it('customer summary carries the schedule but nothing internal (whitelisted fields only)', async () => {
+    const proj = await fx.as(manager).get(`/planning/projects/${projectId}`);
+    const [good, insufficient] = proj.body.runs;
+    const url = (rid: string) =>
+      `/planning/projects/${projectId}/runs/${rid}/customer-summary`;
+    expectStatus(await fx.as(requester).get(url(good.id)), 403);
+    expectStatus(await fx.as(manager).get(url(insufficient.id)), 400);
+
+    const res = await fx.as(manager).get(url(good.id));
+    expectStatus(res, 200);
+    const s = res.body;
+    expect(s.project.name).toBe('Repair batch');
+    expect(s.quantity).toBe(50);
+    expect(s.estimatedFinish).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(s.outputPerDay).toBe(40);
+    expect(s.stages.map((x: { name: string }) => x.name)).toEqual([
+      'Inspection',
+      'Repair',
+      'QA',
+    ]);
+    expect(s.stages[2].isQualityGate).toBe(true);
+    expect(s.notes.join(' ')).toContain('Mon, Tue, Wed, Thu, Fri');
+
+    // Every key in the payload is on the whitelist — nothing about cost, stock or warehouse.
+    const keys = new Set<string>();
+    const walk = (v: unknown) => {
+      if (Array.isArray(v)) v.forEach(walk);
+      else if (v && typeof v === 'object')
+        for (const [k, x] of Object.entries(v)) {
+          keys.add(k);
+          walk(x);
+        }
+    };
+    walk(s);
+    const allowed = [
+      'runId', 'runNumber', 'scenarioName', 'stale', 'asOf', 'generatedAt',
+      'preparedBy', 'project', 'code', 'name', 'projectType', 'customer',
+      'scope', 'product', 'quantity', 'plannedStart', 'targetEnd',
+      'estimatedFinish', 'meetsTarget', 'durationWorkingDays', 'outputPerDay',
+      'teamSize', 'shiftsPerDay', 'stages', 'startDate', 'finishDate',
+      'workingDays', 'isQualityGate', 'completionCriteria', 'notes', 'quote',
+      'price', 'pricePerUnit', 'currency', 'vatPct', 'vatAmount',
+      'priceIncludingVat', 'validUntil', 'complete',
+    ];
+    expect([...keys].filter((k) => !allowed.includes(k))).toEqual([]);
+    const text = JSON.stringify(s);
+    for (const leak of [whId, partId, '"150"', 'onHand', 'shortage'])
+      expect(text).not.toContain(leak);
+  });
+
   it('hides costs from users without cost visibility and keeps their cost inputs intact', async () => {
     const proj = await fx.as(supervisor).get(`/planning/projects/${projectId}`);
     expectStatus(proj, 200);
@@ -542,5 +592,242 @@ describe('Project Planning', () => {
         .delete(`/planning/projects/${projectId}/scenarios/${clone.body.id}`),
       409,
     );
+  });
+
+  describe('sales simulation', () => {
+    let salesId: string;
+    let salesRunId: string;
+
+    it('can be created without a warehouse; an operational project cannot', async () => {
+      const base = {
+        name: 'Quote: ACME refurbishment',
+        projectType: 'REPAIR',
+        plannedStart: day(30),
+        targetEnd: day(60),
+        quantity: 50,
+      };
+      expectStatus(await fx.as(manager).post('/planning/projects', base), 400);
+      const res = await fx
+        .as(manager)
+        .post('/planning/projects', { ...base, purpose: 'SALES', customer: 'ACME' });
+      expectStatus(res, 201);
+      expect(res.body.purpose).toBe('SALES');
+      expect(res.body.warehouseId).toBeNull();
+      salesId = res.body.id;
+
+      // A warehouse-scoped user can see it: it holds no warehouse data.
+      const list = await fx.as(scoped).get('/planning/projects?purpose=SALES');
+      expect(list.body.map((x: { id: string }) => x.id)).toContain(salesId);
+      expectStatus(await fx.as(scoped).get(`/planning/projects/${salesId}`), 200);
+      const ops = await fx.as(manager).get('/planning/projects?purpose=OPERATIONAL');
+      expect(ops.body.map((x: { id: string }) => x.id)).not.toContain(salesId);
+      // An operational project cannot drop its warehouse.
+      const p1 = await fx.as(manager).get(`/planning/projects/${projectId}`);
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${projectId}`, {
+          warehouseId: '',
+          version: p1.body.version,
+        }),
+        400,
+      );
+    });
+
+    it('calculates without reading stock and accepts free-text items', async () => {
+      const d = await fx.as(manager).get(`/planning/projects/${salesId}`);
+      const sc = d.body.scenarios[0];
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${salesId}/scenarios/${sc.id}`, {
+          inputs: fullInputs({
+            materials: [
+              { productId: partId, stageKey: 'REPAIR', qtyPerUnit: 1, leadTimeDays: 5, unitsPerPallet: 100 },
+              { productId: '', itemName: 'Thermal pad', unit: 'pcs', stageKey: 'REPAIR', qtyPerUnit: 2, unitCostOverride: 4, unitsPerPallet: 500 },
+            ],
+          }),
+          version: sc.version,
+        }),
+        200,
+      );
+      const calc = await fx
+        .as(manager)
+        .post(`/planning/projects/${salesId}/scenarios/${sc.id}/calculate`);
+      expectStatus(calc, 201);
+      salesRunId = calc.body.id;
+      const r = calc.body.result;
+      expect(r.errors).toEqual([]);
+      const [part, pad] = r.materials;
+      // 30 units are available in the warehouse — a sales simulation never uses them.
+      expect([part.supplyCheck, part.onHand, part.netRequirement, part.unitCost]).toEqual(['NOT_CHECKED', 0, 50, 40]);
+      expect([pad.code, pad.totalRequirement, pad.totalCost]).toEqual(['Thermal pad', 100, 400]);
+      expect(calc.body.data.products[0].available).toBe(0);
+      expect(r.space.find((x: { key: string }) => x.key === 'STORAGE').status).toBe('NOT_CHECKED');
+      expectStatus(
+        await fx.as(manager).get(`/planning/projects/${salesId}/runs/${salesRunId}/customer-summary`),
+        200,
+      );
+    });
+
+    it('is never submitted for approval and never counts as demand for real plans', async () => {
+      expectStatus(
+        await fx.as(manager).post(`/planning/projects/${salesId}/submit`, { runId: salesRunId }),
+        409,
+      );
+      // Even if a row were marked approved directly in the database, real plans ignore it.
+      await fx.prisma.planningProject.update({
+        where: { id: salesId },
+        data: { planStatus: 'PLAN_APPROVED', approvedRunId: salesRunId },
+      });
+      const again = await fx
+        .as(manager)
+        .post(`/planning/projects/${projectId}/scenarios/${scenarioId}/calculate`);
+      expectStatus(again, 201);
+      expect(again.body.result.materials[0].otherPlanDemand).toBe(0);
+      await fx.prisma.planningProject.update({
+        where: { id: salesId },
+        data: { planStatus: 'DRAFT', approvedRunId: null },
+      });
+    });
+
+    it('quotes a price from cost: the customer sees the price, never the cost or margin', async () => {
+      const d = await fx.as(manager).get(`/planning/projects/${salesId}`);
+      const sc = d.body.scenarios[0];
+      const pricing = { method: 'MARGIN', marginPct: 25, roundTo: 100, vatPct: 7, validityDays: 30 };
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${salesId}/scenarios/${sc.id}`, {
+          inputs: fullInputs({ materials: [], costs: { masterCostCurrency: 'THB', pricing } }),
+          version: sc.version,
+        }),
+        200,
+      );
+      const calc = await fx
+        .as(manager)
+        .post(`/planning/projects/${salesId}/scenarios/${sc.id}/calculate`);
+      expectStatus(calc, 201);
+      const c = calc.body.result.cost;
+      // 50 units × (6 + 24 + 6) min = 30 h × 150 THB = 4,500 → ÷ 0.75 = 6,000
+      expect([c.total, c.complete]).toEqual([4500, true]);
+      expect(c.quote).toMatchObject({ price: 6000, marginAmount: 1500, marginPct: 25, vatAmount: 420, priceIncludingVat: 6420, complete: true });
+
+      // A user without cost visibility: no cost or quote in the run, but the customer price is on the summary.
+      const runAsSup = await fx
+        .as(supervisor)
+        .get(`/planning/projects/${salesId}/runs/${calc.body.id}`);
+      expect(runAsSup.body.result.cost).toBeNull();
+      const sum = await fx
+        .as(supervisor)
+        .get(`/planning/projects/${salesId}/runs/${calc.body.id}/customer-summary`);
+      expectStatus(sum, 200);
+      expect(sum.body.quote).toEqual({
+        price: 6000, pricePerUnit: 120, currency: 'THB', vatPct: 7, vatAmount: 420,
+        priceIncludingVat: 6420, validUntil: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), complete: true,
+      });
+      expect(JSON.stringify(sum.body)).not.toMatch(/4500|1500|margin|cost/i);
+
+      // Their edit keeps the hidden pricing.
+      const asSup = await fx.as(supervisor).get(`/planning/projects/${salesId}`);
+      const ssc = asSup.body.scenarios[0];
+      expect(ssc.inputs.costs).toBeUndefined();
+      expectStatus(
+        await fx.as(supervisor).patch(`/planning/projects/${salesId}/scenarios/${ssc.id}`, {
+          inputs: { ...ssc.inputs, quantity: 60 },
+          version: ssc.version,
+        }),
+        200,
+      );
+      const stored = JSON.parse(
+        (await fx.prisma.planningScenario.findUniqueOrThrow({ where: { id: ssc.id } })).inputs,
+      );
+      expect(stored.quantity).toBe(60);
+      expect(stored.costs.pricing).toEqual(pricing);
+    });
+  });
+
+  describe('company templates', () => {
+    let tplId: string;
+    let goodRunId: string;
+
+    it('saves a calculated run as a draft — standards only, never costs', async () => {
+      const proj = await fx.as(manager).get(`/planning/projects/${projectId}`);
+      const good = proj.body.runs.find((r: { overallStatus: string }) => r.overallStatus !== 'INSUFFICIENT_DATA');
+      const bad = proj.body.runs.find((r: { overallStatus: string }) => r.overallStatus === 'INSUFFICIENT_DATA');
+      goodRunId = good.id;
+      expectStatus(await fx.as(manager).post('/planning/company-templates', { runId: bad.id, name: 'x' }), 400);
+      expectStatus(await fx.as(requester).post('/planning/company-templates', { runId: good.id, name: 'x' }), 403);
+
+      const res = await fx.as(manager).post('/planning/company-templates', {
+        runId: good.id, name: 'Board repair — standard', description: 'Main board repair line',
+      });
+      expectStatus(res, 201);
+      tplId = res.body.id;
+      expect(res.body).toMatchObject({ code: 'TPL-0001', status: 'DRAFT', projectType: 'REPAIR', stageCount: 3 });
+      expect(res.body.content.stages.map((s: { stdMinutesPerUnit: number }) => s.stdMinutesPerUnit)).toEqual([6, 24, 6]);
+      expect(res.body.content.calendar.hoursPerShift).toBe(8);
+      const raw = (await fx.prisma.planningTemplate.findUniqueOrThrow({ where: { id: tplId } })).content;
+      for (const leak of ['laborRatePerHour', 'unitCostOverride', 'costs', 'pricing', 'availableHeadcount', 'holidays', 'warehouseId'])
+        expect(raw).not.toContain(leak);
+    });
+
+    it('a draft starts no project; the author cannot confirm it; the basis is required', async () => {
+      const base = { name: 'From template', projectType: 'REPAIR', purpose: 'SALES', plannedStart: day(30), targetEnd: day(60), quantity: 20, companyTemplateId: tplId };
+      expectStatus(await fx.as(manager).post('/planning/projects', base), 400);
+      expectStatus(await fx.as(supervisor).post(`/planning/company-templates/${tplId}/confirm`, { basis: 'x' }), 403);
+      expectStatus(await fx.as(manager).post(`/planning/company-templates/${tplId}/confirm`, { basis: 'Time study' }), 403);
+      expectStatus(await fx.as(manager2).post(`/planning/company-templates/${tplId}/confirm`, {}), 400);
+      const ok = await fx.as(manager2).post(`/planning/company-templates/${tplId}/confirm`, { basis: 'Time study, line A, Sep 2026' });
+      expectStatus(ok, 201);
+      expect(ok.body).toMatchObject({ status: 'CONFIRMED', basis: 'Time study, line A, Sep 2026' });
+      expect(ok.body.confirmedBy).toBeTruthy();
+      // Confirmed numbers are frozen.
+      expectStatus(await fx.as(manager).patch(`/planning/company-templates/${tplId}`, { name: 'changed' }), 409);
+      expectStatus(await fx.as(manager).delete(`/planning/company-templates/${tplId}`), 409);
+    });
+
+    it('a confirmed template pre-fills a new project with validated standards', async () => {
+      expectStatus(await fx.as(requester).get('/planning/company-templates'), 403);
+      expectStatus(await fx.as(supervisor).get(`/planning/company-templates/${tplId}`), 200);
+      const created = await fx.as(manager).post('/planning/projects', {
+        name: 'Quote from template', projectType: 'REPAIR', purpose: 'SALES',
+        plannedStart: day(30), targetEnd: day(60), quantity: 20, companyTemplateId: tplId,
+      });
+      expectStatus(created, 201);
+      const p = await fx.as(manager).get(`/planning/projects/${created.body.id}`);
+      expect(p.body.companyTemplate).toMatchObject({ code: 'TPL-0001', status: 'CONFIRMED' });
+      const i = p.body.scenarios[0].inputs;
+      expect(i.quantity).toBe(20);
+      expect(i.stages.map((s: { key: string }) => s.key)).toEqual(['INSP', 'REPAIR', 'QA']);
+      expect(i.stages.every((s: { productivitySource: string }) => s.productivitySource === 'VALIDATED_STANDARD')).toBe(true);
+      expect(i.calendar.hoursPerShift).toBe(8);
+      expect(i.labor.laborRatePerHour).toBeNull();
+      expect(i.labor.availableHeadcount).toBeNull();
+      expect(p.body.scenarios[0].notes).toContain('TPL-0001');
+      const log = await fx.prisma.auditLog.findFirst({ where: { entityId: created.body.id, action: 'PLANNING_PROJECT_CREATE' } });
+      expect(log!.detail).toContain('company template TPL-0001');
+    });
+
+    it('a replacement retires the old template once it is confirmed', async () => {
+      const next = await fx.as(manager).post('/planning/company-templates', {
+        runId: goodRunId, name: 'Board repair — standard v2', basis: 'Time study, Oct 2026', replacesId: tplId,
+      });
+      expectStatus(next, 201);
+      // Someone else's draft: a user without approve rights cannot delete it.
+      expectStatus(await fx.as(supervisor).delete(`/planning/company-templates/${next.body.id}`), 403);
+      expectStatus(await fx.as(manager2).post(`/planning/company-templates/${next.body.id}/confirm`, {}), 201);
+      const old = await fx.as(manager).get(`/planning/company-templates/${tplId}`);
+      expect(old.body.status).toBe('RETIRED');
+      const active = await fx.as(manager).get('/planning/company-templates');
+      expect(active.body.rows.map((t: { id: string }) => t.id)).toEqual([next.body.id]);
+      expect(active.body).toMatchObject({ canManage: true, canApprove: true });
+      // A retired template starts nothing.
+      expectStatus(
+        await fx.as(manager).post('/planning/projects', {
+          name: 'x', projectType: 'REPAIR', purpose: 'SALES', plannedStart: day(30), targetEnd: day(60), quantity: 5, companyTemplateId: tplId,
+        }),
+        400,
+      );
+      expectStatus(await fx.as(manager2).post(`/planning/company-templates/${next.body.id}/retire`, { note: 'superseded' }), 201);
+      const actions = await fx.prisma.auditLog.findMany({ where: { entityType: 'PlanningTemplate' }, select: { action: true } });
+      expect(new Set(actions.map((a) => a.action))).toEqual(
+        new Set(['PLANNING_TEMPLATE_CREATE', 'PLANNING_TEMPLATE_CONFIRM', 'PLANNING_TEMPLATE_RETIRE']),
+      );
+    });
   });
 });
