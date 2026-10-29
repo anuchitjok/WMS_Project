@@ -46,6 +46,7 @@ import { ApprovalModule } from './approval/approval.module';
 import { ScrapModule } from './scrap/scrap.module';
 import { DocumentsModule } from './documents/documents.module';
 import { PlanningModule } from './planning/planning.module';
+import { CompanyProfileModule } from './company/company-profile.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -92,6 +93,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     ScrapModule,
     DocumentsModule,
     PlanningModule,
+    CompanyProfileModule,
   ],
   controllers: [AppController],
   providers: [

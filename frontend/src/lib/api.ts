@@ -852,3 +852,12 @@ export const planningApi = {
     request<any>(`/planning/company-templates/${tid}/retire`, { method: 'POST', body: JSON.stringify(dto) }),
   deleteTemplate: (tid: string) => request<any>(`/planning/company-templates/${tid}`, { method: 'DELETE' }),
 };
+
+// ─── Company profile (the WMS owner's identity on customer documents) ────────
+export const companyApi = {
+  get: () => request<any>('/company-profile'),
+  logo: () => request<{ dataUrl: string | null; width?: number; height?: number; updatedAt?: string }>('/company-profile/logo'),
+  update: (dto: Record<string, unknown>) => request<any>('/company-profile', { method: 'PUT', body: JSON.stringify(dto) }),
+  uploadLogo: (file: File, version: number) => uploadFile<any>(`/company-profile/logo?version=${version}`, file),
+  removeLogo: (version: number) => request<any>(`/company-profile/logo?version=${version}`, { method: 'DELETE' }),
+};

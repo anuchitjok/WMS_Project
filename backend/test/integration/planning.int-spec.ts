@@ -339,6 +339,10 @@ describe('Project Planning', () => {
       'workingDays', 'isQualityGate', 'completionCriteria', 'notes', 'quote',
       'price', 'pricePerUnit', 'currency', 'vatPct', 'vatAmount',
       'priceIncludingVat', 'validUntil', 'complete',
+      // Proposal: document status, provider identity, contact and wording.
+      'purpose', 'planApproved', 'company', 'legalName', 'address', 'phone',
+      'email', 'website', 'taxId', 'hasLogo', 'contact', 'deliverables',
+      'assumptions', 'exclusions', 'terms', 'termsSource',
     ];
     expect([...keys].filter((k) => !allowed.includes(k))).toEqual([]);
     const text = JSON.stringify(s);
@@ -738,6 +742,55 @@ describe('Project Planning', () => {
       );
       expect(stored.quantity).toBe(60);
       expect(stored.costs.pricing).toEqual(pricing);
+    });
+
+    it('proposal: provider identity, wording and terms — supplied, never invented', async () => {
+      const url = `/planning/projects/${salesId}/runs/${salesRunId}/customer-summary`;
+      // Nothing entered yet: no company, no wording, no terms.
+      const empty = await fx.as(manager).get(url);
+      expect(empty.body).toMatchObject({
+        purpose: 'SALES', planApproved: false, company: null,
+        deliverables: [], assumptions: [], exclusions: [], terms: [], termsSource: null,
+      });
+      expect(empty.body.contact.name).toBeTruthy();
+
+      const p = await fx.as(manager).get(`/planning/projects/${salesId}`);
+      expect(p.body.proposal).toEqual({ deliverables: '', assumptions: '', exclusions: '', terms: '' });
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${salesId}`, {
+          proposal: { deliverables: '- Repaired units\n• Test report\n\n', assumptions: '1. Parts available', exclusions: '  ', terms: '' },
+          version: p.body.version,
+        }),
+        200,
+      );
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${salesId}`, { proposal: { deliverables: 'x'.repeat(4001) }, version: p.body.version + 1 }),
+        400,
+      );
+      await fx.prisma.companyProfile.create({
+        data: { legalName: 'Provider Co., Ltd.', address: '1 Road', defaultTerms: 'Payment as agreed\nValid as stated' },
+      });
+      const s = await fx.as(manager).get(url);
+      expect(s.body.company).toMatchObject({ name: 'Provider Co., Ltd.', address: '1 Road', hasLogo: false });
+      expect(s.body.deliverables).toEqual(['Repaired units', 'Test report']);
+      expect(s.body.assumptions).toEqual(['Parts available']);
+      expect(s.body.exclusions).toEqual([]);
+      expect([s.body.terms, s.body.termsSource]).toEqual([['Payment as agreed', 'Valid as stated'], 'COMPANY']);
+      // Project terms override the company default.
+      const p2 = await fx.as(manager).get(`/planning/projects/${salesId}`);
+      await fx.as(manager).patch(`/planning/projects/${salesId}`, { proposal: { ...p2.body.proposal, terms: '50% deposit' }, version: p2.body.version });
+      const s2 = await fx.as(manager).get(url);
+      expect([s2.body.terms, s2.body.termsSource]).toEqual([['50% deposit'], 'PROJECT']);
+      await fx.prisma.companyProfile.deleteMany();
+
+      // Editing only the proposal does not withdraw an approved operational plan.
+      const op = await fx.prisma.planningProject.update({ where: { id: projectId }, data: { planStatus: 'PLAN_APPROVED' } });
+      expectStatus(
+        await fx.as(manager).patch(`/planning/projects/${projectId}`, { proposal: { deliverables: 'Units' }, version: op.version }),
+        200,
+      );
+      expect((await fx.prisma.planningProject.findUniqueOrThrow({ where: { id: projectId } })).planStatus).toBe('PLAN_APPROVED');
+      await fx.prisma.planningProject.update({ where: { id: projectId }, data: { planStatus: 'DRAFT', proposal: null } });
     });
   });
 
