@@ -33,7 +33,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       throw new Error('Network error — please check your connection and try again');
     }
 
-    if (res.status === 401) {
+    // A 401 from the login call means bad credentials, not an expired session:
+    // let it fall through so the server's message ("Invalid credentials",
+    // "Account is inactive", …) reaches the login form.
+    if (res.status === 401 && path !== '/auth/login') {
       localStorage.removeItem('wms_token');
       localStorage.removeItem('wms_user');
       if (typeof window !== 'undefined') window.location.href = '/login';
