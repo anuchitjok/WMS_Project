@@ -871,3 +871,67 @@ export const companyApi = {
   uploadLogo: (file: File, version: number) => uploadFile<any>(`/company-profile/logo?version=${version}`, file),
   removeLogo: (version: number) => request<any>(`/company-profile/logo?version=${version}`, { method: 'DELETE' }),
 };
+
+// ─── MRP (material planning — read-only planning, never creates purchase orders) ──
+const qs = (params?: Record<string, string | number | boolean | undefined | null>) => {
+  const q = new URLSearchParams();
+  if (params) Object.entries(params).forEach(([k, v]) => v !== undefined && v !== null && v !== '' && q.set(k, String(v)));
+  const s = q.toString();
+  return s ? `?${s}` : '';
+};
+
+export const mrpApi = {
+  dashboard: () => request<any>('/mrp/dashboard'),
+  run: (dto: { warehouseId?: string; asOf?: string; note?: string }) =>
+    request<any>('/mrp/runs', { method: 'POST', body: JSON.stringify(dto) }),
+  runs: () => request<any[]>('/mrp/runs'),
+  latest: () => request<any | null>('/mrp/runs/latest'),
+  getRun: (id: string) => request<any>(`/mrp/runs/${id}`),
+  lines: (id: string, params?: Record<string, string | number | boolean | undefined>) =>
+    request<{ total: number; page: number; pageSize: number; canSeeCost: boolean; data: any[] }>(`/mrp/runs/${id}/lines${qs(params)}`),
+  line: (id: string, lineId: string) => request<any>(`/mrp/runs/${id}/lines/${lineId}`),
+  verify: (id: string) => request<any>(`/mrp/runs/${id}/verify`),
+  compare: (base: string, target: string) => request<any>(`/mrp/runs/compare${qs({ base, target })}`),
+  exportCsv: (id: string, runNumber: string) => downloadFile(`/mrp/runs/${id}/export`, `${runNumber}.csv`),
+  usage: (productId: string, params?: { warehouseId?: string; granularity?: string; periods?: number }) =>
+    request<any>(`/mrp/usage/${productId}${qs(params)}`),
+  forecast: (productId: string, warehouseId?: string) => request<any>(`/mrp/forecast/${productId}${qs({ warehouseId })}`),
+  preview: (productId: string, warehouseId?: string) => request<any>(`/mrp/preview/${productId}${qs({ warehouseId })}`),
+  cost: (productId: string) => request<any>(`/mrp/cost/${productId}`),
+  config: () => request<any>('/mrp/config'),
+  updateConfig: (config: Record<string, unknown>) => request<any>('/mrp/config', { method: 'PUT', body: JSON.stringify({ config }) }),
+  params: (params?: { search?: string; missing?: boolean; page?: number; pageSize?: number }) => request<any>(`/mrp/parameters${qs(params)}`),
+  paramHistory: (productId: string) => request<any>(`/mrp/parameters/${productId}`),
+  createParam: (dto: any) => request<any>('/mrp/parameters', { method: 'POST', body: JSON.stringify(dto) }),
+  updateParam: (id: string, dto: any) => request<any>(`/mrp/parameters/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  suppliers: (productId: string) => request<any[]>(`/mrp/suppliers${qs({ productId })}`),
+  createSupplier: (dto: any) => request<any>('/mrp/suppliers', { method: 'POST', body: JSON.stringify(dto) }),
+  updateSupplier: (id: string, dto: any) => request<any>(`/mrp/suppliers/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  supply: (params?: Record<string, string | number | boolean | undefined>) => request<any>(`/mrp/supply${qs(params)}`),
+  supplyPerformance: () => request<any>('/mrp/supply/performance'),
+  supplyTemplate: () => downloadFile('/mrp/supply/template', 'po-lines-template.csv'),
+  supplyPreview: (file: File) => uploadFile<any>('/mrp/supply/import/preview', file),
+  supplyCommit: (file: File) => uploadFile<any>('/mrp/supply/import/commit', file),
+  overrides: (params?: { status?: string; productId?: string }) => request<any[]>(`/mrp/overrides${qs(params)}`),
+  createOverride: (dto: any) => request<any>('/mrp/overrides', { method: 'POST', body: JSON.stringify(dto) }),
+  decideOverride: (id: string, approve: boolean, note?: string) =>
+    request<any>(`/mrp/overrides/${id}/decide`, { method: 'PATCH', body: JSON.stringify({ approve, note }) }),
+  cancelOverride: (id: string) => request<any>(`/mrp/overrides/${id}/cancel`, { method: 'PATCH' }),
+};
+
+// ─── Warranty (informational — never blocks a transaction) ──────────────────
+export const warrantyApi = {
+  lookup: (params: { serial?: string; stockItemId?: string; asOf?: string; context?: string; ref?: string }) =>
+    request<any>(`/warranty/lookup${qs(params)}`),
+  history: (params: { serial?: string; stockItemId?: string; take?: number }) => request<any[]>(`/warranty/history${qs(params)}`),
+  rules: (params?: { status?: string; search?: string }) => request<any[]>(`/warranty/rules${qs(params)}`),
+  versions: (ruleCode: string) => request<any[]>(`/warranty/rules/${encodeURIComponent(ruleCode)}/versions`),
+  create: (dto: any) => request<any>('/warranty/rules', { method: 'POST', body: JSON.stringify(dto) }),
+  update: (id: string, dto: any) => request<any>(`/warranty/rules/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  newVersion: (id: string) => request<any>(`/warranty/rules/${id}/new-version`, { method: 'POST' }),
+  activate: (id: string) => request<any>(`/warranty/rules/${id}/activate`, { method: 'PATCH' }),
+  deactivate: (id: string) => request<any>(`/warranty/rules/${id}/deactivate`, { method: 'PATCH' }),
+  dates: (serial: string) => request<any[]>(`/warranty/dates${qs({ serial })}`),
+  recordDate: (dto: { serialNumber: string; dateType: string; date: string; reference?: string; source?: string; notes?: string }) =>
+    request<any>('/warranty/dates', { method: 'PUT', body: JSON.stringify(dto) }),
+};
