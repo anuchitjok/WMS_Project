@@ -1251,6 +1251,9 @@ model PlanningProject {
   approvedRunId  String? // the calculation run the review decision refers to
   /// Company template the baseline scenario was started from (PlanningTemplate.id)
   companyTemplateId String?
+  /// Customer proposal text (JSON: deliverables, assumptions, exclusions, terms —
+  /// each one item per line). Entered by the planner; never generated.
+  proposal       String?   @db.Text
   createdById    String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -1261,6 +1264,31 @@ model PlanningProject {
 
   @@index([warehouseId])
   @@index([planStatus])
+}
+
+/// The WMS owner's own company identity, printed on customer documents
+/// (proposal / quotation). One row, id = 'default'. Edited only by users with
+/// settings.manage. Never a customer's details. Nothing is seeded.
+model CompanyProfile {
+  id           String    @id @default("default")
+  legalName    String?
+  displayName  String?
+  address      String?   @db.Text
+  phone        String?
+  email        String?
+  website      String?
+  taxId        String?
+  /// Default commercial terms for proposals, one per line (a project may override them)
+  defaultTerms String?   @db.Text
+  /// Official logo: PNG or JPEG only, validated by content (max 1 MB)
+  logo         Bytes?
+  logoMime     String?
+  logoWidth    Int?
+  logoHeight   Int?
+  logoUpdatedAt DateTime?
+  updatedById  String?
+  updatedAt    DateTime  @updatedAt
+  version      Int       @default(0)
 }
 
 /// Company-confirmed planning template for a job type that is sold often:

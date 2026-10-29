@@ -218,7 +218,12 @@ function Workspace() {
           {readOnly && (
             <p className="text-xs text-slate-500">{p.canManage ? 'Inputs are locked while the plan is in review or archived.' : 'You can view this plan but not change it.'}</p>
           )}
-          {inputTab === 'project' && <ProjectInfo p={p} warehouses={warehouses} readOnly={readOnly} onSaved={() => load(scenarioId)} />}
+          {inputTab === 'project' && (
+            <div className="space-y-4">
+              <ProjectInfo key={`info-${p.version}`} p={p} warehouses={warehouses} readOnly={readOnly} onSaved={() => load(scenarioId)} />
+              <ProposalEditor key={`prop-${p.version}`} p={p} readOnly={!p.canManage || p.planStatus === 'ARCHIVED'} onSaved={() => load(scenarioId)} />
+            </div>
+          )}
           {draft && inputTab === 'setup' && <SetupEditor inputs={draft} set={set} warehouses={warehouses} defaultWarehouseId={p.warehouseId} readOnly={readOnly} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
           {draft && inputTab === 'workflow' && <WorkflowEditor inputs={draft} set={set} readOnly={readOnly} templates={templates} />}
           {draft && inputTab === 'materials' && <MaterialsEditor inputs={draft} set={set} readOnly={readOnly} products={products} canCost={p.canViewCost} currency={p.currency} sales={sales} />}
@@ -314,6 +319,40 @@ function ProjectInfo({ p, warehouses, readOnly, onSaved }: { p: any; warehouses:
         <Field label="Cost currency"><TextInput value={f.currency} maxLength={3} disabled={readOnly} onChange={(e) => set('currency', e.target.value.toUpperCase())} /></Field>
         <Field label="Scope" className="sm:col-span-2"><TextInput value={f.scope} disabled={readOnly} onChange={(e) => set('scope', e.target.value)} /></Field>
         <Field label="Description" className="sm:col-span-2"><TextInput value={f.description} disabled={readOnly} onChange={(e) => set('description', e.target.value)} /></Field>
+      </div>
+    </Section>
+  );
+}
+
+const PROPOSAL_FIELDS: [key: string, label: string, hint: string][] = [
+  ['deliverables', 'Deliverables', 'What the customer receives, one per line — e.g. repaired units, test report.'],
+  ['assumptions', 'Assumptions', 'Conditions the plan and price rely on, one per line.'],
+  ['exclusions', 'Exclusions', 'What is not included, one per line.'],
+  ['terms', 'Commercial terms for this project', 'One per line. Leave empty to use the default terms from Company Profile.'],
+];
+
+/** Customer-facing wording for the proposal. Saved on its own, so it never withdraws a plan approval. */
+function ProposalEditor({ p, readOnly, onSaved }: { p: any; readOnly: boolean; onSaved: () => void }) {
+  const start = () => Object.fromEntries(PROPOSAL_FIELDS.map(([k]) => [k, p.proposal?.[k] ?? ''])) as Record<string, string>;
+  const [f, setF] = useState<Record<string, string>>(start);
+  const [saving, setSaving] = useState(false);
+  const dirty = PROPOSAL_FIELDS.some(([k]) => (p.proposal?.[k] ?? '') !== f[k]);
+  async function save() {
+    setSaving(true);
+    try { await planningApi.update(p.id, { proposal: f, version: p.version }); toast.success('Proposal wording saved'); onSaved(); }
+    catch (e: any) { toast.error(e.message); } finally { setSaving(false); }
+  }
+  return (
+    <Section title="Customer proposal wording"
+      hint="Printed on the customer summary only when filled in. Nothing is written for you — enter only what your company has agreed to offer."
+      action={!readOnly && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" disabled={saving || !dirty} onClick={save}>Save wording</Button>}>
+      <div className="grid md:grid-cols-2 gap-3">
+        {PROPOSAL_FIELDS.map(([k, label, hint]) => (
+          <Field key={k} label={label} hint={hint}>
+            <textarea aria-label={label} className="w-full min-h-[96px] rounded-md border border-slate-200 px-2.5 py-1.5 text-sm disabled:bg-slate-50" maxLength={4000}
+              disabled={readOnly} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} />
+          </Field>
+        ))}
       </div>
     </Section>
   );

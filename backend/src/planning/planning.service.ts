@@ -29,6 +29,7 @@ import {
 } from './engine/types';
 import { PlanningDataService } from './planning-data.service';
 import { PlanningTemplatesService } from './planning-templates.service';
+import { CompanyProfileService } from '../company/company-profile.service';
 import { WORKFLOW_TEMPLATES, templateStageInput } from './templates';
 import {
   CreateProjectDto,
@@ -56,6 +57,7 @@ export class PlanningService {
     private prisma: PrismaService,
     private data: PlanningDataService,
     private companyTemplates: PlanningTemplatesService,
+    private companyProfile: CompanyProfileService,
   ) {}
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -289,6 +291,7 @@ export class PlanningService {
       : null;
     return {
       ...p,
+      proposal: readProposal(p.proposal),
       warehouse,
       product,
       companyTemplate,
@@ -462,13 +465,20 @@ export class PlanningService {
       throw new BadRequestException(
         'Target completion date is before the planned start date',
       );
-    await this.beforeEdit(p, u, 'the project details');
+    // Proposal wording is customer text, not plan data: it does not withdraw an approval.
+    const onlyProposal = Object.entries(dto).every(
+      ([k, v]) => v === undefined || k === 'version' || k === 'proposal',
+    );
+    if (onlyProposal) {
+      if (p.planStatus === 'ARCHIVED')
+        throw new ConflictException('The project is archived');
+    } else await this.beforeEdit(p, u, 'the project details');
     // beforeEdit may have bumped the version (approval withdrawn); lock on the current one.
     const current = await this.prisma.planningProject.findUniqueOrThrow({
       where: { id },
       select: { version: true },
     });
-    const { version, plannedStart, targetEnd, warehouseId, ...rest } = dto;
+    const { version, plannedStart, targetEnd, warehouseId, proposal, ...rest } = dto;
     void version;
     const res = await this.prisma.planningProject.updateMany({
       where: { id, version: current.version },
@@ -481,6 +491,7 @@ export class PlanningService {
           ? { plannedStart: new Date(`${plannedStart}T00:00:00Z`) }
           : {}),
         ...(targetEnd ? { targetEnd: new Date(`${targetEnd}T00:00:00Z`) } : {}),
+        ...(proposal !== undefined ? { proposal: cleanProposal(proposal) } : {}),
         version: { increment: 1 },
       },
     });
@@ -867,7 +878,8 @@ export class PlanningService {
         s,
       ]),
     );
-    const [product, preparer] = await Promise.all([
+    const contactId = p.ownerId ?? p.createdById;
+    const [product, preparer, contact, company, companyTerms] = await Promise.all([
       p.productId
         ? this.prisma.product.findUnique({
             where: { id: p.productId },
@@ -878,7 +890,17 @@ export class PlanningService {
         where: { id: u.id },
         select: { fullName: true },
       }),
+      contactId
+        ? this.prisma.user.findUnique({
+            where: { id: contactId },
+            select: { fullName: true, email: true, phone: true },
+          })
+        : null,
+      this.companyProfile.identity(),
+      this.companyProfile.defaultTerms(),
     ]);
+    const prop = readProposal(p.proposal);
+    const projectTerms = lines(prop.terms);
     const cal = inputs.calendar ?? {};
     const lastHour = Math.max(0, ...r.stages.map((s) => s.finishHour));
     const durationWorkingDays =
@@ -909,6 +931,19 @@ export class PlanningService {
       asOf: r.asOf,
       generatedAt: new Date().toISOString(),
       preparedBy: preparer?.fullName ?? null,
+      // SALES = simulation / quotation; an operational plan is "approved" only for this exact run.
+      purpose: p.purpose,
+      planApproved: p.planStatus === 'PLAN_APPROVED' && p.approvedRunId === run.id,
+      // The WMS owner's identity (Company profile) — null until an administrator sets it.
+      company,
+      contact: contact
+        ? { name: contact.fullName, email: contact.email ?? null, phone: contact.phone ?? null }
+        : null,
+      deliverables: lines(prop.deliverables),
+      assumptions: lines(prop.assumptions),
+      exclusions: lines(prop.exclusions),
+      terms: projectTerms.length ? projectTerms : lines(companyTerms),
+      termsSource: projectTerms.length ? 'PROJECT' : lines(companyTerms).length ? 'COMPANY' : null,
       project: {
         code: p.code,
         name: p.name,
@@ -1159,6 +1194,38 @@ export class PlanningService {
     });
   }
 }
+
+const PROPOSAL_KEYS = ['deliverables', 'assumptions', 'exclusions', 'terms'] as const;
+
+/** Stores only non-empty proposal fields; null when nothing is left. */
+function cleanProposal(p: Partial<Record<(typeof PROPOSAL_KEYS)[number], unknown>>): string | null {
+  const out: Record<string, string> = {};
+  for (const k of PROPOSAL_KEYS) {
+    const v = typeof p?.[k] === 'string' ? (p[k] as string).trim() : '';
+    if (v) out[k] = v;
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+
+/** Proposal text as stored (each field one item per line). */
+export function readProposal(raw: string | null): Record<(typeof PROPOSAL_KEYS)[number], string> {
+  let o: Record<string, unknown> = {};
+  try {
+    o = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+  } catch {
+    o = {};
+  }
+  return Object.fromEntries(
+    PROPOSAL_KEYS.map((k) => [k, typeof o[k] === 'string' ? (o[k] as string) : '']),
+  ) as Record<(typeof PROPOSAL_KEYS)[number], string>;
+}
+
+/** "a\n- b\n\n• c" → ["a", "b", "c"] */
+const lines = (s: string | null | undefined) =>
+  (s ?? '')
+    .split(/\r?\n/)
+    .map((x) => x.replace(/^\s*(?:[-•*]|\d+[.)])\s+/, '').trim())
+    .filter(Boolean);
 
 function redactData(d: DataSnapshot): DataSnapshot {
   return {

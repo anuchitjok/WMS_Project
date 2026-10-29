@@ -13,7 +13,18 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ValidateNested } from 'class-validator';
 import { PROJECT_TYPES, WORKFLOW_TEMPLATES } from '../templates';
+
+/** Customer proposal wording — each field is free text, one item per line. */
+export class ProposalDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(4000) deliverables?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(4000) assumptions?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(4000) exclusions?: string;
+  /** Overrides the company's default terms for this project when not empty. */
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(4000) terms?: string;
+}
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 export const PURPOSES = ['OPERATIONAL', 'SALES'] as const;
@@ -87,6 +98,11 @@ export class CreateProjectDto {
 }
 
 export class UpdateProjectDto {
+  @ApiPropertyOptional({ type: ProposalDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ProposalDto)
+  proposal?: ProposalDto;
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

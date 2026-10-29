@@ -127,11 +127,10 @@ describe('Schema drift and migration script', () => {
     const tables = await db.query<{ table_name: string }>(
       `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'Planning%' ORDER BY table_name`,
     );
-    expect(tables.rows.map((r) => r.table_name)).toEqual([
-      'PlanningProject',
-      'PlanningRun',
-      'PlanningScenario',
-    ]);
+    // The baseline is the committed schema, which may already hold later Planning* tables.
+    expect(tables.rows.map((r) => r.table_name)).toEqual(
+      expect.arrayContaining(['PlanningProject', 'PlanningRun', 'PlanningScenario']),
+    );
     const perms = await db.query<{ code: string }>(
       `SELECT code FROM "Permission" WHERE module = 'planning' ORDER BY code`,
     );
@@ -182,6 +181,17 @@ describe('Schema drift and migration script', () => {
     const n = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM "PlanningTemplate"`);
     expect(n.rows[0].n).toBe(0); // nothing seeded
     await db.exec(`DELETE FROM "PlanningProject" WHERE id = 'pp-old2'`);
+  });
+
+  it('25_company_profile.sql applies cleanly after 24, twice, and seeds nothing', async () => {
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '25_company_profile.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const n = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM "CompanyProfile"`);
+    expect(n.rows[0].n).toBe(0);
   });
 
   it('after the script, the database matches schema.prisma (no drift left)', async () => {
