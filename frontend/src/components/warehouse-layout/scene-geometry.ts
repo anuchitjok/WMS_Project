@@ -201,3 +201,50 @@ export function boundsOf(racks: PlacedRack[]) {
 }
 
 export { toWorld as rackToWorld };
+
+// ─── View modes ────────────────────────────────────────────────────────────────
+// Status: the four placement states above.
+// Fill %: slotUtil = stock rows in the slot ÷ slot capacity (same rule as the
+//         Racks & slots tab — capacity counts stock rows, not units).
+// Stock age: whole days from the OLDEST receivedDate of stock still in the slot
+//         to the server's `asOf` time (GET /warehouse/:id/slot-stock-age).
+// Blocked slots stay red in every mode so a blocked location is never hidden.
+
+export type ViewMode = 'status' | 'fill' | 'age';
+
+export interface Band { label: string; color: string }
+
+export const FILL_BANDS: (Band & { max: number })[] = [
+  { max: 29, label: '1–29%', color: '#bbf7d0' },
+  { max: 59, label: '30–59%', color: '#86efac' },
+  { max: 89, label: '60–89%', color: '#22c55e' },
+  { max: 100, label: '90–100%', color: '#15803d' },
+];
+
+export const AGE_BANDS: (Band & { maxDays: number })[] = [
+  { maxDays: 6, label: 'Under 7 days', color: '#bbf7d0' },
+  { maxDays: 30, label: '7–30 days', color: '#4ade80' },
+  { maxDays: 90, label: '31–90 days', color: '#16a34a' },
+  { maxDays: Infinity, label: 'Over 90 days', color: '#14532d' },
+];
+
+export const NO_AGE_COLOR = '#cbd5e1';   // occupied, but no age row (yet)
+export const PALLET_COLOR = '#d5dbe3';   // empty slot: bare pallet
+
+export const fillBand = (util: number) => FILL_BANDS.find((b) => util <= b.max) ?? FILL_BANDS[FILL_BANDS.length - 1];
+export const ageBand = (days: number) => AGE_BANDS.find((b) => days <= b.maxDays) ?? AGE_BANDS[AGE_BANDS.length - 1];
+
+export function ageDays(oldestIso: string, asOfIso: string): number {
+  const d = (Date.parse(asOfIso) - Date.parse(oldestIso)) / 86_400_000;
+  return Number.isFinite(d) ? Math.max(0, Math.floor(d)) : 0;
+}
+
+/** Carton colour for a slot in the given mode; null = no carton (empty slot). */
+export function slotColor(s: SlotData, mode: ViewMode, ageOf?: (slotId: string) => number | null): string | null {
+  if (isBlocked(s)) return STATE_3D.blocked.color;
+  if (!isOccupied(s)) return null;
+  if (mode === 'status') return STATE_3D[slotState3D(s)].color;
+  if (mode === 'fill') return fillBand(slotUtil(s)).color;
+  const d = ageOf?.(s.id);
+  return d == null ? NO_AGE_COLOR : ageBand(d).color;
+}
