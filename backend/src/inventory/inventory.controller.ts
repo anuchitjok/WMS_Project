@@ -10,6 +10,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
+import { Retired } from '../common/retired';
 import { LocationDto } from '../common/location.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { StockStatus } from '@prisma/client';
@@ -80,6 +81,7 @@ export class InventoryController {
     return item;
   }
 
+  @Retired('Direct stock editing (Inventory)')
   @Post()
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockCreate)
@@ -89,6 +91,7 @@ export class InventoryController {
     return this.inventoryService.create(dto, user.id);
   }
 
+  @Retired('Direct stock editing (Inventory)')
   @Patch(':id/status')
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockStatus)
@@ -111,6 +114,7 @@ export class InventoryController {
     return this.inventoryService.releaseStuckReservation(id, user.id);
   }
 
+  @Retired('Direct stock editing (Inventory)')
   @Patch(':id/location')
   @UseGuards(AccessGuard)
   @Access(ACCESS.stockRelocate)

@@ -48,6 +48,18 @@ export class AllocationService {
         );
       }
 
+      // A request whose earlier task was cancelled had its approval reservation
+      // released with that task; it must not claim the shared approval pool again.
+      const hadCancelledTask =
+        (await tx.fulfillmentTask.count({ where: { requestId, status: FulfillmentStatus.CANCELLED } })) > 0;
+      // A legacy request at PICKING with no cancelled task may still hold its
+      // approval reservation; allocating again would reserve a second set of units.
+      if (req.status === 'PICKING' && !hadCancelledTask) {
+        throw new ConflictException(
+          `Request ${req.refNumber} is at PICKING without a cancelled task — use request recovery instead of re-allocating`,
+        );
+      }
+
       // Determine warehouse from the first line's approval-time unit (legacy behaviour).
       const firstItem = req.items[0];
       let warehouseId: string | undefined;
@@ -76,7 +88,9 @@ export class AllocationService {
         // Legacy approval reserved ceil(need) rows for this line (linking the first).
         // Those rows are consumed here — never a unit reserved for another request.
         const owned =
-          !unified && req.status === 'APPROVED' && item.stockItemId ? Math.ceil(item.quantityRequested) : 0;
+          !unified && !hadCancelledTask && req.status === 'APPROVED' && item.stockItemId
+            ? Math.ceil(item.quantityRequested)
+            : 0;
         const pool = await this.inventory.lockApprovalPool(tx, {
           productId: item.productId,
           requestId,

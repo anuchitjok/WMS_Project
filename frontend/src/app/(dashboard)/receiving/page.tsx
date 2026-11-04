@@ -5,8 +5,10 @@ import {
   PackagePlus, PackageCheck, Clock, AlertTriangle, ClipboardList,
   Search, Truck, Package, MapPin, ShieldCheck, CheckCircle2,
   Info, ChevronDown, ChevronUp, ArrowRight, CircleDot,
-  TriangleAlert, FileX, Upload, FileDown,
+  TriangleAlert, FileX, Upload, FileDown, Undo2,
 } from 'lucide-react';
+import { useAuthStore } from '@/store/auth.store';
+import type { UserRole } from '@/types';
 import { toast } from 'sonner';
 import { receivingApi, warehouseApi, type ReceivingImportPreview } from '@/lib/api';
 import { StatTile } from '@/components/ui/stat-tile';
@@ -26,6 +28,14 @@ import { formatDate, cn } from '@/lib/utils';
 // ─── Types & constants ────────────────────────────────────────────────────────
 
 type Tab = 'queue' | 'all';
+
+/** Same roles the API allows to reverse a receipt (permission inventory.adjust for DB roles). */
+const REVERSE_ROLES: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'];
+/** Units still at the dock / in QC — the only state a receipt can be reversed from (the API re-checks). */
+const REVERSIBLE_UNIT = ['PENDING_RECEIVING', 'PENDING_INSPECTION', 'QUARANTINE', 'RTV_PENDING'];
+const canBeReversed = (gr: any) =>
+  gr.statusEnum !== 'CANCELLED' && gr.status !== 'cancelled' &&
+  (gr.items ?? []).every((it: any) => !it.stockItem || REVERSIBLE_UNIT.includes(it.stockItem.status));
 
 const BLANK_FORM = {
   sourceType: 'Brand Owner',
@@ -281,18 +291,19 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
   const [preview, setPreview] = useState<ReceivingImportPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [reimport, setReimport] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selectedWarehouse = warehouses.find((w) => w.id === header.warehouseId);
 
   function handleOpen(v: boolean) {
     setOpen(v);
-    if (!v) { setFile(null); setPreview(null); setHeader({ ...BLANK_IMPORT_HEADER }); }
+    if (!v) { setFile(null); setPreview(null); setReimport(false); setHeader({ ...BLANK_IMPORT_HEADER }); }
   }
 
   async function onFile(f: File) {
     if (!/\.(xlsx|csv)$/i.test(f.name)) { toast.error('Only .xlsx or .csv files are supported'); return; }
-    setFile(f); setBusy(true);
+    setFile(f); setReimport(false); setBusy(true);
     try {
       const p = await receivingApi.importPreview(f);
       setPreview(p);
@@ -312,7 +323,7 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
     if (!header.sourceType.trim()) { toast.error('Source Type is required'); return; }
     setBusy(true);
     try {
-      const r = await receivingApi.importCommit({ ...header }, file);
+      const r = await receivingApi.importCommit({ ...header, ...(reimport ? { allowReimport: 'true' } : {}) }, file);
       toast.success(`Created ${r.refNumber} — ${r.inserted} items received (skipped ${r.skipped})`);
       handleOpen(false);
       onCreated();
@@ -412,6 +423,19 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
                 <span className="px-2 py-0.5 rounded-md bg-green-100 text-green-700 font-medium">✓ Valid {preview.summary.valid}</span>
                 <span className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 font-medium">✗ Issues {preview.summary.invalid}</span>
               </div>
+              {preview.alreadyImported && (
+                <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="already-received">
+                  <p className="font-medium">
+                    This file was already received{preview.alreadyImported.refNumber ? ` as ${preview.alreadyImported.refNumber}` : ''} on{' '}
+                    {new Date(preview.alreadyImported.at).toLocaleString()}{preview.alreadyImported.by ? ` by ${preview.alreadyImported.by}` : ''}.
+                  </p>
+                  <p className="text-xs mt-1">Importing it again receives the same goods a second time.</p>
+                  <label className="mt-2 flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={reimport} onChange={(e) => setReimport(e.target.checked)} id="confirm-rereceive" />
+                    This is a new delivery — receive this file again
+                  </label>
+                </div>
+              )}
               <div className="rounded-lg border border-slate-200 overflow-auto max-h-[320px]">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0">
@@ -442,11 +466,65 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
         <DialogFooter>
           <Button
             onClick={confirm}
-            disabled={busy || !preview || preview.summary.valid === 0}
+            disabled={busy || !preview || preview.summary.valid === 0 || (!!preview.alreadyImported && !reimport)}
             className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4 mr-1.5" />
             {busy ? 'Working…' : `Confirm Import ${preview?.summary.valid ?? 0} items →`}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Reverse a mistaken receipt (Phase 6) ──────────────────────────────────────
+
+function ReverseReceiptDialog({ gr, onDone }: { gr: any; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ok = reason.trim().length >= 5;
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const r = await receivingApi.reverse(gr.id, reason.trim());
+      toast.success(`${r.refNumber} reversed — ${r.reversedUnits} unit(s) cancelled`);
+      setOpen(false); setReason('');
+      onDone();
+    } catch (e: any) {
+      toast.error(e.message);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setReason(''); }}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="gap-1 h-7 text-xs" />}>
+        <Undo2 className="h-3.5 w-3.5" /> Reverse…
+      </DialogTrigger>
+      <DialogContent className="w-full max-w-md sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Reverse {gr.refNumber}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-slate-600">
+            Use this only for a receipt entered by mistake. The receipt stays on record, marked Cancelled, and its{' '}
+            {gr.items?.length ?? 0} unit(s) are cancelled so the serials can be received correctly.
+          </p>
+          <p className="text-xs text-slate-500">
+            Not possible once any unit has been put away, issued, or sent to RTV / scrap, and not by the person who received it.
+          </p>
+          <div className="space-y-1">
+            <Label htmlFor="reverse-reason">Reason <span className="text-red-500">*</span></Label>
+            <Input id="reverse-reason" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Entered against the wrong vendor" />
+            {!ok && reason.length > 0 && <p className="text-xs text-slate-500">At least 5 characters.</p>}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)}>Keep receipt</Button>
+          <Button onClick={submit} disabled={!ok || busy} className="bg-red-600 hover:bg-red-700 text-white">
+            {busy ? 'Working…' : 'Reverse receipt'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -504,7 +582,19 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
     if (!v) setForm((f) => ({ ...BLANK_FORM, warehouseId: f.warehouseId }));
   }
 
+  // Phase 4: what still blocks Receive Goods (the API refuses the same cases).
+  const serialEntered = !!form.serialNumber.trim();
+  const missingForReceive = [
+    !form.productId && 'product',
+    form.sourceType === 'Vendor' && !form.vendorId && 'vendor',
+    !(Number(form.quantity) >= 1) && 'quantity of at least 1',
+    !!selectedProduct?.serialControlled && !serialEntered && 'serial number',
+    !!selectedProduct?.batchControlled && !form.batchNumber.trim() && 'lot/batch number',
+    serialEntered && Number(form.quantity) !== 1 && 'quantity 1 for a serial number',
+  ].filter(Boolean) as string[];
+
   async function submit() {
+    if (missingForReceive.length) { toast.error(`Still needed: ${missingForReceive.join(', ')}`); return; }
     if (!form.productId) { toast.error('Please select a product'); return; }
     if (selectedProduct?.serialControlled && !form.serialNumber.trim()) {
       toast.error(`${selectedProduct.code} is serial-controlled — serial number is required`); return;
@@ -522,6 +612,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
         awbNumber: form.awbNumber.trim() || undefined,
         invoiceNumber: form.invoiceNumber.trim() || undefined,
         sourceRef: form.rmaReference.trim() || undefined,
+        supplierId: form.sourceType === 'Vendor' ? form.vendorId || undefined : undefined,
         notes: combinedNotes || undefined,
         items: [{
           productId: form.productId,
@@ -595,8 +686,8 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
 
               {form.sourceType === 'Vendor' && (
                 <div className="space-y-1 min-w-0">
-                  <Label>Vendor
-                    <span className="ml-2 text-xs font-normal text-slate-400">— reference only, recorded in notes</span>
+                  <Label>Vendor *
+                    <span className="ml-2 text-xs font-normal text-slate-400">— recorded in notes</span>
                   </Label>
                   <Select value={form.vendorId} onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v ?? '' }))}>
                     <SelectTrigger className="w-full min-w-0">
@@ -719,7 +810,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           {/* Destination */}
           <FormSection icon={MapPin} title="Destination">
             <div className="space-y-1 min-w-0">
-              <Label>Warehouse</Label>
+              <Label>Warehouse <span className="text-slate-400 font-normal">(optional — can be chosen at Putaway)</span></Label>
               <Select value={form.warehouseId} onValueChange={(v) => setForm((f) => ({ ...f, warehouseId: v ?? '' }))}>
                 <SelectTrigger className="w-full min-w-0">
                   <span className={cn('flex flex-1 text-left truncate text-sm', !selectedWarehouse && 'text-muted-foreground')}>
@@ -756,7 +847,8 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           </FormSection>
         </div>
         <DialogFooter>
-          <Button onClick={submit} disabled={!form.productId || busy} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">
+          {missingForReceive.length > 0 && <p className="mr-auto self-center text-xs text-amber-700">Still needed: {missingForReceive.join(', ')}</p>}
+          <Button onClick={submit} disabled={missingForReceive.length > 0 || busy} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">
             {busy ? 'Creating…' : 'Receive Goods →'}
           </Button>
         </DialogFooter>
@@ -777,6 +869,8 @@ export default function ReceivingPage() {
   const [tab, setTab] = useState<Tab>('queue');
   const [query, setQuery] = useState('');
   const [inspectBusy, setInspectBusy] = useState(false);
+  const user = useAuthStore((s) => s.user);
+  const canReverse = !!user && REVERSE_ROLES.includes(user.role);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -941,16 +1035,17 @@ export default function ReceivingPage() {
                 <th className="text-left px-4 py-3 font-medium text-slate-600">Outcomes</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-slate-600">Received</th>
+                {canReverse && <th className="px-4 py-3" />}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading
                 ? [...Array(5)].map((_, i) => (
-                  <tr key={i}>{[...Array(6)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>
+                  <tr key={i}>{[...Array(canReverse ? 7 : 6)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>
                 ))
                 : allRows.length === 0
                 ? (
-                  <tr><td colSpan={6} className="px-0 py-0">
+                  <tr><td colSpan={canReverse ? 7 : 6} className="px-0 py-0">
                     <EmptyState icon={FileX} title={rows.length === 0 ? 'No records' : 'No matches'} message={rows.length === 0 ? 'Create a goods receiving to begin.' : 'Try adjusting your search.'} />
                   </td></tr>
                 )
@@ -974,6 +1069,13 @@ export default function ReceivingPage() {
                         <ReceivingStatusBadge status={gr.statusEnum?.toLowerCase() ?? gr.status} />
                       </td>
                       <td className="px-4 py-3 text-xs text-slate-400">{formatDate(gr.receivedDate)}</td>
+                      {canReverse && (
+                        <td className="px-4 py-3 text-right">
+                          {canBeReversed(gr) && gr.receivedById !== user?.id
+                            ? <ReverseReceiptDialog gr={gr} onDone={load} />
+                            : null}
+                        </td>
+                      )}
                     </tr>
                   );
                 })}

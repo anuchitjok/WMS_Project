@@ -2,75 +2,33 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { Calculator } from 'lucide-react';
-import { toast } from 'sonner';
 import { adjustmentApi } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
+import { RetiredNotice } from '@/components/layout/retired-notice';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
-import { ReasonCodeField, reasonFilled, type ReasonValue } from '@/components/reason-code-field';
+import { formatDate } from '@/lib/utils';
 
+// Phase 2: Stock Adjustment is retired (create / approve / reject answer 410).
+// Completed adjustments such as ADJ-2026-DWYA-H stay visible here unchanged.
 export default function AdjustmentPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ productLabel: '', quantityBefore: 0, quantityAfter: 0 });
-  const [reason, setReason] = useState<ReasonValue>({});
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setRows(await adjustmentApi.list()); } finally { setLoading(false); }
+    try { setRows(await adjustmentApi.list()); } catch { setRows([]); } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Client-side guard — mirrors backend DTO (quantities >= 0) plus a "must actually change" rule.
-  const before = Number(form.quantityBefore);
-  const after = Number(form.quantityAfter);
-  const qtyValid = Number.isFinite(before) && Number.isFinite(after) && before >= 0 && after >= 0;
-  const noChange = qtyValid && before === after;
-  const formValid = !!form.productLabel.trim() && reasonFilled(reason) && qtyValid && !noChange;
-
-  async function submit() {
-    if (!formValid) { toast.error('Enter a product, reason, and a valid quantity change'); return; }
-    try { await adjustmentApi.create({ ...form, ...reason, reason: reason.reason?.trim(), productLabel: form.productLabel.trim(), quantityBefore: before, quantityAfter: after }); toast.success('Adjustment requested'); setOpen(false); setReason({}); load(); }
-    catch (e: any) { toast.error(e.message); }
-  }
-  async function approve(id: string) {
-    try { await adjustmentApi.approve(id); toast.success('Adjustment approved & posted'); load(); }
-    catch (e: any) { toast.error(e.message); }
-  }
-  async function reject(id: string) {
-    try { await adjustmentApi.reject(id); toast.success('Adjustment rejected'); load(); }
-    catch (e: any) { toast.error(e.message); }
-  }
+  const pending = rows.filter((a) => a.status === 'PENDING_APPROVAL').length;
 
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="Stock Adjustment" subtitle="Controlled quantity adjustment with approval" icon={Calculator}
-        action={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>+ Adjustment Request</DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Create Stock Adjustment</DialogTitle></DialogHeader>
-              <div className="space-y-3">
-                <div className="space-y-1"><Label>Product Label</Label><Input value={form.productLabel} onChange={(e) => setForm((f) => ({ ...f, productLabel: e.target.value }))} placeholder="e.g. CAB-CAT5E — Cat5e Cable" /></div>
-                <ReasonCodeField category="ADJUSTMENT" value={reason} onChange={setReason} placeholder="e.g. Data correction" />
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><Label>Qty Before</Label><Input type="number" min={0} value={form.quantityBefore} onChange={(e) => setForm((f) => ({ ...f, quantityBefore: Number(e.target.value) }))} /></div>
-                  <div className="space-y-1"><Label>Qty After</Label><Input type="number" min={0} value={form.quantityAfter} onChange={(e) => setForm((f) => ({ ...f, quantityAfter: Number(e.target.value) }))} /></div>
-                </div>
-                {!qtyValid && <p className="text-xs text-red-500">Quantities cannot be negative</p>}
-                {noChange && <p className="text-xs text-amber-600">Before and After are equal — no adjustment needed</p>}
-              </div>
-              <DialogFooter><Button onClick={submit} disabled={!formValid} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">Create</Button></DialogFooter>
-            </DialogContent>
-          </Dialog>
-        }
-      />
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <PageHeader title="Stock Adjustment (history)" subtitle="Past quantity adjustments" icon={Calculator} />
+      <RetiredNotice feature="Stock Adjustment"
+        extra={pending > 0 ? <p className="text-amber-700">{pending} adjustment(s) were still waiting for approval when the feature was retired. They will not be applied.</p> : undefined} />
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-slate-100 bg-slate-50">
             <th className="text-left px-4 py-3 font-medium text-slate-600">Adjustment No.</th>
@@ -78,22 +36,19 @@ export default function AdjustmentPage() {
             <th className="text-left px-4 py-3 font-medium text-slate-600">Reason</th>
             <th className="text-left px-4 py-3 font-medium text-slate-600">Before → After</th>
             <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Action</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">Created</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {loading ? [...Array(3)].map((_, i) => <tr key={i}>{[...Array(6)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
-              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No adjustments</td></tr>
+              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No adjustment history</td></tr>
               : rows.map((a) => (
-                <tr key={a.id} className="hover:bg-slate-50">
+                <tr key={a.id}>
                   <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{a.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{a.productLabel}</td>
                   <td className="px-4 py-3 text-slate-600">{a.reason}{a.reasonCode && <span className="ml-1.5 text-[11px] text-slate-400">{a.reasonCode}</span>}</td>
                   <td className="px-4 py-3 font-medium">{a.quantityBefore} → {a.quantityAfter}</td>
-                  <td className="px-4 py-3"><Badge variant="outline" className={a.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : a.status === 'REJECTED' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}>{a.status.replace(/_/g, ' ')}</Badge></td>
-                  <td className="px-4 py-3 space-x-1">{a.status === 'PENDING_APPROVAL' && (<>
-                    <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => approve(a.id)}>Approve</Button>
-                    <Button size="sm" variant="outline" className="h-7 text-red-600 border-red-200" onClick={() => reject(a.id)}>Reject</Button>
-                  </>)}</td>
+                  <td className="px-4 py-3"><Badge variant="outline" className={a.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : a.status === 'REJECTED' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'}>{a.status.replace(/_/g, ' ')}</Badge></td>
+                  <td className="px-4 py-3 text-xs text-slate-500">{a.createdAt ? formatDate(a.createdAt) : '—'}</td>
                 </tr>
               ))}
           </tbody>

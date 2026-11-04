@@ -105,6 +105,7 @@ const WRITES: Array<[string, string, Record<string, unknown>, Rule]> = [
   ['patch', '/inventory/s1/location', { warehouseId: 'w1' }, 'SUPERVISOR'],
   ['patch', '/receiving/g1/inspect', { items: [{ itemId: 'i', inspectedQty: 1, inspectionOutcome: 'good' }] }, 'OPERATOR'],
   ['patch', '/receiving/g1/verify', {}, 'OPERATOR'],
+  ['post', '/receiving/g1/reverse', { reason: 'Wrong delivery' }, 'SUPERVISOR'],
   ['patch', '/unused/r1/return', {}, 'OPERATOR'],
   ['patch', '/unused/r1/doa', {}, 'OPERATOR'],
   ['post', '/adjustment', { productLabel: 'x', reason: 'y', quantityBefore: 1, quantityAfter: 2 }, 'SUPERVISOR'],
@@ -117,8 +118,14 @@ const WRITES: Array<[string, string, Record<string, unknown>, Rule]> = [
 
 describe('Warehouse write authorization (Phase 1)', () => {
   let app: INestApplication;
+  // Step 5 writes (transfer, inventory edits, adjustment, cycle count) are retired
+  // and answer 410 by default (Phase 2). Their permission rules still apply on the
+  // ENABLE_STEP5_LEGACY rollback path, so they are checked here with the switch on;
+  // the retired answer itself is checked at the end with the switch off.
+  const legacySwitch = process.env.ENABLE_STEP5_LEGACY;
 
   beforeAll(async () => {
+    process.env.ENABLE_STEP5_LEGACY = 'true';
     const controllers: Type<unknown>[] = [
       FulfillmentController, Fulfillment2Controller, PutawayController, TransferController, InventoryController,
       ReceivingController, AdjustmentController, CycleCountController, ScrapController, DoaController,
@@ -143,7 +150,11 @@ describe('Warehouse write authorization (Phase 1)', () => {
     await app.init();
   });
 
-  afterAll(async () => { await app.close(); });
+  afterAll(async () => {
+    await app.close();
+    if (legacySwitch === undefined) delete process.env.ENABLE_STEP5_LEGACY;
+    else process.env.ENABLE_STEP5_LEGACY = legacySwitch;
+  });
 
   const call = (method: string, path: string, body: Record<string, unknown> = {}) =>
     (request(app.getHttpServer()) as any)[method](path).send(body);
@@ -231,6 +242,43 @@ describe('Warehouse write authorization (Phase 1)', () => {
     it('rejects an unknown RMA usage value', async () => {
       await call('patch', '/rma/r1/usage', { usage: 'used' }).expect(400);
       expect((await call('patch', '/rma/r1/usage', { usage: 'USED' })).status).toBeLessThan(300);
+    });
+
+    it('validates per-unit RMA usage (Phase 5)', async () => {
+      await call('patch', '/rma/r1/usage', { units: [{ stockItemId: 's1', usage: 'used' }] }).expect(400);
+      await call('patch', '/rma/r1/usage', { units: [{ usage: 'USED' }] }).expect(400);
+      await call('patch', '/rma/r1/usage', { units: [] }).expect(400);
+      expect((await call('patch', '/rma/r1/usage', { units: [{ stockItemId: 's1', usage: 'UNUSED' }] })).status).toBeLessThan(300);
+    });
+
+    it('validates the unit list on a partial return (Phase 5)', async () => {
+      await call('patch', '/unused/r1/return', { stockItemIds: 's1' }).expect(400);
+      await call('patch', '/unused/r1/return', { stockItemIds: [1] }).expect(400);
+      expect((await call('patch', '/unused/r1/return', { stockItemIds: ['s1'] })).status).toBeLessThan(300);
+    });
+  });
+
+  describe('retired Step 5 writes (Phase 2)', () => {
+    beforeAll(() => { delete process.env.ENABLE_STEP5_LEGACY; });
+    afterAll(() => { process.env.ENABLE_STEP5_LEGACY = 'true'; });
+
+    it.each([
+      ['patch', '/transfer/t1/complete', {}],
+      ['patch', '/inventory/s1/status', { status: 'QUARANTINE' }],
+      ['patch', '/inventory/s1/location', { warehouseId: 'w1' }],
+      ['post', '/adjustment', { productLabel: 'x', reason: 'y', quantityBefore: 1, quantityAfter: 2 }],
+      ['patch', '/adjustment/a1/approve', {}],
+      ['post', '/cycle-count/c1/approve', {}],
+    ])('%s %s answers 410 even for SUPER_ADMIN', async (method, path, body) => {
+      principal = dbRole('SUPER_ADMIN', []);
+      const res = await call(method, path, body as Record<string, unknown>);
+      expect(res.status).toBe(410);
+      expect(res.body.viewAt).toBe('/reports?tab=balance');
+    });
+
+    it('cancelling a cycle count stays open so locked stock can be released', async () => {
+      principal = legacy(UserRole.WAREHOUSE_MANAGER);
+      expect((await call('post', '/cycle-count/c1/cancel')).status).toBeLessThan(300);
     });
   });
 });

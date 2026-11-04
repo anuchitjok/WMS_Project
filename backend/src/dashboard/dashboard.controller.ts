@@ -1,6 +1,7 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
+import { WorkQueueService } from './work-queue.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { warehouseFilter } from '../common/warehouse-scope';
@@ -10,7 +11,7 @@ import { warehouseFilter } from '../common/warehouse-scope';
 @UseGuards(JwtAuthGuard)
 @Controller('dashboard')
 export class DashboardController {
-  constructor(private readonly dashboardService: DashboardService) {}
+  constructor(private readonly dashboardService: DashboardService, private readonly workQueue: WorkQueueService) {}
 
   @Get('stats')
   @ApiOperation({ summary: 'Get dashboard KPIs and stats (legacy V1 — unchanged)' })
@@ -29,6 +30,13 @@ export class DashboardController {
   @ApiOperation({ summary: 'V2 Section B — inventory health by status' })
   getInventoryHealth(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
     return this.dashboardService.getInventoryHealth(warehouseFilter(user, warehouseId));
+  }
+
+  // Phase 4: open work with next action, responsible person and waiting time (warehouse-scoped).
+  @Get('work-queue')
+  @ApiOperation({ summary: 'Work Queue — next action, owner and waiting time for every open item' })
+  getWorkQueue(@Query('warehouseId') warehouseId?: string, @CurrentUser() user?: any) {
+    return this.workQueue.list(warehouseFilter(user, warehouseId));
   }
 
   @Get('activity')

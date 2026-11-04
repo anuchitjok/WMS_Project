@@ -1,5 +1,5 @@
 import { RequestStatus, UserRole } from '@prisma/client';
-import { Fixture, TestUser, expectStatus } from './harness';
+import { Fixture, TestUser, expectStatus, useStep5Legacy } from './harness';
 
 // Phase 2: separation of duties on every approval, and the approval engine's
 // own authorization (step role, order, self/duplicate approval, direct-API bypass).
@@ -44,6 +44,8 @@ describe('Separation of duties and approval engine', () => {
   }
 
   describe('maker ≠ checker', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('a requester-approver cannot approve their own withdrawal request, a colleague can', async () => {
       const product = await fx.product();
       await fx.stock(product.id, 1);

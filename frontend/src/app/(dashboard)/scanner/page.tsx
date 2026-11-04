@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { STOCK_STATUS_COLORS, formatDate } from '@/lib/utils';
 import { Search, QrCode } from 'lucide-react';
+import { RetiredNotice } from '@/components/layout/retired-notice';
 
 // Dynamically import scanner to avoid SSR issues (camera API is browser-only)
 const BarcodeScanner = dynamic(
@@ -56,6 +57,8 @@ export default function ScannerPage() {
         </h1>
         <p className="text-slate-500 text-sm mt-1">Scan a barcode or enter a code manually to look up stock</p>
       </div>
+      {/* Phase 2: the scanner's transfer / count / adjust workflows answer RETIRED; lookup is read-only and stays. */}
+      <RetiredNotice feature="Scanning to transfer, count or adjust stock" scope="Lookup below is read-only and still works." />
 
       <Card>
         <CardHeader>

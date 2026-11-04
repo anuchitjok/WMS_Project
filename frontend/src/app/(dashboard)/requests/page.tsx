@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { requestsApi, warehouseApi } from '@/lib/api';
 import { useAuthStore } from '@/store/auth.store';
-import type { WithdrawalRequest, RequestStatus } from '@/types';
+import type { WithdrawalRequest, RequestStage } from '@/types';
 import type { PaginatedResponse } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import Link from 'next/link';
-import { REQUEST_STATUS_COLORS, formatDate } from '@/lib/utils';
+import { REQUEST_STAGE_COLORS, REQUEST_STAGE_LABELS, REQUEST_STATUS_COLORS, formatDate } from '@/lib/utils';
 import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckCircle2, Eye, Send, X, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -58,15 +58,28 @@ interface ItemRow {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const STATUS_OPTIONS: { value: RequestStatus | 'ALL'; label: string }[] = [
+// Filter by the derived stage (request + its fulfillment task), the same value
+// the badges show — so every request is reachable, including in-fulfillment ones.
+const STAGE_OPTIONS: { value: RequestStage | 'ALL'; label: string }[] = [
   { value: 'ALL', label: 'All Statuses' },
-  { value: 'DRAFT', label: 'Draft' },
-  { value: 'SUBMITTED', label: 'Submitted' },
-  { value: 'PENDING_APPROVAL', label: 'Pending Approval' },
-  { value: 'APPROVED', label: 'Approved' },
-  { value: 'REJECTED', label: 'Rejected' },
-  { value: 'COMPLETED', label: 'Completed' },
+  ...(Object.keys(REQUEST_STAGE_LABELS) as RequestStage[]).map((s) => ({ value: s, label: REQUEST_STAGE_LABELS[s] })),
 ];
+
+/** Badge for a request: the derived stage when the API sent one, else the raw status. */
+function RequestStageBadge({ req }: { req: WithdrawalRequest }) {
+  if (req.stage) {
+    return (
+      <Badge className={REQUEST_STAGE_COLORS[req.stage]} variant="outline">
+        {REQUEST_STAGE_LABELS[req.stage]}
+      </Badge>
+    );
+  }
+  return (
+    <Badge className={REQUEST_STATUS_COLORS[req.status]} variant="outline">
+      {req.status.replace(/_/g, ' ')}
+    </Badge>
+  );
+}
 
 const EMPTY_ITEM: ItemRow = { brandId: '', productId: '', quantity: 1 };
 
@@ -396,7 +409,7 @@ export default function RequestsPage() {
     setLoading(true);
     try {
       const res = await requestsApi.list({
-        status: status !== 'ALL' ? status : undefined,
+        stage: status !== 'ALL' ? status : undefined,
         page,
         limit: 20,
       });
@@ -495,6 +508,14 @@ export default function RequestsPage() {
       setActionLoading(null);
     }
   }
+
+  // Phase 4: what still blocks Create Request (same checks as handleSubmit and the API).
+  const missingForCreate = [
+    !rmaCaseNumber.trim() && 'RMA Case Number',
+    items.some((i) => !i.brandId) && 'Brand on every item',
+    items.some((i) => !i.productId) && 'SKU on every item',
+    items.some((i) => !(Number(i.quantity) >= 1)) && 'quantity of at least 1',
+  ].filter(Boolean) as string[];
 
   async function handleSubmit() {
     if (!rmaCaseNumber.trim()) { toast.error('RMA Case Number is required'); return; }
@@ -637,7 +658,8 @@ export default function RequestsPage() {
             </div>
 
             {/* ── Sticky Footer (plain div — avoids DialogFooter's -mx-4 -mb-4 that assumes p-4 on dialog) ── */}
-            <div className="shrink-0 flex justify-end gap-2 px-6 py-4 border-t bg-background">
+            <div className="shrink-0 flex justify-end items-center gap-2 px-6 py-4 border-t bg-background">
+              {missingForCreate.length > 0 && <p className="mr-auto text-xs text-amber-700">Still needed: {missingForCreate.join(', ')}</p>}
               <Button
                 variant="outline"
                 onClick={() => { setOpen(false); resetForm(); }}
@@ -648,7 +670,7 @@ export default function RequestsPage() {
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white min-w-[140px]"
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || missingForCreate.length > 0}
               >
                 {submitting ? 'Creating…' : 'Create Request'}
               </Button>
@@ -664,7 +686,7 @@ export default function RequestsPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {STATUS_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            {STAGE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
@@ -680,9 +702,7 @@ export default function RequestsPage() {
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">{formatDate(detailReq.createdAt)}</p>
               </div>
-              <Badge className={REQUEST_STATUS_COLORS[detailReq.status]} variant="outline">
-                {detailReq.status.replace(/_/g, ' ')}
-              </Badge>
+              <RequestStageBadge req={detailReq} />
             </DialogHeader>
 
             <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
@@ -860,9 +880,7 @@ export default function RequestsPage() {
                     ) : '—'}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge className={REQUEST_STATUS_COLORS[req.status]} variant="outline">
-                      {req.status.replace(/_/g, ' ')}
-                    </Badge>
+                    <RequestStageBadge req={req} />
                   </td>
                   <td className="px-4 py-3 text-slate-600">{req.items?.length ?? 0}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{formatDate(req.createdAt)}</td>

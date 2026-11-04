@@ -204,23 +204,26 @@ describe('Reservation, release and goods-issue integrity', () => {
       return { product, row, req, task };
     }
 
-    it('completing packing confirms the missing picks', async () => {
+    // Phase 1: packing and dispatch no longer confirm picks on the picker's behalf.
+    it('completing packing is refused while a line has no confirmed pick; stock stays reserved', async () => {
       const { row, task } = await legacyTask(FulfillmentStatus.PACKING, 1, 1);
       await fx.prisma.packingSession.create({ data: { taskId: task.id } });
-      expectStatus(await fx.as(staff).patch(`/fulfillment/${task.id}/advance`), 200);
-      expect((await fx.prisma.fulfillmentTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe(FulfillmentStatus.PACKED);
-      expect(await fx.statuses([row.id])).toEqual([StockStatus.PICKED]);
+      await fx.as(staff).patch(`/fulfillment/${task.id}/advance`).expect(409);
+      expect((await fx.prisma.fulfillmentTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe(FulfillmentStatus.PACKING);
+      expect(await fx.statuses([row.id])).toEqual([StockStatus.RESERVED]);
     });
 
-    it('dispatch issues the reserved goods and splits a bulk row instead of shipping all of it', async () => {
+    it('dispatch is refused while a line has no confirmed pick; nothing is issued or split', async () => {
       const { product, row, task } = await legacyTask(FulfillmentStatus.READY_TO_SHIP, 5, 2);
       const sh = await fx.prisma.shipment.create({ data: { refNumber: fx.uid('SHP'), taskId: task.id } });
-      expectStatus(await fx.as(staff).post(`/fulfillment/shipments/${sh.id}/dispatch`), 201);
+      await fx.as(staff).post(`/fulfillment/shipments/${sh.id}/dispatch`).expect(409);
 
-      const shipped = await fx.prisma.stockItem.findUniqueOrThrow({ where: { id: row.id } });
-      expect(shipped).toMatchObject({ status: StockStatus.SHIPPED, quantity: 2 });
-      const rest = await fx.prisma.stockItem.findFirstOrThrow({ where: { productId: product.id, id: { not: row.id } } });
-      expect(rest).toMatchObject({ status: StockStatus.AVAILABLE, quantity: 3 });
+      expect(await fx.prisma.stockItem.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: StockStatus.RESERVED, quantity: 5 });
+      expect(await fx.prisma.stockItem.count({ where: { productId: product.id } })).toBe(1);
+      expect((await fx.prisma.shipment.findUniqueOrThrow({ where: { id: sh.id } })).shippedAt).toBeNull();
+      // The supported way out: cancel the task, which releases the reservation.
+      expectStatus(await fx.as(staff).post(`/fulfillment/${task.id}/cancel`, { reason: 'legacy task' }), 201);
+      expect(await fx.statuses([row.id])).toEqual([StockStatus.AVAILABLE]);
     });
   });
 });

@@ -44,7 +44,14 @@ export class ScrapController {
   @Patch(':id/status')
   @Access(ACCESS.scrap)
   @ApiOperation({ summary: 'Advance scrap case status' })
-  updateStatus(@Param('id') id: string, @Body('status') status: ScrapStatus, @CurrentUser() user: any) {
-    return this.scrap.updateStatus(id, status, user.id, user);
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: ScrapStatus,
+    @Body('disposalMethod') disposalMethod: string | undefined,
+    @Body('notes') notes: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const text = (v: unknown, max: number) => (typeof v === 'string' ? v.slice(0, max) : undefined);
+    return this.scrap.updateStatus(id, status, user.id, user, { disposalMethod: text(disposalMethod, 100), notes: text(notes, 500) });
   }
 }

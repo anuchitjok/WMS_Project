@@ -3,10 +3,14 @@ import { Injectable, NotFoundException, ConflictException, BadRequestException }
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ScopePrincipal, assertWarehouseAccess, scopedWarehouseIds } from '../common/warehouse-scope';
-import { StockStatus, OwnershipType, ReceivingStatus } from '@prisma/client';
+import { Prisma, StockStatus, OwnershipType, ReceivingStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { InspectReceivingDto } from './dto/inspect-receiving.dto';
 import { transitionStock } from '../common/stock-state';
+import { assertNotSelfApproval } from '../common/separation-of-duties';
+
+/** Units of a receipt that have not moved on yet (still at the dock / in QC). */
+const REVERSIBLE: StockStatus[] = [StockStatus.PENDING_RECEIVING, StockStatus.PENDING_INSPECTION, StockStatus.QUARANTINE, StockStatus.RTV_PENDING];
 
 interface CreateReceivingDto {
   sourceType: string;
@@ -70,6 +74,74 @@ export class ReceivingService {
     });
   }
 
+  /**
+   * Phase 6 — controlled correction of a mistaken receipt. Allowed only while
+   * every unit is still at the dock (not put away, reserved, issued or in an
+   * RTV / scrap case). The receipt and its lines are kept unchanged and marked
+   * CANCELLED; its units become CANCELLED (their serials are free again for a
+   * corrected receipt). Needs a reason and a second person (maker ≠ checker).
+   */
+  async reverse(id: string, reason: string, actorId: string, scope?: ScopePrincipal) {
+    const why = reason?.trim() ?? '';
+    if (why.length < 5) throw new BadRequestException('A reason (at least 5 characters) is required to reverse a receipt');
+    const gr = await this.prisma.goodsReceiving.findUnique({ where: { id }, include: { items: { include: { stockItem: true } } } });
+    if (!gr) throw new NotFoundException('Receiving record not found');
+    for (const item of gr.items) {
+      if (item.stockItem?.warehouseId) assertWarehouseAccess(scope, item.stockItem.warehouseId, 'this receiving record');
+    }
+    if (gr.statusEnum === ReceivingStatus.CANCELLED) throw new ConflictException(`${gr.refNumber} is already reversed`);
+    assertNotSelfApproval(actorId, [gr.receivedById], 'the reversal of a receipt');
+    const unitIds = gr.items.map((i) => i.stockItemId).filter((x): x is string => !!x);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      if (unitIds.length) await tx.$queryRaw`SELECT "id" FROM "StockItem" WHERE "id" = ANY(${unitIds}::text[]) ORDER BY "id" FOR UPDATE`;
+      const units = await tx.stockItem.findMany({ where: { id: { in: unitIds } }, select: { id: true, serialNumber: true, status: true } });
+      const [rtvOpen, scrapOpen] = await Promise.all([
+        tx.rTVCase.findMany({ where: { stockItemId: { in: unitIds }, status: { notIn: ['COMPLETED', 'CANCELLED', 'REJECTED_BY_VENDOR'] } }, select: { stockItemId: true, refNumber: true } }),
+        tx.scrapCase.findMany({ where: { stockItemId: { in: unitIds }, status: { in: ['PENDING_REVIEW', 'APPROVED'] } }, select: { stockItemId: true, refNumber: true } }),
+      ]);
+      const blocked = units.filter((u) => !REVERSIBLE.includes(u.status) || rtvOpen.some((r) => r.stockItemId === u.id) || scrapOpen.some((s) => s.stockItemId === u.id));
+      if (blocked.length) {
+        const list = blocked.map((u) => `${u.serialNumber ?? u.id} (${[u.status, ...rtvOpen.filter((r) => r.stockItemId === u.id).map((r) => r.refNumber), ...scrapOpen.filter((s) => s.stockItemId === u.id).map((s) => s.refNumber)].join(', ')})`).join('; ');
+        throw new ConflictException(`${gr.refNumber} cannot be reversed — these units have already moved on: ${list}. Correct them through the document that moved them.`);
+      }
+
+      // Claim the receipt: a second reversal (or a concurrent one) matches nothing.
+      const claimed = await tx.goodsReceiving.updateMany({
+        where: { id, statusEnum: gr.statusEnum },
+        data: { statusEnum: ReceivingStatus.CANCELLED, status: 'cancelled' },
+      });
+      if (claimed.count === 0) throw new ConflictException(`${gr.refNumber} was changed by someone else — reload and retry`);
+
+      for (const u of units) {
+        await transitionStock(tx, u.id, REVERSIBLE, StockStatus.CANCELLED, { notes: `Receipt ${gr.refNumber} reversed: ${why}` });
+        await tx.auditLog.create({
+          data: { userId: actorId, action: 'STOCK_RECEIPT_REVERSED', entityType: 'StockItem', entityId: u.id, detail: `${gr.refNumber}: ${why}`, changes: { status: { from: u.status, to: StockStatus.CANCELLED } } },
+        });
+      }
+
+      // A reversed RTV replacement: the case waits for its replacement again.
+      const replacedCases = await tx.rTVCase.findMany({ where: { replacementStockId: { in: unitIds } }, select: { id: true, refNumber: true, status: true } });
+      for (const rc of replacedCases) {
+        await tx.rTVCase.update({ where: { id: rc.id }, data: { replacementStockId: null, status: 'REPLACEMENT_PENDING', resolution: null, closedAt: null } });
+        await tx.auditLog.create({
+          data: { userId: actorId, action: 'RTV_REPLACEMENT_REVERSED', entityType: 'RTVCase', entityId: rc.id, detail: `${rc.refNumber}: replacement receipt ${gr.refNumber} reversed — ${why}`, changes: { status: { from: rc.status, to: 'REPLACEMENT_PENDING' } } },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId, action: 'RECEIVING_REVERSED', entityType: 'GoodsReceiving', entityId: id,
+          detail: `${gr.refNumber} reversed (${units.length} unit(s)): ${why}`,
+          changes: { status: { from: gr.statusEnum, to: ReceivingStatus.CANCELLED }, reason: why, units: units.map((u) => u.serialNumber ?? u.id) },
+        },
+      });
+      return { refNumber: gr.refNumber, reversedUnits: units.length };
+    });
+    this.realtime.emitInventoryUpdate({ action: 'receipt_reversed', refNumber: gr.refNumber });
+    return result;
+  }
+
   async findOne(id: string, scope?: ScopePrincipal) {
     const gr = await this.prisma.goodsReceiving.findUnique({
       where: { id },
@@ -86,7 +158,17 @@ export class ReceivingService {
     return gr;
   }
 
-  async create(dto: CreateReceivingDto, userId: string, scope?: ScopePrincipal) {
+  /**
+   * `inTx` runs inside the receipt's transaction with the new unit ids, so a
+   * caller can link the receipt (e.g. an RTV replacement) atomically: if the
+   * link fails, nothing is received.
+   */
+  async create(
+    dto: CreateReceivingDto,
+    userId: string,
+    scope?: ScopePrincipal,
+    inTx?: (tx: Prisma.TransactionClient, gr: { id: string; refNumber: string }, stockItemIds: string[]) => Promise<void>,
+  ) {
     for (const item of dto.items ?? []) {
       if (item.warehouseId) assertWarehouseAccess(scope, item.warehouseId, 'the destination warehouse');
     }
@@ -107,9 +189,21 @@ export class ReceivingService {
 
     // Serial/batch control enforcement
     for (const item of dto.items) {
-      const product = await this.prisma.product.findUnique({ where: { id: item.productId }, select: { serialControlled: true, batchControlled: true, code: true } });
-      if (product?.serialControlled && !item.serialNumber) throw new BadRequestException(`Product ${product.code} is serial-controlled — serial number is required`);
-      if (product?.batchControlled && !item.batchNumber) throw new BadRequestException(`Product ${product.code} is batch-controlled — batch/lot number is required`);
+      const product = await this.prisma.product.findUnique({ where: { id: item.productId }, select: { serialControlled: true, batchControlled: true, code: true, isActive: true, productStatus: true } });
+      // Phase 4: an incomplete or invalid line is refused before anything is written.
+      if (!product) throw new BadRequestException(`Product ${item.productId} does not exist — pick it from Product Master`);
+      if (!product.isActive) throw new BadRequestException(`Product ${product.code} is ${String(product.productStatus).toLowerCase()} and cannot be received`);
+      if (product.serialControlled && !item.serialNumber) throw new BadRequestException(`Product ${product.code} is serial-controlled — serial number is required`);
+      if (product.batchControlled && !item.batchNumber) throw new BadRequestException(`Product ${product.code} is batch-controlled — batch/lot number is required`);
+      if (item.serialNumber && item.serialNumber !== 'N/A' && item.quantity !== 1) {
+        throw new BadRequestException(`Serial ${item.serialNumber} identifies one unit — quantity must be 1 (add one line per serial)`);
+      }
+    }
+
+    // A vendor reference must point at a real vendor (the form now sends it for Vendor receipts).
+    if (dto.supplierId) {
+      const vendor = await this.prisma.vendor.findUnique({ where: { id: dto.supplierId }, select: { id: true } });
+      if (!vendor) throw new BadRequestException('Vendor not found — pick it from Business Partners');
     }
 
     const refNumber = this.ref();
@@ -134,6 +228,7 @@ export class ReceivingService {
         },
       });
 
+      const stockItemIds: string[] = [];
       for (const item of dto.items) {
         const stock = await tx.stockItem.create({
           data: {
@@ -164,11 +259,13 @@ export class ReceivingService {
             stockItemId: stock.id,
           },
         });
+        stockItemIds.push(stock.id);
       }
 
       await tx.auditLog.create({
         data: { userId, action: 'GOODS_RECEIVED', entityType: 'GoodsReceiving', entityId: created.id, detail: refNumber },
       });
+      if (inTx) await inTx(tx, created, stockItemIds);
       return created;
     });
 
@@ -323,10 +420,10 @@ export class ReceivingService {
     await this.prisma.$transaction(async (tx) => {
       // Claim the receipt: a verified (or inspected) receipt cannot be verified again.
       const claimed = await tx.goodsReceiving.updateMany({
-        where: { id, status: { not: 'completed' } },
+        where: { id, status: { notIn: ['completed', 'cancelled'] } }, // a reversed receipt stays reversed
         data: { status: 'completed', statusEnum: ReceivingStatus.COMPLETED },
       });
-      if (claimed.count === 0) throw new ConflictException('Receiving record has already been verified or inspected');
+      if (claimed.count === 0) throw new ConflictException('Receiving record has already been verified, inspected or reversed');
 
       for (const item of gr.items) {
         if (!item.stockItem || item.inspectionOutcome) continue;

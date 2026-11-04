@@ -128,7 +128,36 @@ export class MrpDataService {
       if (a.action === 'UNUSED_RETURNED_TO_STOCK') returned.set(a.entityId, a.createdAt);
       else if (a.detail === 'Usage: USED') used.set(a.entityId, a.createdAt);
     }
-    const reqIds = [...new Set([...returned.keys(), ...used.keys()])];
+    // Requests recorded per unit (migration 28) are counted from their unit rows
+    // below, so a partly used / partly returned request is split correctly.
+    const unitRows = await this.prisma.issuedUnitUsage.findMany({
+      where: {
+        OR: [
+          { usage: 'USED', recordedAt: { gte: from, lte: opts.asOf } },
+          { returnStatus: 'RECEIVED', returnedAt: { gte: from, lte: opts.asOf } },
+        ],
+      },
+      select: { requestId: true, stockItemId: true, quantity: true, usage: true, returnStatus: true, recordedAt: true, returnedAt: true, request: { select: { refNumber: true } } },
+    });
+    const perUnitReqs = new Set(
+      (await this.prisma.issuedUnitUsage.findMany({ where: { requestId: { in: [...returned.keys(), ...used.keys()] } }, select: { requestId: true }, distinct: ['requestId'] }))
+        .map((r) => r.requestId),
+    );
+    if (unitRows.length) {
+      const stockRows = await this.prisma.stockItem.findMany({ where: { id: { in: [...new Set(unitRows.map((r) => r.stockItemId))] } }, select: { id: true, productId: true, warehouseId: true } });
+      const unitInfo = new Map(stockRows.map((s) => [s.id, s]));
+      for (const r of unitRows) {
+        const s = unitInfo.get(r.stockItemId);
+        if (!s || (opts.productIds && !opts.productIds.includes(s.productId)) || !ok(s.warehouseId)) continue;
+        if (r.usage === 'USED') {
+          events.push({ productId: s.productId, warehouseId: s.warehouseId, kind: 'CONSUMED', qty: r.quantity, date: r.recordedAt.toISOString(), ref: r.request.refNumber });
+        } else if (r.returnStatus === 'RECEIVED' && r.returnedAt) {
+          events.push({ productId: s.productId, warehouseId: s.warehouseId, kind: 'RETURN', qty: r.quantity, date: r.returnedAt.toISOString(), ref: r.request.refNumber });
+        }
+      }
+    }
+
+    const reqIds = [...new Set([...returned.keys(), ...used.keys()])].filter((id) => !perUnitReqs.has(id));
     if (reqIds.length) {
       const items = await this.prisma.withdrawalRequestItem.findMany({
         where: { requestId: { in: reqIds }, usageStatus: { in: ['UNUSED', 'USED'] }, productId: productFilter },

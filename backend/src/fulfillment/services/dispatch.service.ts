@@ -4,8 +4,7 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { InventoryOrchestrationService } from '../../inventory/inventory-orchestration.service';
 import { FulfillmentStatus, Prisma } from '@prisma/client';
 import { nanoid } from 'nanoid';
-import { claimTaskStatus } from './task-state';
-import { PickingService } from './picking.service';
+import { assertAllStockLinesPicked, claimTaskStatus } from './task-state';
 
 @Injectable()
 export class DispatchService {
@@ -13,7 +12,6 @@ export class DispatchService {
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
     private readonly inventory: InventoryOrchestrationService,
-    private readonly picking: PickingService,
   ) {}
 
   async createShipment(
@@ -126,19 +124,14 @@ export class DispatchService {
     // Goods can only leave from a packed, ready task (not cancelled / on hold).
     await claimTaskStatus(tx, sh.taskId, [FulfillmentStatus.READY_TO_SHIP], FulfillmentStatus.SHIPPED);
 
+    // Goods issue uses only confirmed picks — dispatch never confirms a pick itself.
+    await assertAllStockLinesPicked(tx, sh.taskId, 'dispatch');
+
     const issueItems: Array<{ stockItemId: string; qtyIssued: number }> = [];
     const pickedQty = new Map<string, number>();
     for (const ti of sh.task.items) {
       if (!ti.stockItemId) continue;
-      let qty = ti.qtyPicked;
-      if (!ti.pickedAt) {
-        // Task advanced before pick tracking: the goods are going out now.
-        await this.picking.pickInTx(tx, sh.taskId, ti.id, ti.qtyRequested, userId, {
-          note: 'Pick confirmed at dispatch (task advanced without item picks)',
-          allowStatuses: [FulfillmentStatus.SHIPPED],
-        });
-        qty = ti.qtyRequested;
-      }
+      const qty = ti.qtyPicked;
       pickedQty.set(ti.id, qty);
       if (qty > 0) {
         issueItems.push({ stockItemId: ti.stockItemId, qtyIssued: qty });

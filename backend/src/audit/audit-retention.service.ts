@@ -104,8 +104,8 @@ export class AuditRetentionService {
         if (!ids.length) return 0;
         const list = ids.map((r) => r.id);
         await tx.$executeRaw`
-          INSERT INTO "AuditLogArchive" ("id", "userId", "action", "entityType", "entityId", "detail", "correlationId", "ipAddress", "createdAt", "archivedById")
-          SELECT "id", "userId", "action", "entityType", "entityId", "detail", "correlationId", "ipAddress", "createdAt", ${userId}
+          INSERT INTO "AuditLogArchive" ("id", "userId", "action", "entityType", "entityId", "detail", "changes", "correlationId", "ipAddress", "createdAt", "archivedById")
+          SELECT "id", "userId", "action", "entityType", "entityId", "detail", "changes", "correlationId", "ipAddress", "createdAt", ${userId}
           FROM "AuditLog" WHERE "id" = ANY(${list}::text[])
           ON CONFLICT ("id") DO NOTHING`;
         // Only rows now present in the archive are removed from the live log.

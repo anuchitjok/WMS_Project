@@ -1,5 +1,5 @@
 import { FulfillmentStatus, StockStatus, UserRole } from '@prisma/client';
-import { Fixture, TestUser, expectStatus } from './harness';
+import { Fixture, TestUser, expectStatus, useStep5Legacy } from './harness';
 
 // Scanner workflows go through the same guarded services as the screens.
 
@@ -112,6 +112,17 @@ describe('Scanner workflows: PICK / PUTAWAY / SHIP / COUNT', () => {
       expect(twice.body.result).toBe('ERROR');
     });
 
+    it('refuses a warehouse-only or rack-only location scan (a slot is required)', async () => {
+      const loc = await fx.location();
+      const product = await fx.product({ serialControlled: true });
+      const [inspected] = await fx.stock(product.id, 1, { status: StockStatus.PENDING_INSPECTION });
+      for (const key of [loc.warehouse.code, `${loc.warehouse.code}|R1`]) {
+        const res = await scan(staff, { workflow: 'PUTAWAY', rawValue: `SN|${inspected.serialNumber}`, context: { locationKey: key } });
+        expect(res.body.result).toBe('ERROR');
+      }
+      expect(await fx.statuses([inspected.id])).toEqual([StockStatus.PENDING_INSPECTION]);
+    });
+
     it('is refused (and logged) for a requester; LOOKUP stays open to everyone', async () => {
       const loc = await fx.location();
       const product = await fx.product({ serialControlled: true });
@@ -127,6 +138,8 @@ describe('Scanner workflows: PICK / PUTAWAY / SHIP / COUNT', () => {
   });
 
   describe('COUNT', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('does not record counts on a session that is closed', async () => {
       const loc = await fx.location();
       const product = await fx.product({ serialControlled: true });

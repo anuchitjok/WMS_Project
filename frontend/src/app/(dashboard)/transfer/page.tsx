@@ -2,68 +2,30 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
-import { toast } from 'sonner';
 import { transferApi } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
+import { RetiredNotice } from '@/components/layout/retired-notice';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { formatDate } from '@/lib/utils';
 
+// Phase 2: Stock Transfer is retired (the API answers 410 for new or completed
+// transfers). Existing transfer records stay visible here as history.
 export default function TransferPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ productLabel: '', quantity: 1, fromLocation: '', toLocation: '' });
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setRows(await transferApi.list()); } finally { setLoading(false); }
+    try { setRows(await transferApi.list()); } catch { setRows([]); } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Client-side guard — mirrors the backend DTO (quantity >= 1, required fields).
-  const trimmed = {
-    productLabel: form.productLabel.trim(),
-    fromLocation: form.fromLocation.trim(),
-    toLocation: form.toLocation.trim(),
-  };
-  const qtyValid = Number.isFinite(form.quantity) && form.quantity >= 1;
-  const sameLocation = !!trimmed.fromLocation && trimmed.fromLocation === trimmed.toLocation;
-  const formValid = !!trimmed.productLabel && qtyValid && !!trimmed.fromLocation && !!trimmed.toLocation && !sameLocation;
-
-  async function submit() {
-    if (!formValid) { toast.error('Please complete all fields with a valid quantity and different locations'); return; }
-    try { await transferApi.create({ ...form, ...trimmed, quantity: Number(form.quantity) }); toast.success('Transfer request created'); setOpen(false); load(); }
-    catch (e: any) { toast.error(e.message); }
-  }
-  async function complete(id: string) {
-    try { await transferApi.complete(id); toast.success('Transfer completed'); load(); }
-    catch (e: any) { toast.error(e.message); }
-  }
-
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="Stock Transfer" subtitle="Move stock between warehouses and locations" icon={ArrowLeftRight}
-        action={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>+ Transfer Request</DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Create Stock Transfer</DialogTitle></DialogHeader>
-              <div className="space-y-3">
-                <div className="space-y-1"><Label>Product Label</Label><Input value={form.productLabel} onChange={(e) => setForm((f) => ({ ...f, productLabel: e.target.value }))} placeholder="e.g. SW-C2960X — Cisco Switch" /></div>
-                <div className="space-y-1"><Label>Quantity</Label><Input type="number" min={1} value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: Number(e.target.value) }))} />{!qtyValid && <p className="text-xs text-red-500">Quantity must be at least 1</p>}</div>
-                <div className="space-y-1"><Label>From Location</Label><Input value={form.fromLocation} onChange={(e) => setForm((f) => ({ ...f, fromLocation: e.target.value }))} placeholder="WH-MAIN / R-01 / S-A1" /></div>
-                <div className="space-y-1"><Label>To Location</Label><Input value={form.toLocation} onChange={(e) => setForm((f) => ({ ...f, toLocation: e.target.value }))} placeholder="WH-MAIN / R-02 / S-B1" />{sameLocation && <p className="text-xs text-red-500">To location must differ from From location</p>}</div>
-              </div>
-              <DialogFooter><Button onClick={submit} disabled={!formValid} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">Create</Button></DialogFooter>
-            </DialogContent>
-          </Dialog>
-        }
-      />
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <PageHeader title="Stock Transfer (history)" subtitle="Past transfers between locations" icon={ArrowLeftRight} />
+      <RetiredNotice feature="Stock Transfer" />
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-slate-100 bg-slate-50">
             <th className="text-left px-4 py-3 font-medium text-slate-600">Transfer No.</th>
@@ -71,19 +33,19 @@ export default function TransferPage() {
             <th className="text-left px-4 py-3 font-medium text-slate-600">From → To</th>
             <th className="text-left px-4 py-3 font-medium text-slate-600">Qty</th>
             <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Action</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">Created</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {loading ? [...Array(3)].map((_, i) => <tr key={i}>{[...Array(6)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
-              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No transfers</td></tr>
+              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No transfer history</td></tr>
               : rows.map((t) => (
-                <tr key={t.id} className="hover:bg-slate-50">
+                <tr key={t.id}>
                   <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{t.refNumber}</td>
                   <td className="px-4 py-3 text-slate-700">{t.productLabel}</td>
                   <td className="px-4 py-3 text-xs text-slate-600">{t.fromLocation} → {t.toLocation}</td>
                   <td className="px-4 py-3 font-medium">{t.quantity}</td>
-                  <td className="px-4 py-3"><Badge variant="outline" className={t.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}>{t.status}</Badge></td>
-                  <td className="px-4 py-3">{t.status !== 'COMPLETED' && <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => complete(t.id)}>Confirm</Button>}</td>
+                  <td className="px-4 py-3"><Badge variant="outline" className={t.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-700'}>{t.status}</Badge></td>
+                  <td className="px-4 py-3 text-xs text-slate-500">{t.createdAt ? formatDate(t.createdAt) : '—'}</td>
                 </tr>
               ))}
           </tbody>

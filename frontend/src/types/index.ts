@@ -15,6 +15,11 @@ export type RequestStatus =
   | 'PICKING' | 'PICKED' | 'PACKED' | 'READY_FOR_PICKUP' | 'SHIPPED'
   | 'ISSUED_TO_RMA' | 'COMPLETED' | 'CANCELLED';
 
+/** Business-facing request stage derived by the API from the request + its latest fulfillment task. */
+export type RequestStage =
+  | 'DRAFT' | 'PENDING_APPROVAL' | 'APPROVED' | 'IN_FULFILLMENT'
+  | 'ISSUED' | 'CLOSED' | 'REJECTED' | 'CANCELLED';
+
 export type RTVStatus =
   | 'RTV_REQUIRED' | 'PENDING_REVIEW' | 'APPROVED' | 'PENDING_SHIPMENT'
   | 'SHIPPED_TO_VENDOR' | 'VENDOR_RECEIVED' | 'REPLACEMENT_PENDING'
@@ -101,6 +106,8 @@ export interface WithdrawalRequest {
   requesterId: string;
   department: string;
   status: RequestStatus;
+  stage?: RequestStage;
+  fulfillmentStatus?: string | null;
   priority: string;
   purpose?: string;
   requiredDate?: string;
@@ -132,6 +139,8 @@ export interface AuditLog {
   entityType?: string;
   entityId?: string;
   detail?: string;
+  /** Old → new values (migration 27); null on older entries. */
+  changes?: Record<string, any> | null;
   ipAddress?: string;
   createdAt: string;
   user?: Pick<User, 'fullName' | 'username'>;

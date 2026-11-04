@@ -136,8 +136,29 @@ export class HandoverService {
   }
 
   // Release reservation for cancelled / exception tasks
+  // Cancelling only the task (board exception) sends its request back to APPROVED
+  // so it can be allocated again; cancelling the request itself goes through
+  // RequestsService.cancel, which calls cancelInTx and marks the request CANCELLED.
   async releaseAndCancel(taskId: string, userId: string, reason?: string) {
-    const result = await this.prisma.$transaction((tx) => this.cancelInTx(tx, taskId, userId, reason));
+    const result = await this.prisma.$transaction(async (tx) => {
+      const task = await this.cancelInTx(tx, taskId, userId, reason);
+      const reopened = await tx.withdrawalRequest.updateMany({
+        where: { id: task.requestId, status: RequestStatus.PICKING },
+        data: { status: RequestStatus.APPROVED, version: { increment: 1 } },
+      });
+      if (reopened.count === 1) {
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'REQUEST_REOPENED',
+            entityType: 'WithdrawalRequest',
+            entityId: task.requestId,
+            detail: `${task.requestRef ?? task.requestId}: fulfillment task ${task.refNumber} cancelled — back to APPROVED for re-allocation`,
+          },
+        });
+      }
+      return task;
+    });
     this.realtime.emitRequestUpdate({ action: 'fulfillment_cancelled', taskId });
     return result;
   }

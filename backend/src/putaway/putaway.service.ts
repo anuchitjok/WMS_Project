@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus } from '@prisma/client';
@@ -54,8 +54,12 @@ export class PutawayService {
 
   // Confirm putaway: assign location and set AVAILABLE.
   // Only stock waiting in the putaway queue (PENDING_INSPECTION) can be put away,
-  // and only into a location that exists in the Warehouse → Rack → Slot hierarchy.
+  // and only into an active slot of the Warehouse → Rack → Slot hierarchy: stock
+  // never becomes AVAILABLE without a bin.
   async confirm(stockItemId: string, location: LocationInput, userId: string, scope?: ScopePrincipal) {
+    if (!location?.slotId) {
+      throw new BadRequestException('Choose a destination slot (Warehouse → Rack → Slot) before confirming putaway');
+    }
     // Stock already assigned to a warehouse must be in scope; unassigned (dock) stock may be put away by anyone in scope.
     const current = await this.prisma.stockItem.findUnique({ where: { id: stockItemId }, select: { warehouseId: true } });
     if (current?.warehouseId) assertWarehouseAccess(scope, current.warehouseId, 'this stock item');

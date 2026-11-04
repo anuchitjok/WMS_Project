@@ -96,4 +96,12 @@ export class ReceivingController {
   verify(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.verify(id, user.id, user);
   }
+
+  @Post(':id/reverse')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.receivingReverse)
+  @ApiOperation({ summary: 'Reverse a mistaken receipt before putaway (keeps the original, cancels its units, audited)' })
+  reverse(@Param('id') id: string, @Body('reason') reason: unknown, @CurrentUser() user: any) {
+    return this.service.reverse(id, typeof reason === 'string' ? reason.slice(0, 500) : '', user.id, user);
+  }
 }

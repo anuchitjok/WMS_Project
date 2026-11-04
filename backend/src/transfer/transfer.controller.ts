@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
+import { Retired } from '../common/retired';
 import { LocationDto } from '../common/location.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateTransferDto } from './dto/create-transfer.dto';
@@ -21,6 +22,7 @@ export class TransferController {
     return this.service.findAll(status, user);
   }
 
+  @Retired('Stock Transfer')
   @Post()
   @UseGuards(AccessGuard)
   @Access(ACCESS.transfer)
@@ -28,6 +30,7 @@ export class TransferController {
     return this.service.create(dto, user.id, user);
   }
 
+  @Retired('Stock Transfer')
   @Patch(':id/complete')
   @UseGuards(AccessGuard)
   @Access(ACCESS.transfer)

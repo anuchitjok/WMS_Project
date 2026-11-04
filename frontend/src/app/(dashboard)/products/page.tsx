@@ -10,7 +10,7 @@ import {
   CircleDot, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { productsApi, warehouseApi, labelsApi } from '@/lib/api';
+import { productsApi, warehouseApi, labelsApi, masterDataApi } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -591,6 +591,9 @@ function EnterpriseRow({ row, isSelected, onSelect, onDrilldown, onEdit, onStatu
 // ─── Enterprise Product Master Tab ────────────────────────────────────────────
 
 function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses: any[] }) {
+  // Phase 4: Unit of Measure on the form, from Lists & Codes (the API accepts only active codes once any exist).
+  const [uoms, setUoms] = useState<{ code: string; name: string }[] | null>(null);
+  useEffect(() => { masterDataApi.uoms().then(setUoms).catch(() => setUoms([])); }, []);
   const [kpi, setKpi] = useState<any>(null);
   const [kpiLoading, setKpiLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
@@ -685,11 +688,24 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
   async function submit() {
     setBusy(true);
     try {
-      if (editId) { const { code, ...updatePayload } = form; await productsApi.update(editId, updatePayload); toast.success('Updated'); }
+      if (editId) {
+        const { code, ...updatePayload } = form;
+        // An unchanged legacy unit is not re-sent, so it is not re-validated against Lists & Codes.
+        if (updatePayload.unit === formBaseline.unit) delete updatePayload.unit;
+        await productsApi.update(editId, updatePayload); toast.success('Updated');
+      }
       else { await productsApi.create({ ...form, unitCost: Number(form.unitCost), minStock: Number(form.minStock), brandId: form.brandId || undefined }); toast.success('Created'); }
       setOpen(false); setForm(BLANK); setFormBaseline(BLANK); setEditId(null); load(); loadKpi();
     } catch (e: any) { toast.error(e.message); } finally { setBusy(false); }
   }
+
+  // Phase 4: required fields are checked before Save/Create is enabled (the API enforces the same).
+  const unitOk = !!String(form.unit ?? '').trim() && (!uoms?.length || uoms.some((u) => u.code === form.unit) || (!!editId && form.unit === formBaseline.unit));
+  const missing = [
+    !editId && !String(form.code ?? '').trim() && 'Product code',
+    !String(form.name ?? '').trim() && 'Product name',
+    !unitOk && 'Unit of measure',
+  ].filter(Boolean) as string[];
 
   const formIsDirty = hasUnsavedChanges(form, formBaseline);
   const formGuard = useDiscardGuard(formIsDirty, () => {
@@ -910,6 +926,19 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
                   <SelectContent align="start" className={`max-h-48 ${SELECT_POPUP_FITS_CONTENT}`}>{brands.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
+              <div className="space-y-1"><Label htmlFor="product-uom">Unit of Measure *</Label>
+                {uoms && uoms.length > 0 ? (
+                  <select id="product-uom" value={editId || uoms.some((u) => u.code === form.unit) ? (form.unit ?? '') : ''} onChange={(e) => setForm((f: any) => ({ ...f, unit: e.target.value }))}
+                    className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-green-500 focus:outline-none">
+                    <option value="" disabled>Select unit…</option>
+                    {editId && form.unit && !uoms.some((u) => u.code === form.unit) && <option value={form.unit}>{form.unit} (not in Lists &amp; Codes)</option>}
+                    {uoms.map((u) => <option key={u.code} value={u.code}>{u.code} — {u.name}</option>)}
+                  </select>
+                ) : (
+                  <Input id="product-uom" value={form.unit ?? ''} onChange={F('unit')} placeholder="e.g. pcs" />
+                )}
+                <Hint>The unit stock, requests and receiving are counted in. There is no automatic conversion between units (for example box to pieces).</Hint>
+              </div>
               <div className="space-y-1"><Label>Standard Unit Cost (฿)</Label><Input type="number" value={form.unitCost} onChange={F('unitCost')} />
                 <Hint>Fixed cost of one unit, used to value stock on hand. It is not updated automatically when goods are received.</Hint>
               </div>
@@ -959,7 +988,8 @@ function EnterpriseMasterTab({ brands, warehouses }: { brands: any[]; warehouses
           {/* Plain div, not DialogFooter — that carries -mx-4 -mb-4, which assumes the dialog's default p-4 */}
           <div className="shrink-0 flex flex-col-reverse gap-2 rounded-b-xl border-t bg-muted/50 px-6 py-4 sm:flex-row sm:justify-end">
             <Button variant="outline" onClick={formGuard.requestClose}>Cancel</Button>
-            <Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
+            {missing.length > 0 && <p className="text-xs text-amber-700 mr-auto self-center">Required: {missing.join(', ')}</p>}
+            <Button onClick={submit} className="bg-green-600 hover:bg-green-700 text-white" disabled={busy || missing.length > 0}>{busy ? 'Saving…' : editId ? 'Save' : 'Create'}</Button>
           </div>
         </DialogContent>
       </Dialog>

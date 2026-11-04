@@ -1,6 +1,7 @@
 import { splitStockRow } from '../common/stock-state';
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { NOT_COUNT_LOCKED } from '../common/count-lock';
+import { getAvailableUnitsByProduct } from '../common/inventory-metrics';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -35,6 +36,11 @@ export function deriveRequestStage(status: RequestStatus, taskStatus?: string | 
     case RequestStatus.ISSUED_TO_RMA: return 'ISSUED';
     default: break;
   }
+  // A request whose task was cancelled (not the request itself) is back to
+  // APPROVED and waits for a new allocation. Legacy rows cancelled before the
+  // request was reopened automatically are still at PICKING; they are
+  // re-allocatable too (see FulfillmentService.allocatableRequests).
+  if ((status === RequestStatus.APPROVED || status === RequestStatus.PICKING) && taskStatus === 'CANCELLED') return 'APPROVED';
   // APPROVED or any legacy in-flight status: prefer the task when present.
   if (taskStatus) {
     if (['SHIPPED', 'DELIVERED'].includes(taskStatus)) return 'ISSUED';
@@ -46,6 +52,10 @@ export function deriveRequestStage(status: RequestStatus, taskStatus?: string | 
   if (status === RequestStatus.SHIPPED) return 'ISSUED';
   return 'IN_FULFILLMENT';
 }
+
+export const REQUEST_STAGES: RequestStage[] = [
+  'DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'IN_FULFILLMENT', 'ISSUED', 'CLOSED', 'REJECTED', 'CANCELLED',
+];
 
 const REVIEWABLE: RequestStatus[] = [RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL];
 
@@ -65,12 +75,13 @@ export class RequestsService {
     return `WR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
   }
 
-  async findAll(filter: { status?: RequestStatus; requesterId?: string; page?: number; limit?: number }) {
-    const { status, requesterId, page = 1, limit = 20 } = filter;
+  async findAll(filter: { status?: RequestStatus; stage?: string; requesterId?: string; page?: number; limit?: number }) {
+    const { status, stage, requesterId, page = 1, limit = 20 } = filter;
     const skip = (page - 1) * limit;
     const where: any = {};
     if (status) where.status = status;
     if (requesterId) where.requesterId = requesterId;
+    if (stage) where.id = { in: await this.requestIdsInStage(stage, requesterId) };
 
     const [data, total] = await Promise.all([
       this.prisma.withdrawalRequest.findMany({
@@ -101,16 +112,9 @@ export class RequestsService {
 
     // Real stock validation: available AVAILABLE units per product across all listed requests.
     // Replaces the previous hardcoded "Stock OK" badge with an honest check the approver can trust.
+    // Units (summed quantity), not stock rows — same pool approval reserves from.
     const productIds = [...new Set(data.flatMap((r) => r.items.map((i) => i.productId)))];
-    const availByProduct = new Map<string, number>();
-    if (productIds.length) {
-      const grouped = await this.prisma.stockItem.groupBy({
-        by: ['productId'],
-        where: { productId: { in: productIds }, status: 'AVAILABLE' },
-        _count: { _all: true },
-      });
-      for (const g of grouped) availByProduct.set(g.productId, g._count._all);
-    }
+    const availByProduct = await getAvailableUnitsByProduct(this.prisma, productIds);
 
     const augmented = data.map((r) => {
       const fulfillmentStatus = taskByReq.get(r.id) ?? null;
@@ -131,6 +135,28 @@ export class RequestsService {
     });
 
     return { data: augmented, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
+  /**
+   * Ids of requests whose derived stage is `stage`. The stage depends on the
+   * latest fulfillment task (no FK between the two), so it is computed here with
+   * the same rule the list and detail views display.
+   */
+  private async requestIdsInStage(stage: string, requesterId?: string): Promise<string[]> {
+    if (!REQUEST_STAGES.includes(stage as RequestStage)) {
+      throw new BadRequestException(`Unknown stage "${stage}" (expected one of ${REQUEST_STAGES.join(', ')})`);
+    }
+    const [requests, tasks] = await Promise.all([
+      this.prisma.withdrawalRequest.findMany({
+        where: requesterId ? { requesterId } : {},
+        select: { id: true, status: true },
+      }),
+      this.prisma.$queryRaw<{ requestId: string; status: string }[]>`
+        SELECT DISTINCT ON ("requestId") "requestId", "status"::text AS "status"
+        FROM "FulfillmentTask" ORDER BY "requestId", "createdAt" DESC`,
+    ]);
+    const latest = new Map(tasks.map((t) => [t.requestId, t.status]));
+    return requests.filter((r) => deriveRequestStage(r.status, latest.get(r.id)) === stage).map((r) => r.id);
   }
 
   async findOne(id: string) {
@@ -205,7 +231,7 @@ export class RequestsService {
     });
   }
 
-  /** Active products with a count of AVAILABLE stock units (optionally filtered by brand). */
+  /** Active products with their requestable AVAILABLE units (optionally filtered by brand). */
   async getProductsWithAvailableQty(brandId?: string) {
     const where: any = { productStatus: 'ACTIVE' };
     if (brandId) where.brandId = brandId;
@@ -217,14 +243,14 @@ export class RequestsService {
         code: true,
         name: true,
         brand: { select: { id: true, name: true } },
-        stockItems: { where: { status: 'AVAILABLE' }, select: { id: true } },
       },
       orderBy: { name: 'asc' },
     });
 
-    return products.map(({ stockItems, ...p }) => ({
+    const units = await getAvailableUnitsByProduct(this.prisma, products.map((p) => p.id));
+    return products.map((p) => ({
       ...p,
-      availableQty: stockItems.length,
+      availableQty: units.get(p.id) ?? 0,
     }));
   }
 
@@ -534,7 +560,7 @@ export class RequestsService {
         ? await tx.stockItem.findMany({ where: { id: { in: linked }, status: { in: COMMITTED } }, select: { id: true, status: true } })
         : [];
       if (held.length) {
-        throw new ConflictException(`Stock ${held.map((h) => `${h.id} (${h.status})`).join(', ')} is still committed to this request — release it first (Inventory → Release Reservation)`);
+        throw new ConflictException(`Stock ${held.map((h) => `${h.id} (${h.status})`).join(', ')} is still committed to this request — release it first (Reports → Balance → open the unit → Release stuck reservation)`);
       }
 
       const claimed = await tx.withdrawalRequest.updateMany({

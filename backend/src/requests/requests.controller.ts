@@ -30,6 +30,7 @@ export class RequestsController {
   @Get()
   findAll(
     @Query('status') status?: RequestStatus,
+    @Query('stage') stage?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @CurrentUser('id') requesterId?: string,
@@ -38,6 +39,7 @@ export class RequestsController {
     const isRequester = role === UserRole.REQUESTER;
     return this.requestsService.findAll({
       status,
+      stage,
       page,
       limit,
       requesterId: isRequester ? requesterId : undefined,

@@ -110,7 +110,7 @@ export class ReportsService {
     const term = q?.trim().toLowerCase();
     if (!term) return rows;
     return rows.filter((r) =>
-      Object.values(r).some((v) => v != null && String(v).toLowerCase().includes(term)),
+      Object.entries(r).some(([k, v]) => k !== 'stockId' && v != null && String(v).toLowerCase().includes(term)),
     );
   }
 
@@ -195,6 +195,8 @@ export class ReportsService {
     const outMap = new Map(lastOut.map((g) => [g.productId, g._max.pickedAt]));
 
     const rows = items.map((i) => ({
+      // Not an export column: lets the web table open the read-only Stock Detail.
+      stockId: i.id,
       createDate: iso(i.receivedDate),
       brand: i.product.brand?.name ?? '',
       model: i.product.model ?? '',

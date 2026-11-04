@@ -7,6 +7,7 @@ import { PickingService } from '../fulfillment/services/picking.service';
 import { DispatchService } from '../fulfillment/services/dispatch.service';
 import { transitionStock } from '../common/stock-state';
 import { ACCESS, AccessPrincipal, AccessRule, hasAccess } from '../auth/access';
+import { isStep5LegacyEnabled } from '../common/feature-flags';
 
 interface Actor extends AccessPrincipal { id: string; roleKey?: string; warehouseIds?: string[] }
 type ScanWorkflow =
@@ -30,6 +31,13 @@ interface ScanDto {
   clientScanId?: string;
   deviceId?: string;
 }
+
+/** Step 5 scan workflows: refused (result RETIRED) unless ENABLE_STEP5_LEGACY=true. */
+const RETIRED_SCAN_WORKFLOWS: Partial<Record<ScanWorkflow, string>> = {
+  TRANSFER: 'Stock Transfer',
+  COUNT: 'Cycle Count',
+  ADJUST: 'Stock Adjustment',
+};
 
 /** Internal: stop the workflow switch once a result has been decided. */
 class ScanStop extends Error {}
@@ -121,6 +129,11 @@ export class ScanService {
         message = `You are not permitted to run ${dto.workflow} scans`;
         throw new ScanStop();
       }
+      if (RETIRED_SCAN_WORKFLOWS[dto.workflow] && !isStep5LegacyEnabled()) {
+        result = 'RETIRED';
+        message = `${RETIRED_SCAN_WORKFLOWS[dto.workflow]} is retired — scan within receiving, putaway, picking, shipping or RTV instead`;
+        throw new ScanStop();
+      }
       if (dto.workflow === 'SHIP') {
         // A shipment barcode is not a product/stock entity — resolve it directly.
         ({ result, message, entityId, warehouseId, effect } = await this.doShip(parsed, dto, actor));
@@ -198,6 +211,10 @@ export class ScanService {
       return { result: 'OUT_OF_SCOPE', message: `Warehouse ${whCode} not in your scope`, entityId: item.id, warehouseId: wh.id, effect: null };
     }
     if (slotCode && !rackCode) throw new BadRequestException('A slot scan must include its rack');
+    // Same rule as the putaway screen: stock is never made AVAILABLE without a slot.
+    if (!rackCode || !slotCode) {
+      throw new BadRequestException('Putaway requires a slot location scan (WAREHOUSE|RACK|SLOT)');
+    }
     // A mistyped rack or slot must not silently store the item without a bin.
     const rack = rackCode
       ? await this.prisma.rack.findFirst({ where: { warehouseId: wh.id, code: rackCode, isDeleted: false, isActive: true } })

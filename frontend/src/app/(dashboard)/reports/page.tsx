@@ -14,6 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { formatDate, cn } from '@/lib/utils';
+import { StockDetailDrawer } from '@/components/inventory/stock-detail-drawer';
 
 const REPORTS: { key: ReportType; label: string; desc: string }[] = [
   { key: 'master-data', label: 'Master Data', desc: 'Full lineage of every stock item' },
@@ -56,7 +57,8 @@ function SummarySection() {
 }
 
 // ─── Inventory report viewer ──────────────────────────────────────────────────
-function ReportViewer({ report, warehouses }: { report: ReportType; warehouses: any[] }) {
+function ReportViewer({ report, warehouses, initialStockId }: { report: ReportType; warehouses: any[]; initialStockId?: string }) {
+  const [detailId, setDetailId] = useState<string | null>(initialStockId ?? null);
   const [result, setResult] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -163,7 +165,10 @@ function ReportViewer({ report, warehouses }: { report: ReportType; warehouses: 
               </TableHeader>
               <TableBody>
                 {rows.map((r, i) => (
-                  <TableRow key={i}>
+                  <TableRow key={i}
+                    className={cn(r.stockId && 'cursor-pointer hover:bg-slate-50', r.stockId && r.stockId === detailId && 'bg-green-50')}
+                    onClick={r.stockId ? () => setDetailId(r.stockId) : undefined}
+                    title={r.stockId ? 'Open stock detail' : undefined}>
                     {columns.map((c) => (
                       <TableCell key={c.key} className="text-slate-700">{fmtCell(c.key, r[c.key])}</TableCell>
                     ))}
@@ -174,6 +179,7 @@ function ReportViewer({ report, warehouses }: { report: ReportType; warehouses: 
           )}
         </div>
       </div>
+      {detailId && <StockDetailDrawer itemId={detailId} onClose={() => setDetailId(null)} onChanged={load} />}
     </div>
   );
 }
@@ -181,8 +187,19 @@ function ReportViewer({ report, warehouses }: { report: ReportType; warehouses: 
 export default function ReportsPage() {
   const [tab, setTab] = useState<ReportType>('master-data');
   const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [linkedStock, setLinkedStock] = useState<string | undefined>();
 
   useEffect(() => { warehouseApi.list().then(setWarehouses).catch(() => {}); }, []);
+
+  // Deep links (static export, so read the query on the client): ?tab=balance&stock=<id>
+  // is where the retired Inventory page and dashboard links now land.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const t = params.get('tab');
+    if (t && REPORTS.some((r) => r.key === t)) setTab(t as ReportType);
+    const s = params.get('stock');
+    if (s) setLinkedStock(s);
+  }, []);
 
   return (
     <div className="p-6 space-y-6">
@@ -199,7 +216,7 @@ export default function ReportsPage() {
           {REPORTS.map((r) => (
             <TabsContent key={r.key} value={r.key} className="mt-4">
               <p className="text-sm text-slate-500 mb-3">{r.desc}</p>
-              {tab === r.key && <ReportViewer report={r.key} warehouses={warehouses} />}
+              {tab === r.key && <ReportViewer report={r.key} warehouses={warehouses} initialStockId={r.key === 'balance' ? linkedStock : undefined} />}
             </TabsContent>
           ))}
         </Tabs>

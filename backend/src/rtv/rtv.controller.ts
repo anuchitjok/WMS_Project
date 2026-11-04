@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { RtvService } from './rtv.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
@@ -7,6 +8,14 @@ import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RTVStatus } from '@prisma/client';
+
+/** U04: the vendor's replacement unit, received against the RTV case. */
+class ReceiveReplacementDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(100) serialNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(100) batchNumber?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(64) warehouseId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(500) notes?: string;
+}
 
 @ApiTags('RTV')
 @ApiBearerAuth()
@@ -35,8 +44,14 @@ export class RtvController {
   updateStatus(
     @Param('id') id: string,
     @Body('status') status: RTVStatus,
+    @Body('creditNoteRef') creditNoteRef: string | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.rtvService.updateStatus(id, status, user.id, user);
+    return this.rtvService.updateStatus(id, status, user.id, user, { creditNoteRef: typeof creditNoteRef === 'string' ? creditNoteRef.slice(0, 100) : undefined });
+  }
+
+  @Post(':id/replacement')
+  receiveReplacement(@Param('id') id: string, @Body() body: ReceiveReplacementDto, @CurrentUser() user: any) {
+    return this.rtvService.receiveReplacement(id, body, user.id, user);
   }
 }

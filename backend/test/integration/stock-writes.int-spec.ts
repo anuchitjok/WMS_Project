@@ -1,5 +1,5 @@
 import { StockStatus, UserRole } from '@prisma/client';
-import { Fixture, TestUser, expectStatus } from './harness';
+import { Fixture, TestUser, expectStatus, useStep5Legacy } from './harness';
 
 // Direct stock writes: status guards, mass-assignment, location hierarchy and
 // double-submission on putaway, transfer, inventory, receiving, returns, scrap,
@@ -44,11 +44,31 @@ describe('Stock write integrity', () => {
 
     it('cannot bring shipped, reserved or consumed stock back to AVAILABLE', async () => {
       const product = await fx.product();
+      const loc = await fx.location();
+      const body = { warehouseId: loc.warehouse.id, rackId: loc.rack.id, slotId: loc.slot.id };
       for (const status of [StockStatus.SHIPPED, StockStatus.RESERVED, StockStatus.CONSUMED, StockStatus.PENDING_RECEIVING]) {
         const [unit] = await fx.stock(product.id, 1, { status });
-        await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, {}).expect(409);
+        await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, body).expect(409);
         expect((await stockRow(unit.id)).status).toBe(status);
       }
+    });
+
+    it('refuses to make stock AVAILABLE without a destination slot (Phase 1 putaway rule)', async () => {
+      const loc = await fx.location();
+      const product = await fx.product();
+      const [unit] = await fx.stock(product.id, 1, { status: StockStatus.PENDING_INSPECTION, warehouseId: loc.warehouse.id });
+
+      await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, {}).expect(400);
+      await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, { warehouseId: loc.warehouse.id }).expect(400);
+      await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, { warehouseId: loc.warehouse.id, rackId: loc.rack.id }).expect(400);
+      expect(await stockRow(unit.id)).toMatchObject({ status: StockStatus.PENDING_INSPECTION, slotId: null });
+      expect(await fx.prisma.auditLog.count({ where: { action: 'PUTAWAY_CONFIRMED', entityId: unit.id } })).toBe(0);
+
+      // A slot alone is enough: rack and warehouse are derived from it.
+      expectStatus(await fx.as(staff).patch(`/putaway/${unit.id}/confirm`, { slotId: loc.slot.id }), 200);
+      expect(await stockRow(unit.id)).toMatchObject({
+        status: StockStatus.AVAILABLE, warehouseId: loc.warehouse.id, rackId: loc.rack.id, slotId: loc.slot.id,
+      });
     });
 
     it('is refused to a requester', async () => {
@@ -59,6 +79,8 @@ describe('Stock write integrity', () => {
   });
 
   describe('transfer complete', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     async function transfer(stockItemId: string) {
       const res = await fx.as(staff).post('/transfer', { stockItemId, productLabel: 'x', quantity: 1, fromLocation: 'A', toLocation: 'B' });
       expectStatus(res, 201);
@@ -87,6 +109,8 @@ describe('Stock write integrity', () => {
   });
 
   describe('inventory writes', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('manual status changes are limited to on-hand holds', async () => {
       const product = await fx.product();
       const [shipped] = await fx.stock(product.id, 1, { status: StockStatus.SHIPPED });
@@ -130,7 +154,8 @@ describe('Stock write integrity', () => {
       const item = gr.items[0];
       const dto = { items: [{ itemId: item.id, inspectedQty: 1, inspectionOutcome: 'good' }] };
       expectStatus(await fx.as(staff).patch(`/receiving/${gr.id}/inspect`, dto), 200);
-      expectStatus(await fx.as(staff).patch(`/putaway/${item.stockItemId}/confirm`, {}), 200);
+      const dest = await fx.location();
+      expectStatus(await fx.as(staff).patch(`/putaway/${item.stockItemId}/confirm`, { slotId: dest.slot.id }), 200);
 
       await fx.as(staff).patch(`/receiving/${gr.id}/inspect`, { items: [{ itemId: item.id, inspectedQty: 1, inspectionOutcome: 'damaged' }] }).expect(409);
       await fx.as(staff).patch(`/receiving/${gr.id}/verify`).expect(409);
@@ -172,7 +197,8 @@ describe('Stock write integrity', () => {
       const { unit, req } = await issuedRequest(StockStatus.SHIPPED, 'UNUSED');
       await fx.as(requester).patch(`/unused/${req.id}/return`).expect(403);
       expectStatus(await fx.as(staff).patch(`/unused/${req.id}/return`), 200);
-      expect((await stockRow(unit.id)).status).toBe(StockStatus.AVAILABLE);
+      // Phase 5 (U03): received back into the putaway queue, not straight to Available.
+      expect((await stockRow(unit.id)).status).toBe(StockStatus.PENDING_INSPECTION);
       await fx.as(staff).patch(`/unused/${req.id}/return`).expect(400);
     });
 
@@ -200,8 +226,8 @@ describe('Stock write integrity', () => {
       const [unit] = await fx.stock(product.id, 1);
       const id = await scrapCase(unit.id, 1);
       const both = await Promise.all([
-        fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED' }),
-        fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED' }),
+        fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED', disposalMethod: 'Crushed' }),
+        fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED', disposalMethod: 'Crushed' }),
       ]);
       expectOneWinner(both.map((r) => r.status));
       expect((await stockRow(unit.id)).status).toBe(StockStatus.CLOSED);
@@ -211,7 +237,7 @@ describe('Stock write integrity', () => {
       const product = await fx.product();
       const [row] = await fx.stock(product.id, 1, { quantity: 10, serial: false });
       const id = await scrapCase(row.id, 4);
-      expectStatus(await fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED' }), 200);
+      expectStatus(await fx.as(manager).patch(`/scrap/${id}/status`, { status: 'DISPOSED', disposalMethod: 'Recycled' }), 200);
       expect(await stockRow(row.id)).toMatchObject({ status: StockStatus.AVAILABLE, quantity: 6 });
     });
 
@@ -224,6 +250,8 @@ describe('Stock write integrity', () => {
   });
 
   describe('cycle count approval', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('refuses to apply anything when counted stock changed, then applies after a recount', async () => {
       const loc = await fx.location();
       const product = await fx.product();
@@ -261,6 +289,8 @@ describe('Stock write integrity', () => {
   });
 
   describe('stock adjustment approval', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('is refused when the stock no longer holds quantityBefore, and decided once', async () => {
       const product = await fx.product();
       const [row] = await fx.stock(product.id, 1, { quantity: 10, serial: false });

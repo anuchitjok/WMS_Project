@@ -3,11 +3,11 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, Package, ClipboardList, RotateCcw, Users, ScrollText,
-  QrCode, LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
-  CheckCircle2, RefreshCw, AlertTriangle, Calculator, ArrowLeftRight,
-  Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Calculator as CountIcon, Trash2,
-  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck,
+  LayoutDashboard, ClipboardList, RotateCcw, Users, ScrollText,
+  LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
+  CheckCircle2, RefreshCw, AlertTriangle,
+  Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Trash2, ListTodo,
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck, ClipboardCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -35,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
     group: 'Overview',
     items: [
       { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { href: '/work-queue', label: 'Work Queue', icon: ListTodo, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF', 'DEPT_APPROVER', 'RTV_OFFICER', 'RMA_TEAM'] },
       { href: '/reports', label: 'Reports', icon: BarChart3 },
       { href: '/planning', label: 'Project Planning', icon: PlanIcon, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER', 'FINANCE_VIEWER', 'AUDITOR'] },
     ],
@@ -43,6 +44,7 @@ const NAV_GROUPS: NavGroup[] = [
     // CR-MASTER-001: Master Data group — only items backed by a real page/route are listed here.
     group: 'Master Data',
     items: [
+      { href: '/setup-checklist', label: 'Setup Checklist', icon: ClipboardCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
       { href: '/products', label: 'Product Master', icon: Tag, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
       { href: '/business-partners', label: 'Business Partners', icon: Handshake, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
       { href: '/warehouse-master', label: 'Warehouse Master', icon: Building2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF'] },
@@ -61,14 +63,12 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/warehouse-layout', label: 'Warehouse Operations', icon: Warehouse, roles: WH },
       { href: '/receiving', label: 'Goods Receiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'Putaway', icon: MapPin, roles: WH },
-      { href: '/inventory', label: 'Inventory', icon: Package },
       { href: '/outbound/fulfillment', label: 'Fulfillment Board', icon: Truck, roles: WH },
       { href: '/handover', label: 'Handover', icon: CheckCircle2, roles: WH },
       { href: '/warehouse/returns', label: 'Returns — Inbound', icon: RefreshCw, roles: WH },
-      { href: '/transfer', label: 'Stock Transfer', icon: ArrowLeftRight, roles: WH },
-      { href: '/adjustment', label: 'Stock Adjustment', icon: Calculator, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
-      { href: '/scanner', label: 'Barcode Scanner', icon: QrCode },
-      { href: '/cycle-count', label: 'Cycle Count', icon: CountIcon, roles: WH },
+      // Phase 2: Inventory, Stock Transfer, Stock Adjustment, Barcode Scanner and
+      // Cycle Count (Step 5) are retired from navigation. Their pages still open
+      // as read-only history; /inventory redirects to Reports → Balance.
     ],
   },
   {
@@ -88,17 +88,18 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    group: 'Approvals',
-    items: [
-      { href: '/approvals', label: 'Approval Workspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
-    ],
-  },
-  {
-    group: 'RTV Management',
+    // Step 4 (Use & Return): defective units go DOA → RTV → replacement, or to scrap.
+    group: 'Use & Return — RTV',
     items: [
       { href: '/doa', label: 'DOA / Defective', icon: AlertTriangle, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'RMA_TEAM'] },
       { href: '/rtv', label: 'RTV Cases', icon: RotateCcw, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER'] },
       { href: '/scrap', label: 'Scrap Management', icon: Trash2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'WAREHOUSE_SUPERVISOR'] },
+    ],
+  },
+  {
+    group: 'Approvals',
+    items: [
+      { href: '/approvals', label: 'Approval Workspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
     ],
   },
   {

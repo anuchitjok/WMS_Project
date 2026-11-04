@@ -62,37 +62,41 @@ export class ScrapService {
     if (!ON_HAND_UNCOMMITTED.includes(stock.status)) {
       throw new BadRequestException(`Stock in status ${stock.status} cannot be scrapped`);
     }
-    const open = await this.prisma.scrapCase.findFirst({
-      where: { stockItemId: data.stockItemId, status: { in: [ScrapStatus.PENDING_REVIEW, ScrapStatus.APPROVED] } },
-      select: { refNumber: true },
-    });
-    if (open) throw new ConflictException(`Stock item already has an open scrap case: ${open.refNumber}`);
+    return this.prisma.$transaction(async (tx) => {
+      // One open case per unit, checked under a row lock so a double submit cannot open two.
+      await tx.$queryRaw`SELECT "id" FROM "StockItem" WHERE "id" = ${data.stockItemId} FOR UPDATE`;
+      const open = await tx.scrapCase.findFirst({
+        where: { stockItemId: data.stockItemId, status: { in: [ScrapStatus.PENDING_REVIEW, ScrapStatus.APPROVED] } },
+        select: { refNumber: true },
+      });
+      if (open) throw new ConflictException(`Stock item already has an open scrap case: ${open.refNumber}`);
 
-    const scrap = await this.prisma.scrapCase.create({
-      data: {
-        refNumber: this.genRef(),
-        stockItemId: data.stockItemId,
-        reason,
-        reasonCode,
-        description: data.description,
-        disposalMethod: data.disposalMethod,
-        quantity,
-        requestedById,
-      },
+      const scrap = await tx.scrapCase.create({
+        data: {
+          refNumber: this.genRef(),
+          stockItemId: data.stockItemId,
+          reason,
+          reasonCode,
+          description: data.description,
+          disposalMethod: data.disposalMethod,
+          quantity,
+          requestedById,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: requestedById,
+          action: 'SCRAP_CASE_CREATED',
+          entityType: 'ScrapCase',
+          entityId: scrap.id,
+          detail: `${scrap.refNumber} · ${reasonCode ? `[${reasonCode}] ` : ''}${reason}`,
+        },
+      });
+      return scrap;
     });
-    await this.prisma.auditLog.create({
-      data: {
-        userId: requestedById,
-        action: 'SCRAP_CASE_CREATED',
-        entityType: 'ScrapCase',
-        entityId: scrap.id,
-        detail: `${scrap.refNumber} · ${reasonCode ? `[${reasonCode}] ` : ''}${reason}`,
-      },
-    });
-    return scrap;
   }
 
-  async updateStatus(id: string, status: ScrapStatus, actorId: string, scope?: ScopePrincipal) {
+  async updateStatus(id: string, status: ScrapStatus, actorId: string, scope?: ScopePrincipal, input: { disposalMethod?: string; notes?: string } = {}) {
     const scrap = await this.prisma.scrapCase.findUnique({ where: { id }, include: { stockItem: { select: { warehouseId: true } } } });
     if (!scrap) throw new NotFoundException('Scrap case not found');
     assertWarehouseAccess(scope, scrap.stockItem?.warehouseId, 'this scrap case');
@@ -108,7 +112,14 @@ export class ScrapService {
     if (status === 'APPROVED') assertNotSelfApproval(actorId, [scrap.requestedById], 'a scrap case');
     const extra: any = {};
     if (status === 'APPROVED') { extra.approvedById = actorId; extra.approvedAt = new Date(); }
-    if (status === 'DISPOSED') extra.disposedAt = new Date();
+    if (status === 'DISPOSED') {
+      // U05: disposal is the step that removes stock — it must say how the goods were disposed.
+      const method = input.disposalMethod?.trim() || scrap.disposalMethod?.trim();
+      if (!method) throw new BadRequestException('Disposal method is required to mark a scrap case as disposed');
+      extra.disposedAt = new Date();
+      extra.disposalMethod = method;
+    }
+    if (input.notes?.trim()) extra.notes = input.notes.trim();
 
     return this.prisma.$transaction(async (tx) => {
       // Claim the transition: a double click cannot dispose (and deduct) twice.
@@ -149,7 +160,8 @@ export class ScrapService {
           action: 'SCRAP_STATUS_CHANGED',
           entityType: 'ScrapCase',
           entityId: id,
-          detail: `${scrap.refNumber}: ${scrap.status} → ${status}`,
+          detail: `${scrap.refNumber}: ${scrap.status} → ${status}${status === 'DISPOSED' ? ` · ${extra.disposalMethod}` : ''}`,
+          changes: { status: { from: scrap.status, to: status }, ...(status === 'DISPOSED' ? { disposalMethod: { from: scrap.disposalMethod, to: extra.disposalMethod } } : {}) },
         },
       });
       return tx.scrapCase.findUniqueOrThrow({ where: { id } });

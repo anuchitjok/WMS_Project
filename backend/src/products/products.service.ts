@@ -3,6 +3,13 @@ import { MasterDataService } from '../master-data/master-data.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProductType, ProductStatus } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
+import { diffFields, describeChanges } from '../common/audit-diff';
+
+// Product fields whose old → new values are kept in the audit trail.
+const PRODUCT_AUDIT_FIELDS = [
+  'name', 'description', 'manufacturer', 'model', 'partNumber', 'vendorPartNumber', 'productType', 'category',
+  'unit', 'unitCost', 'serialControlled', 'batchControlled', 'minStock', 'brandId', 'productStatus', 'isActive',
+] as const;
 
 // Column definitions shared between export & template
 const STOCK_REGISTER_COLS = [
@@ -87,7 +94,7 @@ export class ProductsService {
 
   async update(id: string, dto: any, userId: string) {
     if (dto.unit !== undefined) dto.unit = await this.masterData.assertUom(dto.unit);
-    await this.findOne(id);
+    const before = await this.findOne(id);
     if (dto.partNumber) {
       const clash = await this.prisma.product.findFirst({ where: { partNumber: dto.partNumber, NOT: { id } } });
       if (clash) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
@@ -105,8 +112,15 @@ export class ProductsService {
       data.isActive = dto.productStatus === ProductStatus.ACTIVE;
     }
     const p = await this.prisma.product.update({ where: { id }, data, include: { brand: true } });
+    const changes = diffFields(before, p, PRODUCT_AUDIT_FIELDS);
+    if (changes.brandId) changes.brandId = { from: before.brand?.name ?? changes.brandId.from, to: p.brand?.name ?? changes.brandId.to };
+    const summary = describeChanges(changes);
     await this.prisma.auditLog.create({
-      data: { userId, action: 'PRODUCT_UPDATED', entityType: 'Product', entityId: id, detail: p.code },
+      data: {
+        userId, action: 'PRODUCT_UPDATED', entityType: 'Product', entityId: id,
+        detail: summary ? `${p.code} — ${summary}` : `${p.code} — saved, no field changed`,
+        changes: Object.keys(changes).length ? (changes as any) : undefined,
+      },
     });
     return p;
   }
@@ -123,6 +137,7 @@ export class ProductsService {
       data: {
         userId, action: 'PRODUCT_STATUS_CHANGED', entityType: 'Product', entityId: id,
         detail: `${p.code}: ${product.productStatus} → ${newStatus}`,
+        changes: { productStatus: { from: product.productStatus, to: newStatus }, isActive: { from: product.isActive, to: p.isActive } } as any,
       },
     });
     return p;

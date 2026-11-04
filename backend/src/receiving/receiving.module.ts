@@ -8,5 +8,6 @@ import { RealtimeModule } from '../realtime/realtime.module';
   imports: [RealtimeModule],
   controllers: [ReceivingController],
   providers: [ReceivingService, ReceivingImportService],
+  exports: [ReceivingService],
 })
 export class ReceivingModule {}

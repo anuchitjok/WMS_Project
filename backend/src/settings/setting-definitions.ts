@@ -1,3 +1,5 @@
+import { getReservationMode } from '../common/feature-flags';
+
 /**
  * The system settings catalogue: what each key means, what values it accepts,
  * and whether it actually drives business logic.
@@ -117,8 +119,10 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     effect: 'informational',
     seed: 'auto',
     accepts: 'Set by the ENABLE_UNIFIED_RESERVATION environment flag',
-    description:
-      'Stock is reserved on approval (current mode). Changing the reservation model is a deployment decision, not a runtime setting.',
+    // Read at request time so the text always matches the mode the server runs in.
+    get description() {
+      return `${getReservationMode().summary} Changing the reservation model is a deployment decision, not a runtime setting.`;
+    },
   },
   {
     key: 'notification.template',

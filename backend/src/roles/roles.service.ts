@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { PermissionCacheService } from '../rbac/permission-cache.service';
+import { diffFields, type ChangeSet } from '../common/audit-diff';
 
 interface Actor { id: string; roleKey?: string; permissions?: string[] }
 
@@ -105,7 +106,7 @@ export class RolesService {
     if (!role) throw new NotFoundException('Role not found');
     if (role.key === 'SUPER_ADMIN') throw new ForbiddenException('SUPER_ADMIN cannot be disabled');
     const updated = await this.prisma.role.update({ where: { id }, data: { isActive: !role.isActive } });
-    await this.audit(actor.id, updated.isActive ? 'ROLE_ENABLED' : 'ROLE_DISABLED', id, role.key);
+    await this.audit(actor.id, updated.isActive ? 'ROLE_ENABLED' : 'ROLE_DISABLED', id, role.key, { isActive: { from: role.isActive, to: updated.isActive } });
     this.cache.invalidate(id);
     return updated;
   }
@@ -117,10 +118,23 @@ export class RolesService {
     this.assertCanGrant(actor, permissionCodes);
 
     const perms = await this.prisma.permission.findMany({ where: { code: { in: permissionCodes } } });
+    const current = await this.prisma.rolePermission.findMany({ where: { roleId: id }, select: { permission: { select: { code: true } } } });
+    const beforeCodes = new Set(current.map((c) => c.permission.code));
+    const afterCodes = new Set(perms.map((p) => p.code));
+    const added = [...afterCodes].filter((c) => !beforeCodes.has(c)).sort();
+    const removed = [...beforeCodes].filter((c) => !afterCodes.has(c)).sort();
+    const detail = `${role.key}: ${beforeCodes.size} → ${afterCodes.size} permissions`
+      + (added.length ? `; added ${added.join(', ')}` : '') + (removed.length ? `; removed ${removed.join(', ')}` : '');
     await this.prisma.$transaction([
       this.prisma.rolePermission.deleteMany({ where: { roleId: id } }),
       this.prisma.rolePermission.createMany({ data: perms.map((p) => ({ roleId: id, permissionId: p.id })), skipDuplicates: true }),
-      this.prisma.auditLog.create({ data: { userId: actor.id, action: 'ROLE_PERMISSIONS_UPDATED', entityType: 'Role', entityId: id, detail: `${perms.length} permissions` } }),
+      this.prisma.auditLog.create({
+        data: {
+          userId: actor.id, action: 'ROLE_PERMISSIONS_UPDATED', entityType: 'Role', entityId: id,
+          detail: detail.length > 1000 ? `${detail.slice(0, 997)}...` : detail,
+          changes: { permissions: { added, removed }, count: { from: beforeCodes.size, to: afterCodes.size } } as any,
+        },
+      }),
     ]);
     this.cache.invalidate(id);
     return this.getRole(id);
@@ -153,7 +167,7 @@ export class RolesService {
     const p = await this.prisma.permission.findUnique({ where: { id } });
     if (!p) throw new NotFoundException('Permission not found');
     const updated = await this.prisma.permission.update({ where: { id }, data: { description: dto.description, module: dto.module, action: dto.action } });
-    await this.audit(actor.id, 'PERMISSION_UPDATED', id, p.code);
+    await this.audit(actor.id, 'PERMISSION_UPDATED', id, p.code, diffFields(p, updated, ['description', 'module', 'action']));
     this.cache.invalidate();
     return updated;
   }
@@ -167,7 +181,9 @@ export class RolesService {
     return { deleted: true };
   }
 
-  private audit(userId: string, action: string, entityId: string, detail?: string) {
-    return this.prisma.auditLog.create({ data: { userId, action, entityType: 'Role', entityId, detail } });
+  private audit(userId: string, action: string, entityId: string, detail?: string, changes?: ChangeSet) {
+    return this.prisma.auditLog.create({
+      data: { userId, action, entityType: 'Role', entityId, detail, changes: changes && Object.keys(changes).length ? (changes as any) : undefined },
+    });
   }
 }

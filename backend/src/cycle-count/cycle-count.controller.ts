@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
+import { Retired } from '../common/retired';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CycleCountStatus } from '@prisma/client';
 
@@ -25,11 +26,13 @@ export class CycleCountController {
 
   @Get(':id') findOne(@Param('id') id: string, @CurrentUser() user: any) { return this.svc.findOne(id, user); }
 
+  @Retired('Cycle Count')
   @Post()
   @Access(ACCESS.cycleCount)
   @ApiOperation({ summary: 'Create count session (locks the counted stock rows until approval / cancel)' })
   create(@Body() dto: any, @CurrentUser() user: any) { return this.svc.createSession(dto, user.id, user); }
 
+  @Retired('Cycle Count')
   @Patch(':id/lines/:lineId/count')
   @Access(ACCESS.cycleCount)
   @ApiOperation({ summary: 'Submit count for one line' })
@@ -37,15 +40,18 @@ export class CycleCountController {
     return this.svc.countLine(id, lineId, qty, user.id, user);
   }
 
+  @Retired('Cycle Count')
   @Post(':id/submit')
   @Access(ACCESS.cycleCount)
   submitForReview(@Param('id') id: string, @CurrentUser() user: any) { return this.svc.submitForReview(id, user.id, user); }
 
+  @Retired('Cycle Count')
   @Post(':id/approve')
   @Access(ACCESS.cycleCountApprove)
   @ApiOperation({ summary: 'Apply all variances, or refuse with 409 + conflicts if counted stock changed' })
   approve(@Param('id') id: string, @CurrentUser() user: any) { return this.svc.approve(id, user.id, user); }
 
+  @Retired('Cycle Count')
   @Post(':id/recount-conflicts')
   @Access(ACCESS.cycleCountApprove)
   @ApiOperation({ summary: 'Reset conflicting lines for recount (excludes lines whose stock left AVAILABLE)' })

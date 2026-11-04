@@ -18,6 +18,27 @@ import { formatDate, cn, hasUnsavedChanges } from '@/lib/utils';
 
 const ENUM_ROLES = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF', 'REQUESTER', 'DEPT_APPROVER', 'RTV_OFFICER', 'AUDITOR'];
 
+// Phase 4: say what the warehouse scope means instead of showing "—".
+// Same rule as the API (common/warehouse-scope.ts): Super Admin and users with no
+// assigned warehouse can reach every warehouse; otherwise only the listed ones.
+function warehouseScopeLabel(u: any): { text: string; open: boolean } {
+  const codes = (u.warehouses ?? []).map((w: any) => w.warehouse.code);
+  if (u.rbacRole?.key === 'SUPER_ADMIN') return { text: 'All warehouses (Super Admin)', open: true };
+  if (!codes.length) return { text: 'All warehouses — none assigned', open: true };
+  return { text: `Only ${codes.join(', ')}`, open: false };
+}
+
+function WarehouseScopeHint({ selected }: { selected: number }) {
+  return (
+    <p className="text-xs text-slate-500">
+      {selected === 0
+        ? 'None selected: this user can work in every warehouse. Select one or more to limit access.'
+        : `Limited to the ${selected} selected warehouse${selected === 1 ? '' : 's'}. Clear all to allow every warehouse.`}
+      {' '}Super Admin always has every warehouse.
+    </p>
+  );
+}
+
 const BLANK_USER_FORM = { username: '', fullName: '', email: '', role: 'REQUESTER', roleId: '', department: '', password: '', warehouseIds: [] as string[] };
 
 export default function UsersPage() {
@@ -151,6 +172,7 @@ export default function UsersPage() {
                       </button>
                     ))}
                   </div>
+                  <WarehouseScopeHint selected={form.warehouseIds.length} />
                 </div>
               </div>
               <DialogFooter><Button onClick={createUser} className="bg-green-600 hover:bg-green-700 text-white">Create</Button></DialogFooter>
@@ -177,7 +199,7 @@ export default function UsersPage() {
                   <td className="px-4 py-3 font-medium text-slate-800">{u.fullName}</td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">{u.username}</td>
                   <td className="px-4 py-3"><Badge variant="outline">{u.rbacRole?.name ?? u.role?.replace(/_/g, ' ')}</Badge></td>
-                  <td className="px-4 py-3 text-xs text-slate-500">{(u.warehouses ?? []).map((w: any) => w.warehouse.code).join(', ') || '—'}</td>
+                  <td className="px-4 py-3 text-xs">{(() => { const s = warehouseScopeLabel(u); return <span className={s.open ? 'text-slate-500' : 'text-slate-800 font-medium'}>{s.text}</span>; })()}</td>
                   <td className="px-4 py-3 text-xs text-slate-400">{u.lastLoginAt ? formatDate(u.lastLoginAt) : '—'}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className={u.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}>{u.isActive ? 'Active' : 'Inactive'}</Badge></td>
                   <td className="px-4 py-3">
@@ -244,6 +266,7 @@ export default function UsersPage() {
                     </button>
                   ))}
                 </div>
+                <WarehouseScopeHint selected={editUser.warehouseIds.length} />
               </div>
 
               {/* Multi-role assignments (with expiry) */}
