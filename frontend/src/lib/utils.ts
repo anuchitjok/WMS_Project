@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import type { StockStatus, RequestStatus } from '@/types';
+import type { StockStatus, RequestStatus, RequestStage } from '@/types';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -65,3 +65,26 @@ export const REQUEST_STATUS_COLORS: Record<RequestStatus, string> = {
   COMPLETED: 'bg-green-100 text-green-700',
   CANCELLED: 'bg-slate-100 text-slate-500',
 };
+
+export const REQUEST_STAGE_LABELS: Record<RequestStage, string> = {
+  DRAFT: 'Draft',
+  PENDING_APPROVAL: 'Pending Approval',
+  APPROVED: 'Approved',
+  IN_FULFILLMENT: 'In Fulfillment',
+  ISSUED: 'Issued',
+  CLOSED: 'Closed',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+};
+
+export const REQUEST_STAGE_COLORS: Record<RequestStage, string> = {
+  DRAFT: 'bg-slate-100 text-slate-600',
+  PENDING_APPROVAL: 'bg-amber-100 text-amber-800',
+  APPROVED: 'bg-green-100 text-green-700',
+  IN_FULFILLMENT: 'bg-slate-100 text-slate-700',
+  ISSUED: 'bg-slate-100 text-slate-700',
+  CLOSED: 'bg-green-100 text-green-700',
+  REJECTED: 'bg-red-100 text-red-700',
+  CANCELLED: 'bg-slate-100 text-slate-500',
+};
+

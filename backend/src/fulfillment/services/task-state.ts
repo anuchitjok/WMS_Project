@@ -32,3 +32,24 @@ export async function claimTaskStatus(
   if (!task) throw new NotFoundException('FulfillmentTask not found');
   throw new ConflictException(`Task is ${task.status}; expected ${from.join(' or ')}`);
 }
+
+/**
+ * Rejects packing / dispatch while a line that holds stock has no confirmed pick.
+ * Picks are confirmed only by the picker (item confirm, scan, or the board's
+ * "confirm all picks" step) — never implicitly by a later warehouse step.
+ */
+export async function assertAllStockLinesPicked(
+  tx: Prisma.TransactionClient,
+  taskId: string,
+  action: string,
+): Promise<void> {
+  const unpicked = await tx.fulfillmentTaskItem.count({
+    where: { taskId, pickedAt: null, stockItemId: { not: null } },
+  });
+  if (unpicked > 0) {
+    throw new ConflictException(
+      `Cannot ${action}: ${unpicked} line(s) have no confirmed pick. ` +
+        'Put the task on HOLD or cancel it to release the stock, then re-allocate.',
+    );
+  }
+}

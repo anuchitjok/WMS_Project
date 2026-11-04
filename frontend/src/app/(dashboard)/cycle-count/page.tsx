@@ -1,18 +1,17 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Calculator, Plus, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Calculator } from 'lucide-react';
 import { toast } from 'sonner';
-import { cycleCountApi, warehouseApi } from '@/lib/api';
+import { cycleCountApi } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
+import { RetiredNotice } from '@/components/layout/retired-notice';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatDate } from '@/lib/utils';
+
+const ACTIVE = ['OPEN', 'IN_PROGRESS', 'REVIEW'];
 
 const STATUS_COLORS: Record<string, string> = {
   OPEN: 'bg-slate-100 text-slate-700', IN_PROGRESS: 'bg-yellow-100 text-yellow-800',
@@ -22,117 +21,35 @@ const STATUS_COLORS: Record<string, string> = {
 
 export default function CycleCountPage() {
   const [sessions, setSessions] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<any>(null);
-  const [form, setForm] = useState({ warehouseId: '', type: 'BLIND', notes: '' });
-  const [countValues, setCountValues] = useState<Record<string, string>>({});
-  const [schedule, setSchedule] = useState<any>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try {
-      const [s, w, sch] = await Promise.all([cycleCountApi.list(), warehouseApi.list(), cycleCountApi.schedule().catch(() => null)]);
-      setSessions(s); setWarehouses(w); setSchedule(sch);
-    } finally { setLoading(false); }
+    try { setSessions(await cycleCountApi.list()); } catch { setSessions([]); } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  async function create() {
-    try { await cycleCountApi.create(form); toast.success('Session created'); setOpen(false); load(); } catch (e: any) { toast.error(e.message); }
-  }
-
+  // Phase 2: Cycle Count is retired. New sessions, counting, submit and approve
+  // answer 410. Cancel is kept: it is the audited way to end an old count and
+  // release the stock rows it locks (no variance is applied).
   async function loadSession(id: string) {
     try { setSelected(await cycleCountApi.get(id)); } catch (e: any) { toast.error(e.message); }
   }
 
-  async function submitCount(lineId: string) {
-    if (!selected) return;
-    const qty = Number(countValues[lineId]);
-    if (isNaN(qty) || qty < 0) { toast.error('Enter a valid quantity'); return; }
-    try {
-      await cycleCountApi.countLine(selected.id, lineId, qty);
-      toast.success('Count recorded');
-      setSelected(await cycleCountApi.get(selected.id));
-    } catch (e: any) { toast.error(e.message); }
-  }
-
-  async function submit() {
-    try { setSelected(await cycleCountApi.submit(selected.id)); toast.success('Submitted for review'); } catch (e: any) { toast.error(e.message); }
-  }
-  async function approve() {
-    try { setSelected(await cycleCountApi.approve(selected.id)); toast.success('Approved — variances applied'); load(); }
-    catch (e: any) {
-      // 409 with conflicts: nothing was applied; reload so the flagged lines show.
-      toast.error(e.message);
-      if (e.status === 409) setSelected(await cycleCountApi.get(selected.id));
-    }
-  }
-  async function recount() {
-    try {
-      const r = await cycleCountApi.recountConflicts(selected.id);
-      setSelected(r);
-      toast.success(`${r.recount} line(s) ready to recount${r.excluded ? `, ${r.excluded} excluded` : ''}`);
-      load();
-    } catch (e: any) { toast.error(e.message); }
-  }
   async function cancelSession() {
     if (!window.confirm('Cancel this count? Counted stock is unlocked and no variance is applied.')) return;
     try { await cycleCountApi.cancel(selected.id); toast.success('Count cancelled — stock unlocked'); setSelected(await cycleCountApi.get(selected.id)); load(); }
     catch (e: any) { toast.error(e.message); }
   }
 
-  const SCHEDULE_TONE: Record<string, string> = {
-    overdue: 'bg-red-50 text-red-700 border-red-200', due: 'bg-amber-50 text-amber-700 border-amber-200',
-    in_progress: 'bg-slate-50 text-slate-700 border-slate-200', ok: 'bg-green-50 text-green-700 border-green-200',
-    not_scheduled: 'bg-slate-50 text-slate-500 border-slate-200',
-  };
-
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="Cycle Count" subtitle="Inventory accuracy verification and variance management" icon={Calculator}
-        action={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}><Plus className="h-4 w-4 mr-1" />New Count Session</DialogTrigger>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Create Count Session</DialogTitle></DialogHeader>
-              <div className="space-y-3">
-                <div className="space-y-1">
-                  <Label>Warehouse</Label>
-                  <Select value={form.warehouseId} onValueChange={(v) => setForm((f) => ({ ...f, warehouseId: v ?? '' }))}>
-                    <SelectTrigger className="w-full"><SelectValue placeholder="Select warehouse" /></SelectTrigger>
-                    <SelectContent>{warehouses.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}</SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Count Type</Label>
-                  <Select value={form.type} onValueChange={(v) => setForm((f) => ({ ...f, type: v ?? 'BLIND' }))}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="BLIND">Blind Count (recommended)</SelectItem><SelectItem value="DIRECTED">Directed Count</SelectItem></SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1"><Label>Notes</Label><Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} /></div>
-              </div>
-              <DialogFooter><Button onClick={create} className="bg-green-600 hover:bg-green-700 text-white">Create Session</Button></DialogFooter>
-            </DialogContent>
-          </Dialog>
-        }
-      />
-
-      {schedule && schedule.frequency && schedule.warehouses?.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-2">Count schedule · {schedule.frequency}</p>
-          <div className="flex flex-wrap gap-2">
-            {schedule.warehouses.map((w: any) => (
-              <span key={w.id} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs ${SCHEDULE_TONE[w.status] ?? ''}`}>
-                <span className="font-medium">{w.code}</span>
-                <span>{w.status === 'in_progress' ? `counting (${w.activeCount})` : w.status === 'ok' ? `due ${formatDate(w.dueAt)}` : w.status.replace('_', ' ')}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
+      <PageHeader title="Cycle Count (history)" subtitle="Past count sessions and their variances" icon={Calculator} />
+      <RetiredNotice feature="Cycle Count"
+        extra={sessions.some((x) => ACTIVE.includes(x.status))
+          ? <p className="text-amber-700">An unfinished count still locks its stock rows. Open it and use <b>Cancel</b> to release them. No variance is applied.</p>
+          : undefined} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Session list */}
@@ -175,18 +92,9 @@ export default function CycleCountPage() {
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  {selected.status === 'IN_PROGRESS' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={submit}>Submit for Review</Button>}
-                  {selected.status === 'REVIEW' && selected.summary?.conflictCount > 0 && <Button size="sm" variant="outline" onClick={recount}>Recount changed lines</Button>}
-                  {selected.status === 'REVIEW' && <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={approve}>Approve & Apply</Button>}
-                  {['OPEN', 'IN_PROGRESS', 'REVIEW'].includes(selected.status) && <Button size="sm" variant="outline" onClick={cancelSession}>Cancel</Button>}
+                  {ACTIVE.includes(selected.status) && <Button size="sm" variant="outline" onClick={cancelSession}>Cancel count &amp; release stock</Button>}
                 </div>
               </div>
-              {selected.summary?.conflictCount > 0 && (
-                <div className="px-4 py-2.5 border-b border-amber-200 bg-amber-50 text-xs text-amber-800 flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 shrink-0 mt-px" />
-                  <span>{selected.summary.conflictCount} counted line(s) changed after counting, so nothing was applied. Use <b>Recount changed lines</b>, count them again, then submit.</span>
-                </div>
-              )}
               <div className="overflow-x-auto max-h-[55vh] overflow-y-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-slate-50">
@@ -196,7 +104,6 @@ export default function CycleCountPage() {
                       <th className="text-center px-3 py-2 font-medium text-slate-600">Expected</th>
                       <th className="text-center px-3 py-2 font-medium text-slate-600">Counted</th>
                       <th className="text-center px-3 py-2 font-medium text-slate-600">Variance</th>
-                      <th className="px-3 py-2"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
@@ -211,21 +118,13 @@ export default function CycleCountPage() {
                         <td className="px-3 py-2 font-mono text-xs text-slate-500">{l.locationKey || '—'}</td>
                         <td className="px-3 py-2 text-center font-medium">{l.expectedQty}</td>
                         <td className="px-3 py-2 text-center">
-                          {l.excludedAt ? <span className="text-slate-400">—</span> : l.countedQty !== null ? <span className="font-medium">{l.countedQty}</span>
-                            : <Input type="number" min={0} className="h-7 w-20 text-center text-xs" value={countValues[l.id] ?? ''} onChange={(e) => setCountValues((v) => ({ ...v, [l.id]: e.target.value }))} />}
+                          {l.excludedAt || l.countedQty === null ? <span className="text-slate-400">—</span> : <span className="font-medium">{l.countedQty}</span>}
                         </td>
                         <td className="px-3 py-2 text-center">
                           {l.countedQty !== null && (
                             <span className={l.variance === 0 ? 'text-green-600' : 'text-red-600 font-semibold'}>
                               {l.variance > 0 ? '+' : ''}{l.variance ?? '—'}
                             </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {l.countedQty === null && !l.excludedAt && ['OPEN', 'IN_PROGRESS'].includes(selected.status) && (
-                            <Button size="sm" className="h-6 text-xs bg-green-600 hover:bg-green-700 text-white" onClick={() => submitCount(l.id)}>
-                              <CheckCircle2 className="h-3 w-3" />
-                            </Button>
                           )}
                         </td>
                       </tr>

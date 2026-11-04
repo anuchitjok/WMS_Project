@@ -1,5 +1,26 @@
 import { PrismaService } from '../prisma/prisma.service';
-import { StockStatus } from '@prisma/client';
+import { Prisma, StockStatus } from '@prisma/client';
+import { NOT_COUNT_LOCKED } from './count-lock';
+
+type RawDb = { $queryRaw: Prisma.TransactionClient['$queryRaw'] };
+
+/**
+ * Units a request can draw on right now, per product: the summed quantity of
+ * AVAILABLE rows that are not held by an active cycle count. This is the same
+ * pool approval and allocation reserve from (any warehouse, FIFO), so the
+ * request form, the approver's stock check and the reservation agree.
+ * A bulk row of 20 counts as 20, not as one row.
+ */
+export async function getAvailableUnitsByProduct(db: RawDb, productIds: string[]): Promise<Map<string, number>> {
+  const ids = [...new Set(productIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const rows = await db.$queryRaw<{ productId: string; units: number | string | null }[]>`
+    SELECT s."productId", SUM(s."quantity") AS units FROM "StockItem" s
+    WHERE s."productId" = ANY(${ids}::text[]) AND s."status" = 'AVAILABLE' AND s."quantity" > 0
+      AND ${NOT_COUNT_LOCKED}
+    GROUP BY s."productId"`;
+  return new Map(rows.map((r) => [r.productId, Number(r.units ?? 0)]));
+}
 
 export interface LowStockProduct {
   id: string;

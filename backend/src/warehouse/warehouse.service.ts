@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RackType, SlotStatus, SlotType } from '@prisma/client';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
+import { diffFields, describeChanges, type ChangeSet } from '../common/audit-diff';
 
 @Injectable()
 export class WarehouseService {
@@ -332,8 +333,10 @@ export class WarehouseService {
     return `BR-${String(maxNum + 1).padStart(4, '0')}`;
   }
 
-  private async audit(userId: string | undefined, action: string, entityType: string, entityId: string, detail?: string) {
-    await this.prisma.auditLog.create({ data: { userId, action, entityType, entityId, detail } });
+  private async audit(userId: string | undefined, action: string, entityType: string, entityId: string, detail?: string, changes?: ChangeSet) {
+    await this.prisma.auditLog.create({
+      data: { userId, action, entityType, entityId, detail, changes: changes && Object.keys(changes).length ? (changes as any) : undefined },
+    });
   }
 
   async createBrand(dto: { code?: string; name: string; contact?: string }, actorId?: string) {
@@ -370,7 +373,9 @@ export class WarehouseService {
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
     });
-    await this.audit(actorId, 'BRAND_UPDATED', 'Brand', id, `${updated.code} · ${updated.name}`);
+    const changes = diffFields(brand, updated, ['name', 'contact', 'isActive']);
+    const summary = describeChanges(changes);
+    await this.audit(actorId, 'BRAND_UPDATED', 'Brand', id, `${updated.code} · ${updated.name}${summary ? ` — ${summary}` : ''}`, changes);
     return updated;
   }
 
@@ -385,7 +390,7 @@ export class WarehouseService {
       throw new ConflictException(`Cannot deactivate brand — ${brand._count.products} product(s) still reference it`);
     }
     const updated = await this.prisma.brand.update({ where: { id }, data: { isActive: false } });
-    await this.audit(actorId, 'BRAND_DEACTIVATED', 'Brand', id, `${brand.code} · ${brand.name}`);
+    await this.audit(actorId, 'BRAND_DEACTIVATED', 'Brand', id, `${brand.code} · ${brand.name}`, diffFields(brand, updated, ['isActive']));
     return updated;
   }
 

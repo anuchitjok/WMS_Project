@@ -8,6 +8,7 @@ import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { FulfillmentStatus } from '@prisma/client';
+import { getReservationMode } from '../common/feature-flags';
 
 import { FulfillmentService }  from './fulfillment.service';
 import { AllocationService }   from './services/allocation.service';
@@ -31,6 +32,12 @@ export class FulfillmentController {
   ) {}
 
   // ── BOARD & VISIBILITY ──────────────────────────────────────────────────────
+
+  @Get('reservation-mode')
+  @ApiOperation({ summary: 'Where stock is reserved in this deployment (approval or allocation)' })
+  reservationMode() {
+    return getReservationMode();
+  }
 
   @Get('allocatable-requests')
   @ApiOperation({ summary: 'APPROVED requests with no active FulfillmentTask — the allocate picker source' })

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Plus, ChevronRight, Layers, Package, MapPin, Search,
-  Pencil, ArrowRightLeft, Ban, ScanLine, History, Printer, RotateCcw, AlertTriangle,
+  Pencil, Ban, ScanLine, History, Printer, RotateCcw, AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { warehouseApi } from '@/lib/api';
@@ -180,8 +180,8 @@ function LocationPanel({ wh, rack, slot, detail, detailState, onRetry, onAction,
     { id: 'edit', label: 'Edit', icon: Pencil, hidden: !canBlock },
     { id: 'block', label: isBlocked(slot) ? 'Unblock' : 'Block', icon: isBlocked(slot) ? RotateCcw : Ban, danger: !isBlocked(slot), hidden: !canBlock },
     { id: 'print', label: 'Print label', icon: Printer },
-    { id: 'transfer', label: 'Transfer stock', icon: ArrowRightLeft },
-    { id: 'cycle', label: 'Cycle count', icon: ScanLine },
+    // Phase 2: Transfer and Cycle Count are retired; the slot's stock is viewed in Reports → Balance.
+    { id: 'stock', label: 'View stock', icon: ScanLine },
     { id: 'history', label: 'Audit trail', icon: History },
   ];
 
@@ -474,8 +474,7 @@ export function ControlCenter({ wh, loading, onReload, focus }: {
     if (!s) return;
     switch (a) {
       case 'edit': setEditSlot(s); break;
-      case 'transfer': router.push('/transfer'); break;
-      case 'cycle': router.push('/cycle-count'); break;
+      case 'stock': router.push('/reports?tab=balance'); break;
       case 'history': router.push('/audit'); break;
       case 'print': printLabel(wh, selected?.rack ?? null, s); break;
       case 'block': {

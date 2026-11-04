@@ -1,3 +1,4 @@
+import { passwordPolicyErrors } from '../common/password-policy';
 import {
   Injectable,
   UnauthorizedException,
@@ -100,11 +101,7 @@ export class AuthService {
 
   // ── Password policy: >= 8 chars, upper + lower + digit ────────────────────
   private validatePasswordPolicy(pw: string) {
-    const errs: string[] = [];
-    if (!pw || pw.length < 8) errs.push('at least 8 characters');
-    if (!/[A-Z]/.test(pw)) errs.push('one uppercase letter');
-    if (!/[a-z]/.test(pw)) errs.push('one lowercase letter');
-    if (!/[0-9]/.test(pw)) errs.push('one digit');
+    const errs = passwordPolicyErrors(pw);
     if (errs.length) throw new BadRequestException(`Password must contain: ${errs.join(', ')}`);
   }
 

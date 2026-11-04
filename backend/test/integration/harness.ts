@@ -245,6 +245,23 @@ export class Fixture {
   }
 }
 
+/**
+ * Runs the enclosing describe block with ENABLE_STEP5_LEGACY=true — the rollback
+ * switch that re-opens the retired Step 5 writes (adjustment, transfer, cycle
+ * count, direct inventory edits). Flags are read per call, so this is scoped.
+ */
+export function useStep5Legacy() {
+  let previous: string | undefined;
+  beforeAll(() => {
+    previous = process.env.ENABLE_STEP5_LEGACY;
+    process.env.ENABLE_STEP5_LEGACY = 'true';
+  });
+  afterAll(() => {
+    if (previous === undefined) delete process.env.ENABLE_STEP5_LEGACY;
+    else process.env.ENABLE_STEP5_LEGACY = previous;
+  });
+}
+
 export function expectStatus(res: { status: number; body: unknown }, status: number) {
   if (res.status !== status) {
     throw new Error(`Expected HTTP ${status}, got ${res.status}: ${JSON.stringify(res.body)}`);

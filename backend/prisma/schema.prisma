@@ -564,9 +564,37 @@ model WithdrawalRequest {
   requester User                    @relation("Requester", fields: [requesterId], references: [id])
   approver  User?                   @relation("Approver", fields: [approverId], references: [id])
   items     WithdrawalRequestItem[]
+  unitUsages IssuedUnitUsage[]
 
   @@index([status])
   @@index([requesterId])
+}
+
+// Phase 5 (migration 28): what happened to each issued unit, so part of a
+// request can be used and part returned. One row per (request, unit) — a
+// repeat submit cannot record a unit twice. Returnable usages (UNUSED,
+// WRONG_ITEM) carry a return state: PENDING until the warehouse physically
+// receives the unit (→ RECEIVED, unit goes to the putaway queue) or finds it
+// defective (→ DOA, unit goes to RTV). Requests without rows are legacy and
+// keep using WithdrawalRequestItem.usageStatus.
+model IssuedUnitUsage {
+  id            String    @id @default(cuid())
+  requestId     String
+  requestItemId String?
+  stockItemId   String
+  quantity      Float
+  usage         String
+  notes         String?
+  recordedById  String?
+  recordedAt    DateTime  @default(now())
+  returnStatus  String?
+  returnedAt    DateTime?
+  returnedById  String?
+
+  request WithdrawalRequest @relation(fields: [requestId], references: [id])
+
+  @@unique([requestId, stockItemId])
+  @@index([returnStatus])
 }
 
 model WithdrawalRequestItem {
@@ -629,6 +657,8 @@ model AuditLog {
   entityType    String?
   entityId      String?
   detail        String?
+  // Old → new values for master-data edits: { field: { from, to } } (migration 27)
+  changes       Json?
   correlationId String?  // links related ledger entries across request/task/shipment
   ipAddress     String?
   createdAt     DateTime @default(now())
@@ -1202,6 +1232,7 @@ model AuditLogArchive {
   entityType    String?
   entityId      String?
   detail        String?
+  changes       Json?
   correlationId String?
   ipAddress     String?
   createdAt     DateTime

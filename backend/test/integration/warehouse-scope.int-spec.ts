@@ -1,5 +1,5 @@
 import { StockStatus, UserRole } from '@prisma/client';
-import { Fixture, TestUser, expectStatus } from './harness';
+import { Fixture, TestUser, expectStatus, useStep5Legacy } from './harness';
 
 // Phase 2.3: warehouse-level authorization, role × warehouse matrix.
 //
@@ -62,6 +62,8 @@ describe('Warehouse-level authorization', () => {
   });
 
   describe('inventory', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('item reads: own warehouse allowed, other denied; unscoped and super admin see both', async () => {
       await fx.as(mgrA).get(`/inventory/${stockA}`).expect(200);
       await fx.as(mgrA).get(`/inventory/${stockB}`).expect(403);
@@ -140,6 +142,8 @@ describe('Warehouse-level authorization', () => {
   });
 
   describe('cycle count', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('cannot count, list or approve another warehouse', async () => {
       await fx
         .as(staffA)
@@ -163,6 +167,8 @@ describe('Warehouse-level authorization', () => {
   });
 
   describe('adjustment, transfer, RTV, scrap', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('adjustment: create/approve on another warehouse refused; list filtered', async () => {
       await fx
         .as(mgrA)
@@ -324,6 +330,8 @@ describe('Warehouse-level authorization', () => {
   });
 
   describe('legitimate multi-warehouse access', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('a user assigned to both warehouses works in both', async () => {
       const both = await fx.user(
         UserRole.WAREHOUSE_MANAGER,

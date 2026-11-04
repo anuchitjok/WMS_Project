@@ -47,7 +47,10 @@ export class DashboardService {
       lowStockAlerts,
     ] = await Promise.all([
       this.prisma.stockItem.count({ where: wh }),
-      this.prisma.stockItem.count({ where: { status: StockStatus.AVAILABLE, ...wh } }),
+      // Units (summed quantity), not stock rows — a bulk row of 20 is 20 available.
+      this.prisma.stockItem
+        .aggregate({ where: { status: StockStatus.AVAILABLE, ...wh }, _sum: { quantity: true } })
+        .then((r) => r._sum.quantity ?? 0),
       this.prisma.withdrawalRequest.count({
         where: { status: { in: [RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL] } },
       }),
@@ -142,12 +145,13 @@ export class DashboardService {
   // ── Dashboard V2 (additive — Section B: Inventory Health) ───────────────────
   async getInventoryHealth(warehouseId?: WarehouseFilter) {
     const where = warehouseId ? { warehouseId } : {};
+    // Units per status (summed quantity), so the dashboard agrees with Inventory.
     const grouped = await this.prisma.stockItem.groupBy({
       by: ['status'],
-      _count: { _all: true },
+      _sum: { quantity: true },
       where,
     });
-    const by = (s: StockStatus) => grouped.find((g) => g.status === s)?._count._all ?? 0;
+    const by = (s: StockStatus) => grouped.find((g) => g.status === s)?._sum.quantity ?? 0;
     return {
       available: by(StockStatus.AVAILABLE),
       reserved: by(StockStatus.RESERVED),

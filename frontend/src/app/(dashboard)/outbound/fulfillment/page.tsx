@@ -536,6 +536,8 @@ export default function FulfillmentBoardPage() {
   const [allocLoading, setAllocLoading] = useState(false);
   const [allocSearch, setAllocSearch] = useState('');
   const [allocatingId, setAllocatingId] = useState<string | null>(null);
+  // Reservation wording comes from the server's real mode, never a hard-coded guess.
+  const [reservationSummary, setReservationSummary] = useState<string | null>(null);
   const [exceptionTaskId, setExceptionTaskId] = useState<string | null>(null);
 
   // Table state
@@ -602,6 +604,7 @@ export default function FulfillmentBoardPage() {
 
   const loadAllocatable = useCallback(async () => {
     setAllocLoading(true);
+    fulfillmentApi.reservationMode().then((m) => setReservationSummary(m.summary)).catch(() => setReservationSummary(null));
     try { setAllocatable(await fulfillmentApi.allocatableRequests()); }
     catch { toast.error('Failed to load approved requests'); setAllocatable([]); }
     finally { setAllocLoading(false); }
@@ -717,7 +720,8 @@ export default function FulfillmentBoardPage() {
           <DialogHeader><DialogTitle>Allocate Request → Fulfillment Task</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-slate-400">
-              Pick an approved request below — stock is reserved automatically (FIFO). No need to know the request number.
+              Pick an approved request below — no need to know the request number.
+              {reservationSummary && <> {reservationSummary}</>}
             </p>
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />

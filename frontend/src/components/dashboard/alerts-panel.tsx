@@ -28,7 +28,7 @@ interface AlertRow {
 }
 
 const ROWS: AlertRow[] = [
-  { key: 'lowStock',            label: 'Low Stock',            hint: 'Below minimum level',   icon: AlertTriangle, href: '/inventory', severity: 4, iconCls: 'bg-red-50 text-red-600',       active: 'border-red-200 bg-red-50/50',       badge: 'bg-red-100 text-red-700' },
+  { key: 'lowStock',            label: 'Low Stock',            hint: 'Below minimum level',   icon: AlertTriangle, href: '/reports?tab=balance', severity: 4, iconCls: 'bg-red-50 text-red-600',       active: 'border-red-200 bg-red-50/50',       badge: 'bg-red-100 text-red-700' },
   { key: 'inventoryExceptions', label: 'Inventory Exceptions', hint: 'Returns / RTV pending', icon: RotateCcw,     href: '/rtv',       severity: 3, iconCls: 'bg-orange-50 text-orange-600', active: 'border-orange-200 bg-orange-50/50', badge: 'bg-orange-100 text-orange-700' },
   { key: 'pendingApproval',     label: 'Pending Approval',     hint: 'Awaiting decision',     icon: ShieldCheck,   href: '/approvals', severity: 2, iconCls: 'bg-amber-50 text-amber-600',   active: 'border-amber-200 bg-amber-50/50',   badge: 'bg-amber-100 text-amber-700' },
   { key: 'pendingPutaway',      label: 'Pending Putaway',      hint: 'Awaiting storage',      icon: MapPin,        href: '/putaway',   severity: 1, iconCls: 'bg-teal-50 text-teal-600',     active: 'border-teal-200 bg-teal-50/50',     badge: 'bg-teal-100 text-teal-700' },

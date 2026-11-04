@@ -4,7 +4,7 @@ import {
   StockStatus,
   UserRole,
 } from '@prisma/client';
-import { Fixture, TestUser, expectStatus } from './harness';
+import { Fixture, TestUser, expectStatus, useStep5Legacy } from './harness';
 import { SystemSettingsService } from '../../src/settings/system-settings.service';
 import { NotificationsService } from '../../src/notifications/notifications.service';
 
@@ -522,6 +522,8 @@ describe('System control', () => {
 
   // ── 5. Cycle-count stock lock ──────────────────────────────────────────────
   describe('cycle-count stock lock', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('counted rows are skipped by approval-time reservation and refuse movements until the count ends', async () => {
       const loc = await fx.location();
       const other = await fx.location();
@@ -700,6 +702,8 @@ describe('System control', () => {
 
   // ── 4.4 Serial duplicates ──────────────────────────────────────────────────
   describe('serial duplicate control', () => {
+    // Retired in Phase 2; this behaviour is still reachable via the ENABLE_STEP5_LEGACY rollback switch.
+    useStep5Legacy();
     it('two concurrent receipts of one serial: exactly one succeeds', async () => {
       const product = await fx.product({ serialControlled: true });
       const serial = fx.uid('RACE-SN');

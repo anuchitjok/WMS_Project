@@ -24,7 +24,7 @@ export function LowStockTable({ items, loading, limit = 6 }: { items?: LowStockI
     <div className="h-full bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Top Low Stock SKU</h2>
-        <Link href="/inventory" className="text-xs font-medium text-green-600 hover:text-green-700 flex items-center gap-0.5">
+        <Link href="/reports?tab=balance" className="text-xs font-medium text-green-600 hover:text-green-700 flex items-center gap-0.5">
           View all <ChevronRight className="h-3 w-3" />
         </Link>
       </div>

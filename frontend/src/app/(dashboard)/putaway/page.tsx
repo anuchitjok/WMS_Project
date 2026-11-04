@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { MapPin, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { putawayApi } from '@/lib/api';
+import { putawayApi, warehouseApi } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,9 @@ import { hasUnsavedChanges } from '@/lib/utils';
 type FitResult = Awaited<ReturnType<typeof putawayApi.fitCheck>> | null;
 
 const BLANK_BOX_FORM = { length: '', width: '', height: '' };
+const BLANK_LOC = { warehouseId: '', rackId: '', slotId: '' };
+type Loc = typeof BLANK_LOC;
+const SELECT_CLS = 'h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm disabled:bg-slate-50 disabled:text-slate-400';
 
 export default function PutawayPage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -27,33 +30,47 @@ export default function PutawayPage() {
   const [fit, setFit] = useState<FitResult>(null);
   const [checking, setChecking] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Destination: a slot is required (Warehouse → Rack → Slot). Pre-filled from
+  // the location recorded at receiving, and changeable here.
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [loc, setLoc] = useState<Loc>(BLANK_LOC);
 
   const load = useCallback(async () => {
     setLoading(true);
     try { setRows(await putawayApi.pending()); } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { warehouseApi.list().then(setWarehouses).catch(() => setWarehouses([])); }, []);
+
+  const racks: any[] = warehouses.find((w) => w.id === loc.warehouseId)?.racks ?? [];
+  const slots: any[] = racks.find((r) => r.id === loc.rackId)?.slots ?? [];
 
   function openConfirm(item: any) {
     setTarget(item);
     setBox(BLANK_BOX_FORM);
     setFit(null);
+    setLoc({ warehouseId: item.warehouseId ?? '', rackId: item.rackId ?? '', slotId: item.slotId ?? '' });
+  }
+
+  function changeLoc(next: Partial<Loc>) {
+    setLoc((l) => ({ ...l, ...next }));
+    setFit(null); // fit was checked against the previous slot
   }
 
   async function runFitCheck() {
-    if (!target?.slotId || !box.length || !box.width || !box.height) return;
+    if (!loc.slotId || !box.length || !box.width || !box.height) return;
     setChecking(true);
     try {
-      const res = await putawayApi.fitCheck(target.slotId, { length: +box.length, width: +box.width, height: +box.height });
+      const res = await putawayApi.fitCheck(loc.slotId, { length: +box.length, width: +box.width, height: +box.height });
       setFit(res);
     } catch (e: any) { toast.error(e.message); } finally { setChecking(false); }
   }
 
   async function doConfirm() {
-    if (!target) return;
+    if (!target || !loc.slotId) return;
     setConfirming(true);
     try {
-      await putawayApi.confirm(target.id, { warehouseId: target.warehouseId, rackId: target.rackId, slotId: target.slotId });
+      await putawayApi.confirm(target.id, { warehouseId: loc.warehouseId, rackId: loc.rackId, slotId: loc.slotId });
       toast.success('Putaway confirmed — stock is now Available');
       setTarget(null);
       load();
@@ -61,7 +78,7 @@ export default function PutawayPage() {
   }
 
   const hasBoxInput = box.length !== '' && box.width !== '' && box.height !== '';
-  const boxGuard = useDiscardGuard(hasUnsavedChanges(box, BLANK_BOX_FORM), () => { setTarget(null); setBox(BLANK_BOX_FORM); setFit(null); });
+  const boxGuard = useDiscardGuard(hasUnsavedChanges(box, BLANK_BOX_FORM), () => { setTarget(null); setBox(BLANK_BOX_FORM); setFit(null); setLoc(BLANK_LOC); });
 
   return (
     <div className="p-6 space-y-5">
@@ -81,7 +98,7 @@ export default function PutawayPage() {
               : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No items awaiting putaway</td></tr>
               : rows.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs">{i.id.slice(-8)}</td>
+                  <td className="px-4 py-3 font-mono text-xs">{i.serialNumber ?? i.batchNumber ?? i.id.slice(-8)}</td>
                   <td className="px-4 py-3"><span className="font-medium text-slate-800">{i.product?.name}</span><br /><span className="text-xs text-slate-400">{i.product?.code}</span></td>
                   <td className="px-4 py-3 font-medium">{i.quantity}</td>
                   <td className="px-4 py-3 text-xs text-slate-600">{[i.warehouse?.code, i.rack?.code, i.slot?.code].filter(Boolean).join(' › ') || '—'}</td>
@@ -99,9 +116,33 @@ export default function PutawayPage() {
             <DialogTitle>Confirm Putaway — {target?.product?.code}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
-            <p className="text-sm text-slate-500">
-              Location: <span className="font-medium text-slate-700">{[target?.warehouse?.code, target?.rack?.code, target?.slot?.code].filter(Boolean).join(' › ') || '—'}</span>
-            </p>
+            <div>
+              <Label className="text-xs mb-1 block">Destination slot (required)</Label>
+              <div className="grid grid-cols-3 gap-2">
+                <select aria-label="Warehouse" className={SELECT_CLS} value={loc.warehouseId}
+                  onChange={(e) => changeLoc({ warehouseId: e.target.value, rackId: '', slotId: '' })}>
+                  <option value="">Warehouse…</option>
+                  {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code}</option>)}
+                </select>
+                <select aria-label="Rack" className={SELECT_CLS} value={loc.rackId} disabled={!loc.warehouseId}
+                  onChange={(e) => changeLoc({ rackId: e.target.value, slotId: '' })}>
+                  <option value="">Rack…</option>
+                  {racks.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
+                </select>
+                <select aria-label="Slot" className={SELECT_CLS} value={loc.slotId} disabled={!loc.rackId}
+                  onChange={(e) => changeLoc({ slotId: e.target.value })}>
+                  <option value="">Slot…</option>
+                  {slots.map((sl) => (
+                    <option key={sl.id} value={sl.id}>
+                      {sl.code}{sl.capacity ? ` (${sl._count?.stockItems ?? 0}/${sl.capacity})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {!loc.slotId && (
+                <p className="text-xs text-amber-700 mt-1">Choose a warehouse, rack and slot before confirming.</p>
+              )}
+            </div>
 
             <div>
               <Label className="text-xs mb-1 block">Box size (cm) — optional, checks fit against the slot</Label>
@@ -140,7 +181,7 @@ export default function PutawayPage() {
             <Button variant="outline" onClick={boxGuard.requestClose}>Cancel</Button>
             <Button
               onClick={doConfirm}
-              disabled={confirming}
+              disabled={confirming || !loc.slotId}
               className={fit && fit.hasSlotDimensions && !fit.fits ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'}
             >
               {confirming ? 'Confirming…' : fit && fit.hasSlotDimensions && !fit.fits ? 'Confirm Anyway' : 'Confirm Putaway'}

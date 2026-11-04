@@ -2,15 +2,13 @@ import { Injectable, NotFoundException, BadRequestException, ConflictException }
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { FulfillmentStatus } from '@prisma/client';
-import { claimTaskStatus } from './task-state';
-import { PickingService } from './picking.service';
+import { assertAllStockLinesPicked, claimTaskStatus } from './task-state';
 
 @Injectable()
 export class PackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeGateway,
-    private readonly picking: PickingService,
   ) {}
 
   async startPacking(taskId: string, userId: string) {
@@ -66,16 +64,10 @@ export class PackingService {
     if (!session) throw new NotFoundException('Packing session not found');
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Tasks advanced before pick tracking reach PACKING with unpicked lines. The
-      // goods are physically packed, so confirm those picks now (audited) rather
-      // than leaving the reserved stock unaccounted for.
-      const unpicked = await tx.fulfillmentTaskItem.findMany({ where: { taskId, pickedAt: null } });
-      for (const it of unpicked) {
-        await this.picking.pickInTx(tx, taskId, it.id, it.qtyRequested, userId, {
-          note: 'Pick confirmed at packing (task advanced without item picks)',
-          allowStatuses: [FulfillmentStatus.PACKING],
-        });
-      }
+      // Packing never confirms picks on the picker's behalf: a line holding stock
+      // that was never picked blocks completion (only tasks advanced before pick
+      // tracking existed can reach PACKING like this).
+      await assertAllStockLinesPicked(tx, taskId, 'complete packing');
 
       await claimTaskStatus(tx, taskId, [FulfillmentStatus.PACKING], FulfillmentStatus.PACKED, {
         packedAt: new Date(),

@@ -460,8 +460,7 @@ export class InventoryService {
   // ─── Full detail for drawer ───────────────────────────────────────────────
 
   async getItemDetailFull(id: string) {
-    const [item, auditLogs] = await Promise.all([
-      this.prisma.stockItem.findUnique({
+    const item = await this.prisma.stockItem.findUnique({
         where: { id },
         include: {
           product: { include: { brand: true } },
@@ -480,15 +479,25 @@ export class InventoryService {
           },
           scrapCases: { take: 5 },
         },
-      }),
-      this.prisma.auditLog.findMany({
-        where: { entityType: 'StockItem', entityId: id },
-        include: { user: { select: { fullName: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 30,
-      }),
-    ]);
+      });
     if (!item) throw new NotFoundException(`Stock item ${id} not found`);
+
+    // Phase 3: the unit's audit also shows its Goods Receiving, request, RTV and
+    // scrap entries (they are logged against those documents, not the unit).
+    // Putaway is logged against the unit itself (PUTAWAY_CONFIRMED).
+    const related = [
+      { entityType: 'StockItem', entityId: id },
+      ...item.goodsReceivingItems.map((g) => ({ entityType: 'GoodsReceiving', entityId: g.receivingId })),
+      ...item.withdrawalRequestItems.map((w) => ({ entityType: 'WithdrawalRequest', entityId: w.requestId })),
+      ...item.rtvCases.map((r) => ({ entityType: 'RTVCase', entityId: r.id })),
+      ...item.scrapCases.map((s) => ({ entityType: 'ScrapCase', entityId: s.id })),
+    ];
+    const auditLogs = await this.prisma.auditLog.findMany({
+      where: { OR: related, action: { not: 'NOTIFICATION_SENT' } },
+      include: { user: { select: { fullName: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
     return { ...item, auditLogs };
   }
 }

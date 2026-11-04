@@ -8,7 +8,9 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatDate } from '@/lib/utils';
+import { formatDate, cn } from '@/lib/utils';
+import { ChangesList } from '@/components/audit/changes-list';
+import { TransactionTimeline } from '@/components/audit/transaction-timeline';
 
 // Abbreviations that should stay upper-case inside a humanised label.
 const KEEP_UPPER = new Set(['RTV', 'RMA', 'DOA', 'SKU', 'SLA', 'PO', 'GRN', 'ID']);
@@ -34,6 +36,9 @@ function actionTone(action: string) {
 const PAGE_SIZE = 50;
 
 export default function AuditPage() {
+  const [view, setView] = useState<'trail' | 'timeline'>('trail');
+  // Phase 3: notification sends are kept apart from transactions.
+  const [category, setCategory] = useState<'transactions' | 'notifications' | 'all'>('transactions');
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -52,7 +57,7 @@ export default function AuditPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await auditApi.list({ q, action, entityType, from, to, page, limit: PAGE_SIZE });
+      const res = await auditApi.list({ q, action, entityType, from, to, page, limit: PAGE_SIZE, category });
       setLogs(res.data);
       setTotalPages(res.totalPages);
       setTotal(res.total);
@@ -61,7 +66,7 @@ export default function AuditPage() {
     } finally {
       setLoading(false);
     }
-  }, [q, action, entityType, from, to, page]);
+  }, [q, action, entityType, from, to, page, category]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -74,6 +79,14 @@ export default function AuditPage() {
     <div className="p-6 space-y-5">
       <PageHeader title="Audit Trail" subtitle="Every recorded action — who did what, and when" icon={ScrollText} />
 
+      <div role="tablist" className="inline-flex rounded-lg border border-slate-200 bg-white p-1 text-sm">
+        {([['trail', 'Audit trail'], ['timeline', 'Transaction timeline']] as const).map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)}
+            className={cn('px-3 py-1.5 rounded-md', view === k ? 'bg-green-50 text-green-700 font-medium' : 'text-slate-600 hover:text-slate-800')}>{l}</button>
+        ))}
+      </div>
+
+      {view === 'timeline' ? <TransactionTimeline humanAction={humanAction} /> : (<>
       {/* Filter bar */}
       <div className="flex flex-wrap items-end gap-3 bg-white rounded-xl border border-slate-200 shadow-sm p-4">
         <div className="space-y-1 flex-1 min-w-[200px]">
@@ -82,6 +95,15 @@ export default function AuditPage() {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <Input value={q} onChange={(e) => { setPage(1); setQ(e.target.value); }} placeholder="Reference, detail, action…" className="pl-8" />
           </div>
+        </div>
+        <div className="space-y-1 min-w-[150px]">
+          <label className="text-xs text-slate-500">Show</label>
+          <select value={category} onChange={(e) => { setPage(1); setAction(''); setCategory(e.target.value as typeof category); }}
+            className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-700 focus:border-green-500 focus:outline-none">
+            <option value="transactions">Transactions</option>
+            <option value="notifications">Notifications sent</option>
+            <option value="all">Everything</option>
+          </select>
         </div>
         <div className="space-y-1 min-w-[170px]">
           <label className="text-xs text-slate-500">Action</label>
@@ -143,7 +165,10 @@ export default function AuditPage() {
                 <td className={`px-4 py-3 font-medium ${actionTone(log.action)}`}>{humanAction(log.action)}</td>
                 <td className="px-4 py-3 text-slate-600">{log.user?.fullName ?? 'System'}</td>
                 <td className="px-4 py-3 text-sm text-slate-500">{log.entityType ?? '—'}</td>
-                <td className="px-4 py-3 text-sm text-slate-600 max-w-md truncate" title={log.detail ?? ''}>{log.detail ?? '—'}</td>
+                <td className="px-4 py-3 text-sm text-slate-600 max-w-md">
+                  <p className="truncate" title={log.detail ?? ''}>{log.detail ?? '—'}</p>
+                  <ChangesList changes={log.changes} />
+                </td>
                 <td className="px-4 py-3 text-sm text-slate-500 whitespace-nowrap">{formatDate(log.createdAt)}</td>
               </tr>
             ))}
@@ -159,6 +184,7 @@ export default function AuditPage() {
           </div>
         )}
       </div>
+      </>)}
     </div>
   );
 }

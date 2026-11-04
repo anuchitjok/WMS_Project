@@ -215,6 +215,31 @@ describe('Schema drift and migration script', () => {
     }
   });
 
+  it('27_audit_changes.sql applies cleanly after 26, twice, and leaves old audit entries untouched', async () => {
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '27_audit_changes.sql'),
+      'utf8',
+    );
+    const before = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM "AuditLog"`);
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const after = await db.query<{ n: number; withChanges: number }>(
+      `SELECT count(*)::int AS n, count("changes")::int AS "withChanges" FROM "AuditLog"`,
+    );
+    expect(after.rows[0]).toEqual({ n: before.rows[0].n, withChanges: 0 });
+  });
+
+  it('28_issued_unit_usage.sql applies cleanly after 27, twice, and only adds an empty table', async () => {
+    const script = readFileSync(
+      join(REPO, 'database', 'schema', '28_issued_unit_usage.sql'),
+      'utf8',
+    );
+    await db.exec(script);
+    await db.exec(script); // idempotent
+    const n = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM "IssuedUnitUsage"`);
+    expect(n.rows[0].n).toBe(0); // nothing seeded
+  });
+
   it('after the script, the database matches schema.prisma (no drift left)', async () => {
     const sql = (await diffToSchema()).replace(/^--.*$/gm, '').trim();
     expect(sql).toBe('');

@@ -1,5 +1,6 @@
 import { assertSerialsFree } from '../common/serial-guard';
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { ScopePrincipal, assertWarehouseAccess } from '../common/warehouse-scope';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +19,8 @@ export interface ReceivingImportHeader {
   poNumber?: string;
   warehouseId?: string; // default destination for rows without a warehouseCode
   notes?: string;
+  /** Phase 6: 'true' to import a file that was already imported (explicit confirmation). */
+  allowReimport?: string;
 }
 
 export interface ColumnSpec {
@@ -95,7 +98,7 @@ export class ReceivingImportService {
   // ── Validate parsed item rows ────────────────────────────────────────────
   private async validate(rows: Record<string, any>[]): Promise<ValidatedRow[]> {
     const [products, warehouses] = await Promise.all([
-      this.prisma.product.findMany({ select: { code: true, serialControlled: true, batchControlled: true } }),
+      this.prisma.product.findMany({ select: { code: true, serialControlled: true, batchControlled: true, isActive: true, productStatus: true } }),
       this.prisma.warehouse.findMany({ select: { code: true } }),
     ]);
     const productMap = new Map(products.map((p) => [p.code, p]));
@@ -117,9 +120,14 @@ export class ReceivingImportService {
       if (!code) errors.push('Missing required field: productCode');
       const product = code ? productMap.get(code) : undefined;
       if (code && !product) errors.push(`Unknown productCode: ${code}`);
+      // Same rule as Receive Goods: discontinued / inactive products cannot be received.
+      if (product && !product.isActive) errors.push(`Product ${code} is ${String(product.productStatus).toLowerCase()} and cannot be received`);
 
       const q = this.num(data.quantity);
       if (q === null || q < 1) errors.push('quantity must be a number >= 1');
+      else if (data.serialNumber && String(data.serialNumber).trim() && String(data.serialNumber).trim() !== 'N/A' && q !== 1) {
+        errors.push(`Serial ${String(data.serialNumber).trim()} identifies one unit — quantity must be 1`);
+      }
 
       const serial = data.serialNumber ? String(data.serialNumber).trim() : '';
       if (serial) {
@@ -148,7 +156,24 @@ export class ReceivingImportService {
     });
   }
 
-  async preview(file: Express.Multer.File): Promise<ReceivingPreviewResult> {
+  /** Content fingerprint — the same file renamed is still the same file. */
+  private fingerprint(file: Express.Multer.File) {
+    return createHash('sha256').update(file?.buffer ?? Buffer.alloc(0)).digest('hex');
+  }
+
+  /** The receipt an identical file already created, if any. */
+  private async priorReceipt(db: Pick<PrismaService, 'auditLog'>, fileHash: string) {
+    const prev = await db.auditLog.findFirst({
+      where: { action: 'GOODS_RECEIVED_IMPORT', changes: { path: ['fileHash'], equals: fileHash } },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true, changes: true, user: { select: { fullName: true, username: true } } },
+    });
+    if (!prev) return null;
+    const c = (prev.changes ?? {}) as Record<string, unknown>;
+    return { refNumber: typeof c.refNumber === 'string' ? c.refNumber : null, at: prev.createdAt, by: prev.user?.fullName ?? prev.user?.username ?? null };
+  }
+
+  async preview(file: Express.Multer.File): Promise<ReceivingPreviewResult & { alreadyImported: Awaited<ReturnType<ReceivingImportService['priorReceipt']>> }> {
     const rows = await parseSpreadsheet(file);
     if (rows.length === 0) throw new BadRequestException('No data rows found in file');
     const validated = await this.validate(rows);
@@ -157,6 +182,7 @@ export class ReceivingImportService {
       columns: RECEIVING_IMPORT_COLUMNS.map((c) => c.header),
       rows: validated,
       summary: { total: validated.length, valid, invalid: validated.length - valid },
+      alreadyImported: await this.priorReceipt(this.prisma, this.fingerprint(file)),
     };
   }
 
@@ -176,8 +202,19 @@ export class ReceivingImportService {
     }
 
     const refNumber = `GR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+    const fileHash = this.fingerprint(file);
 
     const gr = await this.prisma.$transaction(async (tx) => {
+      // Phase 6: one receipt per file. Re-uploading the same file would receive the
+      // same goods twice; it needs an explicit re-import confirmation. The lock makes
+      // two simultaneous uploads of one file see each other.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`receiving-import:${fileHash}`}))`;
+      const prior = await this.priorReceipt(tx, fileHash);
+      if (prior && header.allowReimport !== 'true') {
+        throw new ConflictException(
+          `This file was already received${prior.refNumber ? ` as ${prior.refNumber}` : ''} on ${prior.at.toISOString().slice(0, 16).replace('T', ' ')}${prior.by ? ` by ${prior.by}` : ''}. Importing it again would receive the same goods twice.`,
+        );
+      }
       await assertSerialsFree(tx, validRows.map((d) => (d.serialNumber ? String(d.serialNumber).trim() : null)));
       const warehouses = await tx.warehouse.findMany({ select: { id: true, code: true } });
       const wMap = new Map(warehouses.map((w) => [w.code, w.id]));
@@ -247,7 +284,8 @@ export class ReceivingImportService {
           action: 'GOODS_RECEIVED_IMPORT',
           entityType: 'GoodsReceiving',
           entityId: created.id,
-          detail: `${refNumber} — imported ${validRows.length} items (${skipped.length} skipped)`,
+          detail: `${refNumber} — imported ${validRows.length} items (${skipped.length} skipped) from ${file?.originalname ?? 'upload'}${prior ? ' — re-import confirmed' : ''}`,
+          changes: { refNumber, fileHash, fileName: file?.originalname ?? null, inserted: validRows.length, skipped: skipped.length, ...(prior ? { reimportOf: prior.refNumber } : {}) },
         },
       });
 

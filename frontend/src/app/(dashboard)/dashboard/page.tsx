@@ -111,7 +111,7 @@ export default function DashboardPage() {
     { label: 'Pending Approval',   value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'blue',   href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
     { label: 'Active Fulfillment', value: kpis?.activeFulfillment ?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
     { label: 'Shipment Today',     value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: 'Critical Alerts',    value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/inventory',            status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
+    { label: 'Critical Alerts',    value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/reports?tab=balance',          status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
   ];
 
   return (

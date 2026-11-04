@@ -10,6 +10,10 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { ReasonCodeField, reasonFilled, type ReasonValue } from '@/components/reason-code-field';
+import { StockPicker, type PickedStock } from '@/components/inventory/stock-picker';
+
+// Same list the server accepts (stock-state ON_HAND_UNCOMMITTED).
+const SCRAPPABLE = ['AVAILABLE', 'QUARANTINE', 'DAMAGED', 'DOA', 'RTV_PENDING', 'RETURNED_UNUSED'];
 
 const SCRAP_FLOW: Record<string, string[]> = {
   PENDING_REVIEW: ['APPROVED', 'REJECTED'],
@@ -26,14 +30,27 @@ const STATUS_COLOR: Record<string, string> = {
 
 const DISPOSAL_OPTIONS = ['Destroy', 'Shred', 'Recycle', 'Donate', 'Other'];
 
+// U05: Approved and Disposed are different steps — only disposal removes stock.
+const STOCK_NOTE: Record<string, string> = {
+  PENDING_REVIEW: 'Stock unchanged',
+  APPROVED: 'Stock not yet deducted',
+  DISPOSED: 'Stock removed',
+  REJECTED: 'Stock unchanged',
+  CANCELLED: 'Stock unchanged',
+};
+
 export default function ScrapPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState({ stockItemId: '', reason: '', description: '', disposalMethod: '', quantity: 1 });
+  const [form, setForm] = useState({ reason: '', description: '', disposalMethod: '', quantity: 1 });
+  const [unit, setUnit] = useState<PickedStock | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [reason, setReason] = useState<ReasonValue>({});
+  const [disposeTarget, setDisposeTarget] = useState<any | null>(null);
+  const [dispose, setDispose] = useState({ method: '', notes: '' });
+  const [disposing, setDisposing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,6 +61,11 @@ export default function ScrapPage() {
   useEffect(() => { load(); }, [load]);
 
   async function advance(c: any, nextStatus: string) {
+    if (nextStatus === 'DISPOSED') {
+      setDispose({ method: c.disposalMethod ?? '', notes: '' });
+      setDisposeTarget(c);
+      return;
+    }
     try {
       await scrapApi.updateStatus(c.id, nextStatus);
       toast.success(`Scrap case moved to ${nextStatus.replace(/_/g, ' ')}`);
@@ -51,16 +73,31 @@ export default function ScrapPage() {
     } catch (e: any) { toast.error(e.message); }
   }
 
+  async function confirmDispose() {
+    if (!disposeTarget || !dispose.method.trim()) return;
+    setDisposing(true);
+    try {
+      await scrapApi.updateStatus(disposeTarget.id, 'DISPOSED', { disposalMethod: dispose.method.trim(), notes: dispose.notes.trim() || undefined });
+      toast.success(`${disposeTarget.refNumber} disposed — stock removed`);
+      setDisposeTarget(null);
+      load();
+    } catch (e: any) { toast.error(e.message); }
+    finally { setDisposing(false); }
+  }
+
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.stockItemId || !reasonFilled(reason)) { toast.error('Stock Item ID and Reason are required'); return; }
+    if (!unit || !reasonFilled(reason)) { toast.error('Pick a stock unit and give a reason'); return; }
+    const qty = Number(form.quantity);
+    if (!Number.isInteger(qty) || qty < 1 || qty > unit.quantity) { toast.error(`Quantity must be a whole number from 1 to ${unit.quantity}`); return; }
     setSubmitting(true);
     try {
-      await scrapApi.create({ ...form, ...reason, reason: reason.reason?.trim(), quantity: Number(form.quantity) });
+      await scrapApi.create({ ...form, ...reason, stockItemId: unit.id, reason: reason.reason?.trim(), quantity: qty });
       setReason({});
       toast.success('Scrap case created');
       setShowCreate(false);
-      setForm({ stockItemId: '', reason: '', description: '', disposalMethod: '', quantity: 1 });
+      setForm({ reason: '', description: '', disposalMethod: '', quantity: 1 });
+      setUnit(null);
       load();
     } catch (e: any) { toast.error(e.message); }
     finally { setSubmitting(false); }
@@ -100,10 +137,7 @@ export default function ScrapPage() {
               <button onClick={() => setShowCreate(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <form onSubmit={handleCreate} className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-slate-600 block mb-1">Stock Item ID / Serial *</label>
-                <Input placeholder="Enter Stock Item ID" value={form.stockItemId} onChange={(e) => setForm({ ...form, stockItemId: e.target.value })} />
-              </div>
+              <StockPicker value={unit} onChange={(u) => { setUnit(u); setForm((f) => ({ ...f, quantity: 1 })); }} allowedStatuses={SCRAPPABLE} label="Stock unit *" />
               <ReasonCodeField category="SCRAP" label="Reason *" value={reason} onChange={setReason} placeholder="e.g. Physical damage, End of life" />
               <div>
                 <label className="text-xs font-medium text-slate-600 block mb-1">Description</label>
@@ -119,7 +153,7 @@ export default function ScrapPage() {
                 </div>
                 <div>
                   <label className="text-xs font-medium text-slate-600 block mb-1">Quantity</label>
-                  <Input type="number" min={1} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: +e.target.value })} />
+                  <Input type="number" min={1} max={unit?.quantity} value={form.quantity} onChange={(e) => setForm({ ...form, quantity: +e.target.value })} />
                 </div>
               </div>
               <div className="flex gap-2 pt-2">
@@ -129,6 +163,41 @@ export default function ScrapPage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Dispose modal — disposal is the step that removes the goods from stock */}
+      {disposeTarget && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDisposeTarget(null)}>
+          <div role="dialog" aria-label="Dispose scrap" className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="font-bold text-lg">Dispose · {disposeTarget.refNumber}</h2>
+              <button aria-label="Close" onClick={() => setDisposeTarget(null)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                Disposing removes {disposeTarget.quantity} from stock. This cannot be undone.
+              </p>
+              <div>
+                <label htmlFor="dispose-method" className="text-xs font-medium text-slate-600 block mb-1">Disposal method *</label>
+                <select id="dispose-method" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" value={dispose.method} onChange={(e) => setDispose({ ...dispose, method: e.target.value })}>
+                  <option value="">Select…</option>
+                  {[...new Set([...DISPOSAL_OPTIONS, ...(dispose.method ? [dispose.method] : [])])].map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="dispose-notes" className="text-xs font-medium text-slate-600 block mb-1">Evidence / certificate reference</label>
+                <Input id="dispose-notes" placeholder="e.g. Recycler certificate no." value={dispose.notes} onChange={(e) => setDispose({ ...dispose, notes: e.target.value })} />
+              </div>
+              {!dispose.method && <p className="text-xs text-amber-700">Still needed: disposal method</p>}
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setDisposeTarget(null)}>Cancel</Button>
+                <Button className="flex-1 bg-red-600 hover:bg-red-700 text-white" disabled={disposing || !dispose.method} onClick={confirmDispose}>
+                  {disposing ? 'Disposing…' : 'Dispose'}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -170,6 +239,7 @@ export default function ScrapPage() {
                       <Badge variant="outline" className={STATUS_COLOR[c.status] ?? 'bg-slate-100 text-slate-600'}>
                         {c.status.replace(/_/g, ' ')}
                       </Badge>
+                      {STOCK_NOTE[c.status] && <p className="mt-1 text-xs text-slate-500">{STOCK_NOTE[c.status]}</p>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1 flex-wrap">
@@ -180,7 +250,7 @@ export default function ScrapPage() {
                             className={`h-7 text-xs ${next === 'REJECTED' || next === 'CANCELLED' ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-red-600 hover:bg-red-700 text-white'}`}
                             onClick={() => advance(c, next)}
                           >
-                            {next.replace(/_/g, ' ')}
+                            {next === 'DISPOSED' ? 'Dispose…' : next.replace(/_/g, ' ')}
                           </Button>
                         ))}
                       </div>

@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
+import { Retired } from '../common/retired';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateAdjustmentDto } from './dto/create-adjustment.dto';
 
@@ -20,18 +21,21 @@ export class AdjustmentController {
     return this.service.findAll(status, user);
   }
 
+  @Retired('Stock Adjustment')
   @Post()
   @Access(ACCESS.adjustment)
   create(@Body() dto: CreateAdjustmentDto, @CurrentUser() user: any) {
     return this.service.create(dto, user.id, user);
   }
 
+  @Retired('Stock Adjustment')
   @Patch(':id/approve')
   @Access(ACCESS.adjustment)
   approve(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.approve(id, user.id, user);
   }
 
+  @Retired('Stock Adjustment')
   @Patch(':id/reject')
   @Access(ACCESS.adjustment)
   reject(@Param('id') id: string, @CurrentUser() user: any) {

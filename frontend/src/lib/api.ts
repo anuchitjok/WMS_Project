@@ -138,7 +138,14 @@ export const dashboardApi = {
   inventoryHealth: (warehouseId?: string) =>
     request<InventoryHealth>(`/dashboard/inventory-health${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
   activity: (limit = 15) => request<ActivityEvent[]>(`/dashboard/activity?limit=${limit}`),
+  workQueue: (warehouseId?: string) =>
+    request<{ items: WorkItem[]; counts: Record<string, number> }>(`/dashboard/work-queue${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
 };
+
+export interface WorkItem {
+  stage: 'Receive' | 'Putaway' | 'Approve' | 'Allocate' | 'Fulfil' | 'Return' | 'Scrap';
+  ref: string; summary: string; nextAction: string; owner: string; waitingSince: string; href: string;
+}
 
 // Requests
 export const requestsApi = {
@@ -221,7 +228,19 @@ export const auditApi = {
     if (params) Object.entries(params).forEach(([k, v]) => v != null && v !== '' && q.set(k, String(v)));
     return request<AuditListResponse>(`/audit?${q}`);
   },
+  timeline: (ref: string) => request<TimelineResponse>(`/audit/timeline?ref=${encodeURIComponent(ref)}`),
 };
+
+export interface TimelineEvent {
+  id: string; at: string; action: string; entityType: string | null; entityId: string | null;
+  ref: string | null; detail: string | null; changes: Record<string, any> | null; user: string;
+}
+export interface TimelineResponse {
+  query: string;
+  matches: { type: string; ref: string; id: string }[];
+  events: TimelineEvent[];
+  truncated: boolean;
+}
 
 // Warehouse
 export interface SlotStockAge {
@@ -378,7 +397,9 @@ export interface LayoutOccupancy {
 
 // Receiving
 export interface ReceivingImportRow { rowNumber: number; data: Record<string, any>; errors: string[]; valid: boolean }
-export interface ReceivingImportPreview { columns: string[]; rows: ReceivingImportRow[]; summary: { total: number; valid: number; invalid: number } }
+/** Phase 6: set when this exact file was already imported (same content, any file name). */
+export interface PriorImport { at: string; by: string | null; refNumber?: string | null; batch?: string | null }
+export interface ReceivingImportPreview { columns: string[]; rows: ReceivingImportRow[]; summary: { total: number; valid: number; invalid: number }; alreadyImported?: PriorImport | null }
 export const receivingApi = {
   list: (status?: string) => request<any[]>(`/receiving${status ? `?status=${status}` : ''}`),
   get: (id: string) => request<any>(`/receiving/${id}`),
@@ -386,6 +407,9 @@ export const receivingApi = {
   inspect: (id: string, dto: { items: { itemId: string; inspectedQty: number; inspectionOutcome: string; inspectorNotes?: string; serialNumber?: string; batchNumber?: string }[] }) =>
     request<any>(`/receiving/${id}/inspect`, { method: 'PATCH', body: JSON.stringify(dto) }),
   verify: (id: string) => request<any>(`/receiving/${id}/verify`, { method: 'PATCH' }),
+  /** Phase 6: reverse a mistaken receipt before putaway (supervisor, not the person who received it). */
+  reverse: (id: string, reason: string) =>
+    request<{ refNumber: string; reversedUnits: number }>(`/receiving/${id}/reverse`, { method: 'POST', body: JSON.stringify({ reason }) }),
   // Bulk import (one file = one goods receipt)
   importTemplate: () => downloadFile('/receiving/import/template', 'template-receiving.xlsx'),
   importPreview: (file: File) => uploadMultipart<ReceivingImportPreview>('/receiving/import/preview', file),
@@ -419,6 +443,7 @@ export const fulfillmentApi = {
   handoverQueue: (warehouseId?: string) =>
     request<any[]>(`/fulfillment/handover-queue${warehouseId ? `?warehouseId=${warehouseId}` : ''}`),
   allocatableRequests: () => request<any[]>('/fulfillment/allocatable-requests'),
+  reservationMode: () => request<{ mode: 'ALLOCATION' | 'APPROVAL'; summary: string }>('/fulfillment/reservation-mode'),
 
   // Orchestration
   allocate: (requestId: string) =>
@@ -463,10 +488,22 @@ export const fulfillmentApi = {
 };
 
 // RMA Usage
+export interface IssuedUnitRow {
+  stockItemId: string; productId: string; quantity: number; requestItemId: string | null;
+  serialNumber: string | null; batchNumber: string | null; stockStatus: string | null;
+  productCode: string | null; productName: string | null; unit: string | null;
+  usage: string | null; returnStatus: string | null; recordedAt: string | null;
+}
+
 export const rmaApi = {
   pendingUsage: () => request<any[]>('/rma/pending-usage'),
   confirmUsage: (requestId: string, usage: string, notes?: string) =>
     request<any>(`/rma/${requestId}/usage`, { method: 'PATCH', body: JSON.stringify({ usage, notes }) }),
+  /** Phase 5: issued units of a request and what has been recorded for each. */
+  units: (requestId: string) => request<{ refNumber: string; status: string; units: IssuedUnitRow[] }>(`/rma/${requestId}/units`),
+  /** Phase 5: record usage for some units only (part used, part returned). */
+  confirmUnits: (requestId: string, units: { stockItemId: string; usage: string }[], notes?: string) =>
+    request<any>(`/rma/${requestId}/usage`, { method: 'PATCH', body: JSON.stringify({ units, notes }) }),
 };
 
 // DOA
@@ -481,8 +518,11 @@ export const doaApi = {
 // Unused Return
 export const unusedApi = {
   pending: () => request<any[]>('/unused/pending'),
-  returnToStock: (requestId: string) => request<any>(`/unused/${requestId}/return`, { method: 'PATCH' }),
-  markDoa: (requestId: string) => request<any>(`/unused/${requestId}/doa`, { method: 'PATCH' }),
+  /** Received back → putaway queue. Omit unit ids to process every unit still awaiting return. */
+  returnToStock: (requestId: string, stockItemIds?: string[]) =>
+    request<any>(`/unused/${requestId}/return`, { method: 'PATCH', body: JSON.stringify(stockItemIds?.length ? { stockItemIds } : {}) }),
+  markDoa: (requestId: string, stockItemIds?: string[]) =>
+    request<any>(`/unused/${requestId}/doa`, { method: 'PATCH', body: JSON.stringify(stockItemIds?.length ? { stockItemIds } : {}) }),
 };
 
 // Adjustment
@@ -552,8 +592,11 @@ export const productsApi = {
 };
 
 // Settings
+export type SetupStepStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'READY' | 'NEEDS_FIX' | 'REVIEW';
+export interface SetupStep { key: string; order: number; title: string; status: SetupStepStatus; summary: string; issues: string[]; href: string }
 export const settingsApi = {
   list: () => request<any[]>('/settings'),
+  setupChecklist: () => request<{ steps: SetupStep[]; ready: boolean; counts: Record<SetupStepStatus, number> }>('/settings/setup-checklist'),
   update: (key: string, value: string) =>
     request<any>(`/settings/${key}`, { method: 'PATCH', body: JSON.stringify({ value }) }),
   retentionPreview: () => request<any>('/audit/retention/preview'),
@@ -616,8 +659,11 @@ export const reportsApi = {
 export const rtvApi = {
   list: (status?: string) => request<any[]>(`/rtv${status ? `?status=${status}` : ''}`),
   get: (id: string) => request<any>(`/rtv/${id}`),
-  updateStatus: (id: string, status: string) =>
-    request<any>(`/rtv/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  updateStatus: (id: string, status: string, extra: { creditNoteRef?: string } = {}) =>
+    request<any>(`/rtv/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }),
+  /** Phase 5: receive the vendor's replacement against the case (creates a Goods Receiving). */
+  receiveReplacement: (id: string, body: { serialNumber?: string; batchNumber?: string; notes?: string }) =>
+    request<any>(`/rtv/${id}/replacement`, { method: 'POST', body: JSON.stringify(body) }),
 };
 
 export const scrapApi = {
@@ -625,8 +671,8 @@ export const scrapApi = {
   get: (id: string) => request<any>(`/scrap/${id}`),
   create: (body: { stockItemId: string; reason?: string; reasonCode?: string; description?: string; disposalMethod?: string; quantity?: number }) =>
     request<any>('/scrap', { method: 'POST', body: JSON.stringify(body) }),
-  updateStatus: (id: string, status: string) =>
-    request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  updateStatus: (id: string, status: string, extra: { disposalMethod?: string; notes?: string } = {}) =>
+    request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }),
 };
 
 export const documentsApi = {
@@ -712,7 +758,8 @@ async function downloadFile(path: string, fallbackName: string): Promise<void> {
 export const dataioApi = {
   downloadTemplate: (type: string) => downloadFile(`/io/template/${type}`, `template-${type}.xlsx`),
   preview: (type: string, file: File) => uploadFile<any>(`/io/import/${type}/preview`, file),
-  commit: (type: string, file: File) => uploadFile<any>(`/io/import/${type}/commit`, file),
+  commit: (type: string, file: File, allowReimport = false) =>
+    uploadFile<any>(`/io/import/${type}/commit${allowReimport ? '?allowReimport=true' : ''}`, file),
   export: (type: string, format: 'xlsx' | 'csv') =>
     downloadFile(`/io/export/${type}?format=${format}`, `${type}.${format}`),
 };

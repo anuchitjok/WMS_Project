@@ -25,8 +25,11 @@ const EXPORT_TYPES = [
   { value: 'reports', label: 'Reports Summary' },
 ];
 
-interface PreviewRow { rowNumber: number; data: Record<string, any>; errors: string[]; valid: boolean }
-interface Preview { type: string; columns: string[]; rows: PreviewRow[]; summary: { total: number; valid: number; invalid: number } }
+interface PreviewRow { rowNumber: number; data: Record<string, any>; errors: string[]; notes?: string[]; valid: boolean }
+interface Preview {
+  type: string; columns: string[]; rows: PreviewRow[]; summary: { total: number; valid: number; invalid: number };
+  alreadyImported?: { batch: string | null; at: string; by: string | null } | null;
+}
 
 export default function DataIOPage() {
   const [tab, setTab] = useState<'import' | 'export'>('import');
@@ -37,13 +40,14 @@ export default function DataIOPage() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<any>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [reimport, setReimport] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const reset = () => { setFile(null); setPreview(null); setResult(null); setProgress(0); };
+  const reset = () => { setFile(null); setPreview(null); setResult(null); setProgress(0); setReimport(false); };
 
   const handleFile = useCallback(async (f: File) => {
     if (!/\.(xlsx|csv)$/i.test(f.name)) { toast.error('Only .xlsx or .csv files are supported'); return; }
-    setFile(f); setResult(null); setBusy(true); setProgress(30);
+    setFile(f); setResult(null); setReimport(false); setBusy(true); setProgress(30);
     try {
       const p = await dataioApi.preview(importType, f);
       setProgress(100);
@@ -58,9 +62,9 @@ export default function DataIOPage() {
     if (!file) return;
     setBusy(true); setProgress(40);
     try {
-      const r = await dataioApi.commit(importType, file);
-      setProgress(100); setResult(r); setPreview(null);
-      toast.success(`Imported ${r.inserted} rows successfully (skipped ${r.skipped})`);
+      const r = await dataioApi.commit(importType, file, reimport);
+      setProgress(100); setResult(r); setPreview(null); setReimport(false);
+      toast.success(`Imported ${r.inserted} rows as ${r.batch} (skipped ${r.skipped})`);
     } catch (e: any) {
       toast.error(e.message);
     } finally { setBusy(false); setTimeout(() => setProgress(0), 600); }
@@ -142,10 +146,23 @@ export default function DataIOPage() {
                 <Badge className="bg-green-100 text-green-700" variant="outline">✓ Valid {preview.summary.valid}</Badge>
                 <Badge className="bg-red-100 text-red-700" variant="outline">✗ Issues {preview.summary.invalid}</Badge>
                 <div className="flex-1" />
-                <Button onClick={confirmImport} disabled={busy || preview.summary.valid === 0} className="bg-green-600 hover:bg-green-700 text-white">
+                <Button onClick={confirmImport} disabled={busy || preview.summary.valid === 0 || (!!preview.alreadyImported && !reimport)} className="bg-green-600 hover:bg-green-700 text-white">
                   <CheckCircle2 className="h-4 w-4 mr-2" />Confirm Import {preview.summary.valid} rows
                 </Button>
               </div>
+              {preview.alreadyImported && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="already-imported">
+                  <p className="font-medium">
+                    This file was already imported{preview.alreadyImported.batch ? ` as ${preview.alreadyImported.batch}` : ''} on{' '}
+                    {new Date(preview.alreadyImported.at).toLocaleString()}{preview.alreadyImported.by ? ` by ${preview.alreadyImported.by}` : ''}.
+                  </p>
+                  <p className="text-xs mt-1">Importing it again repeats every row. Upload a corrected file instead, or confirm below.</p>
+                  <label className="mt-2 flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={reimport} onChange={(e) => setReimport(e.target.checked)} id="confirm-reimport" />
+                    I understand — import this file again
+                  </label>
+                </div>
+              )}
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-auto max-h-[480px]">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0">
@@ -153,7 +170,7 @@ export default function DataIOPage() {
                       <th className="text-left px-3 py-2 font-medium text-slate-600">#</th>
                       <th className="text-left px-3 py-2 font-medium text-slate-600">Status</th>
                       {preview.columns.map((c) => <th key={c} className="text-left px-3 py-2 font-medium text-slate-600">{c}</th>)}
-                      <th className="text-left px-3 py-2 font-medium text-slate-600">Errors</th>
+                      <th className="text-left px-3 py-2 font-medium text-slate-600">Errors / changes</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
@@ -166,7 +183,10 @@ export default function DataIOPage() {
                             : <AlertTriangle className="h-4 w-4 text-red-600" />}
                         </td>
                         {preview.columns.map((c) => <td key={c} className="px-3 py-2 text-slate-700">{String(r.data[c] ?? '')}</td>)}
-                        <td className="px-3 py-2 text-red-600">{r.errors.join('; ')}</td>
+                        <td className="px-3 py-2">
+                          {r.errors.length > 0 && <span className="text-red-600">{r.errors.join('; ')}</span>}
+                          {r.valid && r.notes?.length ? <span className="text-slate-500">{r.notes.join('; ')}</span> : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -183,6 +203,7 @@ export default function DataIOPage() {
                 <h3 className="font-semibold text-green-900">Import Complete</h3>
               </div>
               <div className="flex gap-3 text-sm">
+                {result.batch && <Badge className="bg-slate-100 text-slate-700" variant="outline">Batch {result.batch}</Badge>}
                 <Badge className="bg-green-100 text-green-700" variant="outline">Imported {result.inserted} rows</Badge>
                 {result.skipped > 0 && <Badge className="bg-amber-100 text-amber-700" variant="outline">Skipped {result.skipped} rows</Badge>}
               </div>

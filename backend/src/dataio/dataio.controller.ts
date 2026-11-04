@@ -50,8 +50,8 @@ export class DataioController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Parse + validate upload, return preview (no save)' })
-  async preview(@Param('type') type: string, @UploadedFile() file: Express.Multer.File) {
-    return this.importer.preview(this.assertImportType(type), file);
+  async preview(@Param('type') type: string, @UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
+    return this.importer.preview(this.assertImportType(type), file, user);
   }
 
   @Post('import/:type/commit')
@@ -63,9 +63,10 @@ export class DataioController {
   async commit(
     @Param('type') type: string,
     @UploadedFile() file: Express.Multer.File,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
+    @Query('allowReimport') allowReimport?: string,
   ) {
-    return this.importer.commit(this.assertImportType(type), file, userId);
+    return this.importer.commit(this.assertImportType(type), file, user, { allowReimport: allowReimport === 'true' });
   }
 
   @Get('export/:type')

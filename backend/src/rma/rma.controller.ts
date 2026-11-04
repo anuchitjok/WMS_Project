@@ -16,8 +16,14 @@ export class RmaController {
   constructor(private readonly service: RmaService) {}
 
   @Get('pending-usage')
-  pendingUsage() {
-    return this.service.pendingUsage();
+  pendingUsage(@CurrentUser() user: any) {
+    return this.service.pendingUsage(user);
+  }
+
+  @Get(':requestId/units')
+  @Access(ACCESS.rmaUsage)
+  issuedUnits(@Param('requestId') requestId: string, @CurrentUser() user: any) {
+    return this.service.issuedUnits(requestId, user);
   }
 
   @Patch(':requestId/usage')
@@ -27,6 +33,6 @@ export class RmaController {
     @Body() body: ConfirmUsageDto,
     @CurrentUser() user: any,
   ) {
-    return this.service.confirmUsage(requestId, body.usage, body.notes, user);
+    return this.service.confirmUsage(requestId, body, user);
   }
 }

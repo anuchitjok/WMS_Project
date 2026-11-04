@@ -25,7 +25,15 @@ export class AuditController {
     @Query('q') q?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @Query('category') category?: string,
   ) {
-    return this.auditService.findAll({ userId, entityType, entityId, action, from, to, q, page, limit });
+    const cat = category === 'notifications' || category === 'all' ? category : 'transactions';
+    return this.auditService.findAll({ userId, entityType, entityId, action, from, to, q, page, limit, category: cat });
+  }
+
+  // Phase 3: unified transaction timeline for a GR / WR / FT / shipment / serial number.
+  @Get('timeline')
+  timeline(@Query('ref') ref: string) {
+    return this.auditService.timeline(ref);
   }
 }
