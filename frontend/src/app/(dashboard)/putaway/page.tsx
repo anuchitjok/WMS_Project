@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { hasUnsavedChanges } from '@/lib/utils';
+import { useT } from '@/i18n';
 
 type FitResult = Awaited<ReturnType<typeof putawayApi.fitCheck>> | null;
 
@@ -23,6 +24,8 @@ type Loc = typeof BLANK_LOC;
 const SELECT_CLS = 'h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm disabled:bg-slate-50 disabled:text-slate-400';
 
 export default function PutawayPage() {
+  const { m, t } = useT();
+  const P = m.putaway;
   const [rows, setRows] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [target, setTarget] = useState<any>(null); // item awaiting confirm in the dialog
@@ -71,7 +74,7 @@ export default function PutawayPage() {
     setConfirming(true);
     try {
       await putawayApi.confirm(target.id, { warehouseId: loc.warehouseId, rackId: loc.rackId, slotId: loc.slotId });
-      toast.success('Putaway confirmed — stock is now Available');
+      toast.success(P.done);
       setTarget(null);
       load();
     } catch (e: any) { toast.error(e.message); } finally { setConfirming(false); }
@@ -82,28 +85,28 @@ export default function PutawayPage() {
 
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="Putaway Management" subtitle="Assign location and confirm storage" icon={MapPin} />
+      <PageHeader title={P.title} subtitle={P.subtitle} icon={MapPin} />
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-slate-100 bg-slate-50">
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Stock Item</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Product</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Qty</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Suggested Location</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Action</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.stockItem}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.product}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.qty}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.suggested}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.status}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{P.table.action}</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {loading ? [...Array(4)].map((_, i) => <tr key={i}>{[...Array(6)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
-              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">No items awaiting putaway</td></tr>
+              : rows.length === 0 ? <tr><td colSpan={6} className="px-4 py-12 text-center text-slate-400">{P.empty}</td></tr>
               : rows.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 font-mono text-xs">{i.serialNumber ?? i.batchNumber ?? i.id.slice(-8)}</td>
                   <td className="px-4 py-3"><span className="font-medium text-slate-800">{i.product?.name}</span><br /><span className="text-xs text-slate-400">{i.product?.code}</span></td>
                   <td className="px-4 py-3 font-medium">{i.quantity}</td>
                   <td className="px-4 py-3 text-xs text-slate-600">{[i.warehouse?.code, i.rack?.code, i.slot?.code].filter(Boolean).join(' › ') || '—'}</td>
-                  <td className="px-4 py-3"><Badge variant="outline" className="bg-amber-100 text-amber-700">Pending Putaway</Badge></td>
-                  <td className="px-4 py-3"><Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => openConfirm(i)}>Confirm</Button></td>
+                  <td className="px-4 py-3"><Badge variant="outline" className="bg-amber-100 text-amber-700 whitespace-nowrap">{P.pending}</Badge></td>
+                  <td className="px-4 py-3"><Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => openConfirm(i)}>{P.confirmBtn}</Button></td>
                 </tr>
               ))}
           </tbody>
@@ -113,25 +116,25 @@ export default function PutawayPage() {
       <Dialog open={!!target} onOpenChange={(o) => { if (!o) boxGuard.requestClose(); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm Putaway — {target?.product?.code}</DialogTitle>
+            <DialogTitle>{t(P.dialogTitle, { code: target?.product?.code ?? '' })}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label className="text-xs mb-1 block">Destination slot (required)</Label>
+              <Label className="text-xs mb-1 block">{P.destination}</Label>
               <div className="grid grid-cols-3 gap-2">
-                <select aria-label="Warehouse" className={SELECT_CLS} value={loc.warehouseId}
+                <select aria-label={P.warehouse} className={SELECT_CLS} value={loc.warehouseId}
                   onChange={(e) => changeLoc({ warehouseId: e.target.value, rackId: '', slotId: '' })}>
-                  <option value="">Warehouse…</option>
+                  <option value="">{P.warehousePh}</option>
                   {warehouses.map((w) => <option key={w.id} value={w.id}>{w.code}</option>)}
                 </select>
-                <select aria-label="Rack" className={SELECT_CLS} value={loc.rackId} disabled={!loc.warehouseId}
+                <select aria-label={P.rack} className={SELECT_CLS} value={loc.rackId} disabled={!loc.warehouseId}
                   onChange={(e) => changeLoc({ rackId: e.target.value, slotId: '' })}>
-                  <option value="">Rack…</option>
+                  <option value="">{P.rackPh}</option>
                   {racks.map((r) => <option key={r.id} value={r.id}>{r.code}</option>)}
                 </select>
-                <select aria-label="Slot" className={SELECT_CLS} value={loc.slotId} disabled={!loc.rackId}
+                <select aria-label={P.slot} className={SELECT_CLS} value={loc.slotId} disabled={!loc.rackId}
                   onChange={(e) => changeLoc({ slotId: e.target.value })}>
-                  <option value="">Slot…</option>
+                  <option value="">{P.slotPh}</option>
                   {slots.map((sl) => (
                     <option key={sl.id} value={sl.id}>
                       {sl.code}{sl.capacity ? ` (${sl._count?.stockItems ?? 0}/${sl.capacity})` : ''}
@@ -140,51 +143,51 @@ export default function PutawayPage() {
                 </select>
               </div>
               {!loc.slotId && (
-                <p className="text-xs text-amber-700 mt-1">Choose a warehouse, rack and slot before confirming.</p>
+                <p className="text-xs text-amber-700 mt-1">{P.chooseSlot}</p>
               )}
             </div>
 
             <div>
-              <Label className="text-xs mb-1 block">Box size (cm) — optional, checks fit against the slot</Label>
+              <Label className="text-xs mb-1 block">{P.boxSize}</Label>
               <div className="grid grid-cols-3 gap-2">
-                <Input type="number" min={0} placeholder="Length" value={box.length} onChange={(e) => { setBox((f) => ({ ...f, length: e.target.value })); setFit(null); }} />
-                <Input type="number" min={0} placeholder="Width" value={box.width} onChange={(e) => { setBox((f) => ({ ...f, width: e.target.value })); setFit(null); }} />
-                <Input type="number" min={0} placeholder="Height" value={box.height} onChange={(e) => { setBox((f) => ({ ...f, height: e.target.value })); setFit(null); }} />
+                <Input type="number" min={0} placeholder={P.length} value={box.length} onChange={(e) => { setBox((f) => ({ ...f, length: e.target.value })); setFit(null); }} />
+                <Input type="number" min={0} placeholder={P.width} value={box.width} onChange={(e) => { setBox((f) => ({ ...f, width: e.target.value })); setFit(null); }} />
+                <Input type="number" min={0} placeholder={P.height} value={box.height} onChange={(e) => { setBox((f) => ({ ...f, height: e.target.value })); setFit(null); }} />
               </div>
             </div>
 
             {hasBoxInput && !fit && (
               <Button type="button" variant="outline" size="sm" className="w-full" onClick={runFitCheck} disabled={checking}>
-                {checking ? 'Checking…' : 'Check Fit'}
+                {checking ? P.checking : P.checkFit}
               </Button>
             )}
 
             {fit && !fit.hasSlotDimensions && (
               <p className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                This slot has no size on record — capacity check only ({fit.occupied}/{fit.capacity} used).
+                {t(P.noSize, { occupied: fit.occupied, capacity: fit.capacity })}
               </p>
             )}
             {fit && fit.hasSlotDimensions && fit.fits && (
               <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-2.5 flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-                Fits — slot is {fit.slot.lengthCm}×{fit.slot.widthCm}×{fit.slot.heightCm} cm ({fit.occupied}/{fit.capacity} used)
+                {t(P.fits, { l: fit.slot.lengthCm, w: fit.slot.widthCm, h: fit.slot.heightCm, occupied: fit.occupied, capacity: fit.capacity })}
               </p>
             )}
             {fit && fit.hasSlotDimensions && !fit.fits && (
               <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                Doesn&apos;t fit — box is larger than the slot ({fit.slot.lengthCm}×{fit.slot.widthCm}×{fit.slot.heightCm} cm). You can still confirm if you&apos;re certain it fits.
+                {t(P.noFit, { l: fit.slot.lengthCm, w: fit.slot.widthCm, h: fit.slot.heightCm })}
               </p>
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={boxGuard.requestClose}>Cancel</Button>
+            <Button variant="outline" onClick={boxGuard.requestClose}>{m.common.actions.cancel}</Button>
             <Button
               onClick={doConfirm}
               disabled={confirming || !loc.slotId}
               className={fit && fit.hasSlotDimensions && !fit.fits ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'}
             >
-              {confirming ? 'Confirming…' : fit && fit.hasSlotDimensions && !fit.fits ? 'Confirm Anyway' : 'Confirm Putaway'}
+              {confirming ? P.confirming : fit && fit.hasSlotDimensions && !fit.fits ? P.confirmAnyway : P.confirmPutaway}
             </Button>
           </DialogFooter>
         </DialogContent>

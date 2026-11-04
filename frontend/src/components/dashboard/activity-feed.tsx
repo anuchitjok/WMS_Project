@@ -9,15 +9,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { formatDate } from '@/lib/utils';
 import { classifyActivity } from '@/lib/activity-timeline';
 import type { ActivityEvent } from '@/lib/api';
+import { labelOf, useT } from '@/i18n';
 
 const DOMAIN_DOT: Record<string, string> = {
   RECEIVING: 'bg-teal-500', PUTAWAY: 'bg-emerald-500', APPROVAL: 'bg-amber-500',
   FULFILLMENT: 'bg-violet-500', SHIPMENT: 'bg-orange-500', RMA: 'bg-red-500',
   INVENTORY: 'bg-slate-400', OTHER: 'bg-slate-400',
-};
-const DOMAIN_LABEL: Record<string, string> = {
-  RECEIVING: 'Receiving', PUTAWAY: 'Putaway', APPROVAL: 'Approval',
-  FULFILLMENT: 'Fulfillment', SHIPMENT: 'Shipment', RMA: 'RMA', INVENTORY: 'Inventory', OTHER: 'Activity',
 };
 
 // Priority order matching the warehouse flow.
@@ -26,7 +23,7 @@ const DOMAIN_ORDER = ['RECEIVING', 'PUTAWAY', 'FULFILLMENT', 'SHIPMENT', 'RMA', 
 export function ActivityFeed({
   events,
   loading,
-  title = 'Warehouse Activity Timeline',
+  title,
   maxBodyClass = 'max-h-[420px]',
   showFilters = true,
 }: {
@@ -37,6 +34,8 @@ export function ActivityFeed({
   showFilters?: boolean;
 }) {
   const [filter, setFilter] = useState<string>('ALL');
+  const { m, fmt } = useT();
+  const domainLabel = (d: string) => labelOf(m.status.domain, d);
 
   // Pre-classify once.
   const classified = useMemo(
@@ -55,13 +54,13 @@ export function ActivityFeed({
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">{title}</h2>
+        <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">{title ?? m.dashboard.activity.title}</h2>
         {showFilters && !loading && domains.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            <Chip active={filter === 'ALL'} onClick={() => setFilter('ALL')}>All</Chip>
+            <Chip active={filter === 'ALL'} onClick={() => setFilter('ALL')}>{m.common.states.all}</Chip>
             {domains.map((d) => (
               <Chip key={d} active={filter === d} onClick={() => setFilter(d)}>
-                {DOMAIN_LABEL[d]}
+                {domainLabel(d)}
               </Chip>
             ))}
           </div>
@@ -71,7 +70,7 @@ export function ActivityFeed({
       {loading ? (
         <div className="space-y-1">{[...Array(7)].map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
       ) : !visible.length ? (
-        <p className="text-sm text-slate-400 py-8 text-center">No recent operational activity</p>
+        <p className="text-sm text-slate-400 py-8 text-center">{m.dashboard.activity.empty}</p>
       ) : (
         <ul className={cn('divide-y divide-slate-100 overflow-y-auto', maxBodyClass)}>
           {visible.map(({ e, meta }) => (
@@ -79,14 +78,14 @@ export function ActivityFeed({
               <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', DOMAIN_DOT[meta.domain])} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-slate-800 capitalize truncate">{meta.label}</span>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 flex-shrink-0">{DOMAIN_LABEL[meta.domain]}</span>
+                  <span className="text-sm font-medium text-slate-800 truncate">{(m.status.action as Record<string, string>)[e.action] ?? meta.label}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 flex-shrink-0">{domainLabel(meta.domain)}</span>
                 </div>
                 <p className="text-xs text-slate-400 truncate">
-                  {e.user?.fullName ?? 'System'}{e.entityType ? ` · ${e.entityType}` : ''}
+                  {e.user?.fullName ?? m.common.states.system}{e.entityType ? ` · ${e.entityType}` : ''}
                 </p>
               </div>
-              <time className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0 tabular-nums">{formatDate(e.createdAt)}</time>
+              <time className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0 tabular-nums">{fmt.dateTime(e.createdAt)}</time>
             </li>
           ))}
         </ul>

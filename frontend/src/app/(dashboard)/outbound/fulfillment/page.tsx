@@ -22,6 +22,9 @@ import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { cn, hasUnsavedChanges } from '@/lib/utils';
 import Link from 'next/link';
+import { INTL_LOCALE, getT, labelOf, useT, type Locale, type Messages } from '@/i18n';
+
+type FMsgs = Messages['fulfillment'];
 
 const BLANK_PACK_FORM = { cartonCount: 1, totalWeight: '', notes: '' };
 const BLANK_SHIP_FORM = { carrier: '', trackingNumber: '', receiverName: '', notes: '' };
@@ -73,14 +76,15 @@ function hoursAgo(dateStr: string): number {
   return Math.floor((Date.now() - new Date(dateStr).getTime()) / 3_600_000);
 }
 
-function formatRequestTime(dateStr: string | undefined): string {
+function formatRequestTime(dateStr: string | undefined, locale: Locale): string {
   if (!dateStr) return '—';
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '—';
   const now = new Date();
-  const timeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  const intl = INTL_LOCALE[locale];
+  const timeStr = d.toLocaleTimeString(intl, { hour: '2-digit', minute: '2-digit', hour12: false });
   if (d.toDateString() === now.toDateString()) return timeStr;
-  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + timeStr;
+  return d.toLocaleDateString(intl, { day: '2-digit', month: 'short' }) + ' ' + timeStr;
 }
 
 // ─── KPI / Filter Cards ───────────────────────────────────────────────────────
@@ -103,17 +107,19 @@ function KpiFilterBar({
   const exceptions = asArray(board.exceptions);
   const allTasks   = [...allocated, ...picking, ...packing, ...shipping, ...exceptions];
   const slaRisk    = allTasks.filter((t) => hoursAgo(t.createdAt ?? t.updatedAt) >= 4).length;
+  const { m } = useT();
+  const L = m.fulfillment.lanes;
 
   const cards: {
     key: LaneKey; label: string; icon: any; count: number;
     numCls: string; activeCls: string;
   }[] = [
-    { key: 'all',        label: 'All Active',        icon: LayoutGrid,    count: allTasks.length,   numCls: 'text-slate-700',  activeCls: 'border-slate-400 bg-slate-50 ring-1 ring-slate-200' },
-    { key: 'allocated',  label: 'Pending Inventory', icon: Layers,        count: allocated.length,  numCls: 'text-amber-700',  activeCls: 'border-amber-400 bg-amber-50 ring-1 ring-amber-200' },
-    { key: 'picking',    label: 'Picking',            icon: BoxSelect,     count: picking.length,    numCls: 'text-cyan-700',   activeCls: 'border-cyan-400 bg-cyan-50 ring-1 ring-cyan-200' },
-    { key: 'packing',    label: 'Packing / Label',   icon: Package,       count: packing.length,    numCls: 'text-teal-700',   activeCls: 'border-teal-400 bg-teal-50 ring-1 ring-teal-200' },
-    { key: 'shipping',   label: 'Ready / Shipped',   icon: Truck,         count: shipping.length,   numCls: 'text-green-700',  activeCls: 'border-green-400 bg-green-50 ring-1 ring-green-200' },
-    { key: 'exceptions', label: 'Exception',          icon: AlertTriangle, count: exceptions.length, numCls: 'text-red-700',    activeCls: 'border-red-400 bg-red-50 ring-1 ring-red-200' },
+    { key: 'all',        label: L.all,        icon: LayoutGrid,    count: allTasks.length,   numCls: 'text-slate-700',  activeCls: 'border-slate-400 bg-slate-50 ring-1 ring-slate-200' },
+    { key: 'allocated',  label: L.allocated, icon: Layers,        count: allocated.length,  numCls: 'text-amber-700',  activeCls: 'border-amber-400 bg-amber-50 ring-1 ring-amber-200' },
+    { key: 'picking',    label: L.picking,            icon: BoxSelect,     count: picking.length,    numCls: 'text-cyan-700',   activeCls: 'border-cyan-400 bg-cyan-50 ring-1 ring-cyan-200' },
+    { key: 'packing',    label: L.packing,   icon: Package,       count: packing.length,    numCls: 'text-teal-700',   activeCls: 'border-teal-400 bg-teal-50 ring-1 ring-teal-200' },
+    { key: 'shipping',   label: L.shipping,   icon: Truck,         count: shipping.length,   numCls: 'text-green-700',  activeCls: 'border-green-400 bg-green-50 ring-1 ring-green-200' },
+    { key: 'exceptions', label: L.exceptions,          icon: AlertTriangle, count: exceptions.length, numCls: 'text-red-700',    activeCls: 'border-red-400 bg-red-50 ring-1 ring-red-200' },
   ];
 
   return (
@@ -147,7 +153,7 @@ function KpiFilterBar({
           {loading ? <Skeleton className="h-5 w-8" /> : (
             <p className={cn('text-xl font-bold tabular-nums leading-none', slaRisk > 0 ? 'text-red-700' : 'text-slate-500')}>{slaRisk}</p>
           )}
-          <p className="text-[11px] text-slate-500 mt-1">SLA Risk</p>
+          <p className="text-[11px] text-slate-500 mt-1 whitespace-nowrap">{m.fulfillment.slaRisk}</p>
         </div>
       </div>
     </div>
@@ -181,6 +187,7 @@ function ProgressCell({ task }: { task: any }) {
 }
 
 function StatusBadge({ status }: { status: string }) {
+  const { m } = useT();
   const cls =
     status === 'ALLOCATED'     ? 'bg-amber-100 text-amber-800 border-amber-300' :
     status === 'PICKING'       ? 'bg-cyan-100 text-cyan-800 border-cyan-300' :
@@ -193,30 +200,31 @@ function StatusBadge({ status }: { status: string }) {
     'bg-red-100 text-red-800 border-red-300';
   return (
     <span className={cn('inline-flex items-center border rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap', cls)}>
-      {status.replace(/_/g, ' ')}
+      {labelOf(m.status.fulfillment, status)}
     </span>
   );
 }
 
 function ExtraCell({ task, lane }: { task: any; lane: LaneKey }) {
+  const { m, t } = useT();
   if (lane === 'exceptions') return <StatusBadge status={task.status} />;
   if (lane === 'shipping')   return <span className="text-xs text-slate-500">{task.carrier ?? '—'}</span>;
-  if (lane === 'packing')    return <span className="text-xs text-slate-500">{task.cartonCount ? `${task.cartonCount} ctn` : '—'}</span>;
+  if (lane === 'packing')    return <span className="text-xs text-slate-500">{task.cartonCount ? t(m.fulfillment.ctn, { count: task.cartonCount }) : '—'}</span>;
   return <ProgressCell task={task} />;
 }
 
-function extraColHeader(lane: LaneKey): string {
-  if (lane === 'exceptions') return 'Exception Type';
-  if (lane === 'shipping')   return 'Carrier';
-  if (lane === 'packing')    return 'Cartons';
-  return 'Pick Progress';
+function extraColHeader(lane: LaneKey, F: FMsgs): string {
+  if (lane === 'exceptions') return F.col.exceptionType;
+  if (lane === 'shipping')   return F.col.carrier;
+  if (lane === 'packing')    return F.col.cartons;
+  return F.col.pickProgress;
 }
 
-function ownerColHeader(lane: LaneKey): string {
-  if (lane === 'exceptions') return 'Assigned To';
-  if (lane === 'packing')    return 'Packer';
-  if (lane === 'shipping')   return 'Handler';
-  return 'Owner';
+function ownerColHeader(lane: LaneKey, F: FMsgs): string {
+  if (lane === 'exceptions') return F.col.assignedTo;
+  if (lane === 'packing')    return F.col.packer;
+  if (lane === 'shipping')   return F.col.handler;
+  return F.col.owner;
 }
 
 function SortTh({
@@ -257,31 +265,34 @@ function ActionCell({
   const isExc  = ['SHORT_PICK', 'DAMAGED', 'HOLD', 'CANCELLED', 'RETURNED'].includes(task.status);
   const canPack = ['PICKED', 'PACKING'].includes(task.status);
   const canShip = ['PACKED', 'READY_TO_SHIP'].includes(task.status);
+  const { m } = useT();
+  const F = m.fulfillment;
 
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
       {!isExc && (
         <Button size="sm" className="h-7 text-xs px-2.5 bg-green-600 hover:bg-green-700 text-white"
           onClick={() => onAdvance(task.id)}>
-          Next →
+          {F.next}
         </Button>
       )}
       {canPack && (
         <Button size="sm" className="h-7 text-xs px-2.5 bg-teal-600 hover:bg-teal-700 text-white"
-          onClick={() => onPack(task)} title="Pack">
+          onClick={() => onPack(task)} title={F.pack} aria-label={F.pack}>
           <Package className="w-3.5 h-3.5" />
         </Button>
       )}
       {canShip && (
         <Button size="sm" className="h-7 text-xs px-2.5 bg-purple-600 hover:bg-purple-700 text-white"
-          onClick={() => onShip(task)} title="Ship">
+          onClick={() => onShip(task)} title={F.ship} aria-label={F.ship}>
           <Truck className="w-3.5 h-3.5" />
         </Button>
       )}
       <button
         onClick={() => documentsApi.openWithAuth(documentsApi.pickingSlipUrl(task.requestId ?? task.id))}
         className="h-7 w-7 flex items-center justify-center border border-slate-200 rounded-md text-slate-400 hover:text-green-600 hover:border-green-300 transition-colors"
-        title="Print Picking Slip"
+        title={F.printSlip}
+        aria-label={F.printSlip}
       >
         <Printer className="w-3.5 h-3.5" />
       </button>
@@ -289,14 +300,15 @@ function ActionCell({
         <button
           className="h-7 w-7 flex items-center justify-center border border-slate-200 rounded-md text-slate-400 hover:text-red-600 hover:border-red-300 transition-colors"
           onClick={() => onException(task.id)}
-          title="Mark Exception"
+          title={F.markException}
+          aria-label={F.markException}
         >
           <AlertTriangle className="w-3.5 h-3.5" />
         </button>
       )}
       <Link href={`/shipment-detail?taskId=${task.id}`}>
         <button className="h-7 px-2.5 text-xs border border-slate-200 rounded-md text-slate-500 hover:text-slate-800 hover:border-slate-300 transition-colors">
-          Detail
+          {F.detail}
         </button>
       </Link>
     </div>
@@ -305,15 +317,7 @@ function ActionCell({
 
 // ─── Action Queue Table ───────────────────────────────────────────────────────
 
-const LANE_LABELS: Record<LaneKey, string> = {
-  all: 'All Active', allocated: 'Pending Inventory', picking: 'Picking',
-  packing: 'Packing / Label', shipping: 'Ready / Shipped', exceptions: 'Exception',
-};
-
-const SUB_FILTERS: { key: SubFilter; label: string }[] = [
-  { key: 'all', label: 'All' }, { key: 'open', label: 'Open' },
-  { key: 'assigned', label: 'Assigned' }, { key: 'mine', label: 'My Tasks' },
-];
+const SUB_FILTERS: SubFilter[] = ['all', 'open', 'assigned', 'mine'];
 
 function ActionQueueTable({
   board, loading, selectedLane, subFilter, sortField, sortAsc,
@@ -325,6 +329,8 @@ function ActionQueueTable({
   onAdvance: (id: string) => void; onPack: (t: any) => void;
   onShip: (t: any) => void; onException: (id: string) => void;
 }) {
+  const { m, t, locale } = useT();
+  const F = m.fulfillment;
   const allTasks = [
     ...asArray(board.allocated).map((t) => ({ ...t, _lane: 'allocated' as LaneKey })),
     ...asArray(board.picking).map((t)   => ({ ...t, _lane: 'picking'   as LaneKey })),
@@ -360,13 +366,13 @@ function ActionQueueTable({
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-slate-800">Action Queue</span>
+          <span className="text-sm font-semibold text-slate-800">{F.actionQueue}</span>
           <span className="text-xs text-slate-400">
-            — {LANE_LABELS[selectedLane]} ({rows.length} task{rows.length !== 1 ? 's' : ''})
+            {t(F.laneCount, { lane: F.lanes[selectedLane], count: rows.length })}
           </span>
         </div>
         <div className="flex items-center gap-1">
-          {SUB_FILTERS.map(({ key, label }) => (
+          {SUB_FILTERS.map((key) => (
             <button
               key={key}
               onClick={() => onSubFilter(key)}
@@ -377,7 +383,7 @@ function ActionQueueTable({
                   : 'border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300',
               )}
             >
-              {label}
+              {F.sub[key]}
             </button>
           ))}
         </div>
@@ -391,25 +397,25 @@ function ActionQueueTable({
         ) : rows.length === 0 ? (
           <div className="text-center py-12 text-slate-400 text-sm">
             <Package className="w-8 h-8 mx-auto mb-2 opacity-20" />
-            No tasks in this queue
+            {F.noTasks}
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <SortTh label="Request Time" field="time" current={sortField} asc={sortAsc} onSort={onSort} className="w-[110px]" />
-                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[130px]">Order No</th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[120px]">Status</th>
-                  <SortTh label="SLA"          field="sla"  current={sortField} asc={sortAsc} onSort={onSort} className="w-[72px]" />
-                  <th className="px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[56px]">Items</th>
+                  <SortTh label={F.col.requestTime} field="time" current={sortField} asc={sortAsc} onSort={onSort} className="w-[110px]" />
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[130px]">{F.col.orderNo}</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[120px]">{F.col.status}</th>
+                  <SortTh label={F.col.sla} field="sla"  current={sortField} asc={sortAsc} onSort={onSort} className="w-[72px]" />
+                  <th className="px-3 py-2.5 text-center text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[56px]">{F.col.items}</th>
                   <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[96px]">
-                    {ownerColHeader(selectedLane)}
+                    {ownerColHeader(selectedLane, F)}
                   </th>
                   <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide w-[140px]">
-                    {extraColHeader(selectedLane)}
+                    {extraColHeader(selectedLane, F)}
                   </th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Action</th>
+                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold text-slate-500 uppercase tracking-wide">{F.col.action}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -418,7 +424,7 @@ function ActionQueueTable({
                   return (
                     <tr key={task.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="px-3 py-3 font-mono text-xs text-slate-600">
-                        {formatRequestTime(task.createdAt ?? task.updatedAt)}
+                        {formatRequestTime(task.createdAt ?? task.updatedAt, locale)}
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex flex-col">
@@ -460,8 +466,8 @@ function ActionQueueTable({
 
         {rows.length > 0 && (
           <div className="px-3 py-2 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-            <span className="text-[11px] text-slate-400">Showing {rows.length} of {totalCount} tasks</span>
-            <span className="text-[11px] text-slate-400">Default sort: oldest request first</span>
+            <span className="text-[11px] text-slate-400">{t(F.showing, { count: rows.length, total: totalCount })}</span>
+            <span className="text-[11px] text-slate-400">{F.defaultSort}</span>
           </div>
         )}
       </div>
@@ -477,20 +483,17 @@ function ExceptionModal({ taskId, onClose, onConfirm }: {
 }) {
   const [status, setStatus] = useState('HOLD');
   const [reason, setReason] = useState('');
-  const OPTIONS = [
-    { value: 'HOLD',       label: 'Hold — Pending review' },
-    { value: 'SHORT_PICK', label: 'Short Pick — Insufficient stock' },
-    { value: 'DAMAGED',    label: 'Damaged — Item damaged' },
-    { value: 'CANCELLED',  label: 'Cancelled' },
-    { value: 'RETURNED',   label: 'Returned' },
-  ];
+  const { m } = useT();
+  const F = m.fulfillment;
+  const OPTIONS = (['HOLD', 'SHORT_PICK', 'DAMAGED', 'CANCELLED', 'RETURNED'] as const)
+    .map((value) => ({ value, label: F.exc[value] }));
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-sm">
-        <DialogHeader><DialogTitle className="text-red-700">Mark Exception</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle className="text-red-700">{F.markException}</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div>
-            <Label className="text-xs mb-1 block">Exception Type</Label>
+            <Label className="text-xs mb-1 block">{F.col.exceptionType}</Label>
             <div className="space-y-1">
               {OPTIONS.map((o) => (
                 <label key={o.value} className={cn(
@@ -504,14 +507,14 @@ function ExceptionModal({ taskId, onClose, onConfirm }: {
             </div>
           </div>
           <div>
-            <Label className="text-xs mb-1 block">Reason / Notes</Label>
-            <Input placeholder="Describe the exception…" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <Label className="text-xs mb-1 block">{F.reasonNotes}</Label>
+            <Input placeholder={F.reasonPlaceholder} value={reason} onChange={(e) => setReason(e.target.value)} />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={onClose}>{m.common.actions.cancel}</Button>
           <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => onConfirm(taskId, status, reason)}>
-            <AlertTriangle className="w-3.5 h-3.5 mr-1" /> Confirm Exception
+            <AlertTriangle className="w-3.5 h-3.5 mr-1" /> {F.confirmException}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -522,6 +525,8 @@ function ExceptionModal({ taskId, onClose, onConfirm }: {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function FulfillmentBoardPage() {
+  const { m, t } = useT();
+  const F = m.fulfillment;
   const [board, setBoard]           = useState<BoardData>(EMPTY_BOARD);
   const [loading, setLoading]       = useState(true);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -552,7 +557,7 @@ export default function FulfillmentBoardPage() {
       const raw = await fulfillmentApi.board();
       setBoard(normalizeBoard(raw as FulfillmentBoardResponse));
     } catch {
-      toast.error('Failed to load board');
+      toast.error(getT().m.fulfillment.toast.loadFailed);
       setBoard(EMPTY_BOARD);
     } finally {
       setLoading(false);
@@ -568,14 +573,14 @@ export default function FulfillmentBoardPage() {
   }, [autoRefresh, load]);
 
   async function advance(id: string) {
-    try { await fulfillmentApi.advance(id); toast.success('Status advanced'); load(); }
+    try { await fulfillmentApi.advance(id); toast.success(F.toast.advanced); load(); }
     catch (e: any) { toast.error(e.message); }
   }
 
   async function handleException(id: string, status: string, reason: string) {
     try {
       await fulfillmentApi.setException(id, status, reason);
-      toast.success(`Exception: ${status}`); setExceptionTaskId(null); load();
+      toast.success(t(F.toast.exception, { status: labelOf(m.status.fulfillment, status) })); setExceptionTaskId(null); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -589,7 +594,7 @@ export default function FulfillmentBoardPage() {
         notes: packForm.notes || undefined,
       });
       await fulfillmentApi.completePacking(packTask.id);
-      toast.success('Packing completed'); setPackTask(null); setPackForm(BLANK_PACK_FORM); load();
+      toast.success(F.toast.packed); setPackTask(null); setPackForm(BLANK_PACK_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -598,7 +603,7 @@ export default function FulfillmentBoardPage() {
     try {
       const sh = await fulfillmentApi.createShipment(shipTask.id, shipForm);
       await fulfillmentApi.confirmDispatch(sh.id);
-      toast.success('Dispatched — Goods Issued!'); setShipTask(null); setShipForm(BLANK_SHIP_FORM); load();
+      toast.success(F.toast.dispatched); setShipTask(null); setShipForm(BLANK_SHIP_FORM); load();
     } catch (e: any) { toast.error(e.message); }
   }
 
@@ -606,7 +611,7 @@ export default function FulfillmentBoardPage() {
     setAllocLoading(true);
     fulfillmentApi.reservationMode().then((m) => setReservationSummary(m.summary)).catch(() => setReservationSummary(null));
     try { setAllocatable(await fulfillmentApi.allocatableRequests()); }
-    catch { toast.error('Failed to load approved requests'); setAllocatable([]); }
+    catch { toast.error(getT().m.fulfillment.toast.allocLoadFailed); setAllocatable([]); }
     finally { setAllocLoading(false); }
   }, []);
 
@@ -620,7 +625,7 @@ export default function FulfillmentBoardPage() {
     setAllocatingId(req.id);
     try {
       await fulfillmentApi.allocate(req.id);
-      toast.success(`Allocated ${req.refNumber}`); setAllocOpen(false); load();
+      toast.success(t(F.toast.allocated, { ref: req.refNumber })); setAllocOpen(false); load();
     } catch (e: any) { toast.error(e.message); }
     finally { setAllocatingId(null); }
   }
@@ -650,8 +655,8 @@ export default function FulfillmentBoardPage() {
             <ShipWheel className="w-4 h-4 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-slate-900 text-sm leading-none">Fulfillment Execution</h1>
-            <p className="text-xs text-slate-500 mt-0.5">Pick / Pack / Ship</p>
+            <h1 className="font-bold text-slate-900 text-sm leading-none">{F.title}</h1>
+            <p className="text-xs text-slate-500 mt-0.5">{F.subtitle}</p>
           </div>
         </div>
 
@@ -672,13 +677,13 @@ export default function FulfillmentBoardPage() {
               autoRefresh ? 'bg-green-50 border-green-300 text-green-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50',
             )}
           >
-            <Zap className="w-3 h-3" />{autoRefresh ? 'Live' : 'Auto'}
+            <Zap className="w-3 h-3" />{autoRefresh ? F.live : F.auto}
           </button>
-          <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={load} disabled={loading}>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={load} disabled={loading} aria-label={m.common.actions.refresh} title={m.common.actions.refresh}>
             <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
           </Button>
           <Button size="sm" className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs" onClick={openAllocate}>
-            + Allocate
+            {F.allocateNew}
           </Button>
         </div>
       </div>
@@ -703,11 +708,11 @@ export default function FulfillmentBoardPage() {
 
       {/* Legend */}
       <div className="bg-white border-t border-slate-100 px-5 py-2 flex flex-wrap gap-4 text-[10px] text-slate-400 flex-shrink-0">
-        <span><Clock className="w-3 h-3 inline mr-0.5 text-green-500" /> &lt;4h = OK</span>
-        <span><Clock className="w-3 h-3 inline mr-0.5 text-amber-500" /> 4–8h = Warn</span>
-        <span><Clock className="w-3 h-3 inline mr-0.5 text-red-500" /> &gt;8h = SLA Risk</span>
+        <span><Clock className="w-3 h-3 inline mr-0.5 text-green-500" /> {F.legend.ok}</span>
+        <span><Clock className="w-3 h-3 inline mr-0.5 text-amber-500" /> {F.legend.warn}</span>
+        <span><Clock className="w-3 h-3 inline mr-0.5 text-red-500" /> {F.legend.risk}</span>
         <span className="text-slate-300">|</span>
-        <span>Click a status card to filter &nbsp;·&nbsp; Click column header to sort by time or SLA</span>
+        <span>{F.legend.hint}</span>
       </div>
 
       {/* Modals — unchanged */}
@@ -717,10 +722,10 @@ export default function FulfillmentBoardPage() {
 
       <Dialog open={allocOpen} onOpenChange={setAllocOpen}>
         <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>Allocate Request → Fulfillment Task</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{F.alloc.title}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-slate-400">
-              Pick an approved request below — no need to know the request number.
+              {F.alloc.hint}
               {reservationSummary && <> {reservationSummary}</>}
             </p>
             <div className="relative">
@@ -728,7 +733,7 @@ export default function FulfillmentBoardPage() {
               <Input
                 value={allocSearch}
                 onChange={(e) => setAllocSearch(e.target.value)}
-                placeholder="Search by request no., requester, or department…"
+                placeholder={F.alloc.search}
                 className="pl-8 h-9 text-sm"
               />
             </div>
@@ -739,7 +744,7 @@ export default function FulfillmentBoardPage() {
               ) : filteredAllocatable.length === 0 ? (
                 <div className="text-center py-10 text-slate-400 text-sm">
                   <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                  {allocatable.length === 0 ? 'No approved requests waiting for allocation' : 'No matches'}
+                  {allocatable.length === 0 ? F.alloc.none : F.alloc.noMatch}
                 </div>
               ) : (
                 filteredAllocatable.map((r) => (
@@ -751,11 +756,11 @@ export default function FulfillmentBoardPage() {
                       </div>
                       <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
                         <User className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{r.requester?.fullName ?? 'Unknown'}</span>
+                        <span className="truncate">{r.requester?.fullName ?? F.alloc.unknown}</span>
                         {r.department && <span className="text-slate-300">·</span>}
                         {r.department && <span className="truncate">{r.department}</span>}
                         <span className="text-slate-300">·</span>
-                        <span className="whitespace-nowrap">{r.items?.length ?? 0} item{r.items?.length === 1 ? '' : 's'}</span>
+                        <span className="whitespace-nowrap">{t(F.alloc.itemCount, { count: r.items?.length ?? 0 })}</span>
                       </div>
                     </div>
                     <Button
@@ -764,7 +769,7 @@ export default function FulfillmentBoardPage() {
                       disabled={!!allocatingId}
                       onClick={() => allocateRequest(r)}
                     >
-                      {allocatingId === r.id ? 'Allocating…' : 'Allocate'}
+                      {allocatingId === r.id ? F.allocating : F.allocate}
                     </Button>
                   </div>
                 ))
@@ -772,7 +777,7 @@ export default function FulfillmentBoardPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAllocOpen(false)}>Close</Button>
+            <Button variant="outline" onClick={() => setAllocOpen(false)}>{m.common.actions.close}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -781,21 +786,21 @@ export default function FulfillmentBoardPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-teal-600" /> Packing — {packTask?.refNumber}
+              <Package className="w-4 h-4 text-teal-600" /> {t(F.packing.title, { ref: packTask?.refNumber ?? '' })}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1"><Label className="text-xs">Carton Count</Label>
+              <div className="space-y-1"><Label className="text-xs">{F.packing.cartonCount}</Label>
                 <Input type="number" min={1} value={packForm.cartonCount}
                   onChange={(e) => setPackForm((f) => ({ ...f, cartonCount: Number(e.target.value) }))} />
               </div>
-              <div className="space-y-1"><Label className="text-xs">Total Weight (kg)</Label>
+              <div className="space-y-1"><Label className="text-xs">{F.packing.totalWeight}</Label>
                 <Input type="number" min={0} value={packForm.totalWeight}
                   onChange={(e) => setPackForm((f) => ({ ...f, totalWeight: e.target.value }))} />
               </div>
             </div>
-            <div className="space-y-1"><Label className="text-xs">Notes</Label>
+            <div className="space-y-1"><Label className="text-xs">{F.packing.notes}</Label>
               <Input value={packForm.notes} onChange={(e) => setPackForm((f) => ({ ...f, notes: e.target.value }))} />
             </div>
             <div className="space-y-1">
@@ -811,9 +816,9 @@ export default function FulfillmentBoardPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={packGuard.requestClose}>Cancel</Button>
+            <Button variant="outline" onClick={packGuard.requestClose}>{m.common.actions.cancel}</Button>
             <Button onClick={confirmPack} className="bg-teal-600 hover:bg-teal-700 text-white">
-              <Package className="w-3.5 h-3.5 mr-1" /> Complete Packing
+              <Package className="w-3.5 h-3.5 mr-1" /> {F.packing.complete}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -823,37 +828,37 @@ export default function FulfillmentBoardPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Truck className="w-4 h-4 text-purple-600" /> Create Shipment & Dispatch — {shipTask?.refNumber}
+              <Truck className="w-4 h-4 text-purple-600" /> {t(F.shipping.title, { ref: shipTask?.refNumber ?? '' })}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1"><Label className="text-xs">Carrier</Label>
+              <div className="space-y-1"><Label className="text-xs">{F.shipping.carrier}</Label>
                 <Input value={shipForm.carrier}
                   onChange={(e) => setShipForm((f) => ({ ...f, carrier: e.target.value }))}
                   placeholder="DHL, FedEx, J&T…" />
               </div>
-              <div className="space-y-1"><Label className="text-xs">Tracking No.</Label>
+              <div className="space-y-1"><Label className="text-xs">{F.shipping.tracking}</Label>
                 <Input value={shipForm.trackingNumber}
                   onChange={(e) => setShipForm((f) => ({ ...f, trackingNumber: e.target.value }))} />
               </div>
             </div>
-            <div className="space-y-1"><Label className="text-xs">Receiver Name</Label>
+            <div className="space-y-1"><Label className="text-xs">{F.shipping.receiver}</Label>
               <Input value={shipForm.receiverName}
                 onChange={(e) => setShipForm((f) => ({ ...f, receiverName: e.target.value }))} />
             </div>
-            <div className="space-y-1"><Label className="text-xs">Notes</Label>
+            <div className="space-y-1"><Label className="text-xs">{F.shipping.notes}</Label>
               <Input value={shipForm.notes}
                 onChange={(e) => setShipForm((f) => ({ ...f, notes: e.target.value }))} />
             </div>
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-              ⚠ Confirming dispatch will trigger Goods Issue — stock will be deducted from inventory.
+              ⚠ {F.shipping.warning}
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={shipGuard.requestClose}>Cancel</Button>
+            <Button variant="outline" onClick={shipGuard.requestClose}>{m.common.actions.cancel}</Button>
             <Button onClick={confirmShip} className="bg-purple-600 hover:bg-purple-700 text-white">
-              <Truck className="w-3.5 h-3.5 mr-1" /> Dispatch & Issue Stock
+              <Truck className="w-3.5 h-3.5 mr-1" /> {F.shipping.dispatch}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatDate } from '@/lib/utils';
+import { labelOf, useT } from '@/i18n';
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
   ALLOCATED: <Circle className="h-4 w-4 text-slate-400" />,
@@ -28,6 +28,9 @@ function ShipmentDetailInner() {
   const taskId = params.get('taskId');
   const [task, setTask] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const { m, t, fmt } = useT();
+  const S = m.fulfillment.shipment;
+  const st = (s: string) => labelOf(m.status.fulfillment, s);
 
   const load = useCallback(async () => {
     if (!taskId) return;
@@ -42,62 +45,62 @@ function ShipmentDetailInner() {
       await fulfillmentApi.confirmDelivery(task.shipment.id, {
         receiverName: task.requester?.fullName ?? 'Receiver',
       });
-      toast.success('Delivered!');
+      toast.success(S.delivered);
       load();
     } catch (e: any) { toast.error(e.message); }
   }
 
   if (loading) return <div className="p-6"><Skeleton className="h-96 rounded-xl" /></div>;
-  if (!task) return <div className="p-6 text-slate-400">Task not found</div>;
+  if (!task) return <div className="p-6 text-slate-400">{S.notFound}</div>;
 
   return (
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
-      <PageHeader title={`Fulfillment: ${task.refNumber}`} subtitle={`Request: ${task.requestRef} · Status: ${task.status}`} icon={Truck}
-        action={task.status === 'SHIPPED' ? <Button onClick={markDelivered} className="bg-green-600 hover:bg-green-700 text-white">Mark Delivered</Button> : undefined}
+      <PageHeader title={t(S.title, { ref: task.refNumber })} subtitle={t(S.subtitle, { ref: task.requestRef ?? '—', status: st(task.status) })} icon={Truck}
+        action={task.status === 'SHIPPED' ? <Button onClick={markDelivered} className="bg-green-600 hover:bg-green-700 text-white">{S.markDelivered}</Button> : undefined}
       />
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <p className="text-xs text-slate-500 mb-1">Progress</p>
+          <p className="text-xs text-slate-500 mb-1">{S.progress}</p>
           <div className="flex items-end gap-2">
             <span className="text-2xl font-bold text-slate-900">{task.progressPct}%</span>
-            {task.partialPick && <Badge variant="outline" className="bg-amber-100 text-amber-700 text-xs mb-1">Partial</Badge>}
+            {task.partialPick && <Badge variant="outline" className="bg-amber-100 text-amber-700 text-xs mb-1">{S.partial}</Badge>}
           </div>
           <div className="h-2 bg-slate-100 rounded-full mt-2 overflow-hidden">
             <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${task.progressPct}%` }} />
           </div>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <p className="text-xs text-slate-500 mb-1">Packing</p>
+          <p className="text-xs text-slate-500 mb-1">{S.packing}</p>
           {task.packing ? (
             <div>
-              <p className="font-semibold">{task.packing.cartonCount} cartons</p>
-              <p className="text-xs text-slate-400">{task.packing.totalWeight ? `${task.packing.totalWeight} kg` : 'No weight'}</p>
+              <p className="font-semibold">{t(S.cartons, { count: task.packing.cartonCount })}</p>
+              <p className="text-xs text-slate-400">{task.packing.totalWeight ? t(S.kg, { n: fmt.number(task.packing.totalWeight) }) : S.noWeight}</p>
             </div>
-          ) : <p className="text-slate-400 text-sm">Not packed yet</p>}
+          ) : <p className="text-slate-400 text-sm">{S.notPacked}</p>}
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <p className="text-xs text-slate-500 mb-1">Shipment</p>
+          <p className="text-xs text-slate-500 mb-1">{S.shipment}</p>
           {task.shipment ? (
             <div>
-              <p className="font-semibold text-sm">{task.shipment.carrier || 'No carrier'}</p>
+              <p className="font-semibold text-sm">{task.shipment.carrier || S.noCarrier}</p>
               <p className="font-mono text-xs text-green-600">{task.shipment.trackingNumber || '—'}</p>
             </div>
-          ) : <p className="text-slate-400 text-sm">No shipment yet</p>}
+          ) : <p className="text-slate-400 text-sm">{S.noShipment}</p>}
         </div>
       </div>
 
       {/* Items */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-        <div className="px-4 py-3 border-b border-slate-100"><h3 className="font-semibold text-slate-800">Items ({task.items?.length})</h3></div>
+        <div className="px-4 py-3 border-b border-slate-100"><h3 className="font-semibold text-slate-800">{t(S.items, { count: task.items?.length ?? 0 })}</h3></div>
         <table className="w-full text-sm">
           <thead><tr className="bg-slate-50 border-b border-slate-100">
-            <th className="text-left px-4 py-2 font-medium text-slate-600">Product</th>
-            <th className="text-left px-4 py-2 font-medium text-slate-600">Location</th>
-            <th className="text-left px-4 py-2 font-medium text-slate-600">Req</th>
-            <th className="text-left px-4 py-2 font-medium text-slate-600">Picked</th>
-            <th className="text-left px-4 py-2 font-medium text-slate-600">Status</th>
+            <th className="text-left px-4 py-2 font-medium text-slate-600">{S.col.product}</th>
+            <th className="text-left px-4 py-2 font-medium text-slate-600">{S.col.location}</th>
+            <th className="text-left px-4 py-2 font-medium text-slate-600">{S.col.req}</th>
+            <th className="text-left px-4 py-2 font-medium text-slate-600">{S.col.picked}</th>
+            <th className="text-left px-4 py-2 font-medium text-slate-600">{S.col.status}</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {task.items?.map((it: any) => (
@@ -110,9 +113,9 @@ function ShipmentDetailInner() {
                 <td className="px-4 py-3 font-semibold">{it.qtyRequested}</td>
                 <td className="px-4 py-3 font-semibold">{it.qtyPicked}</td>
                 <td className="px-4 py-3">
-                  {it.isShortPick ? <Badge variant="outline" className="bg-red-100 text-red-700 text-xs">Short Pick</Badge>
-                    : it.pickedAt ? <Badge variant="outline" className="bg-green-100 text-green-700 text-xs">Picked</Badge>
-                    : <Badge variant="outline" className="bg-slate-100 text-slate-600 text-xs">Pending</Badge>}
+                  {it.isShortPick ? <Badge variant="outline" className="bg-red-100 text-red-700 text-xs">{S.shortPick}</Badge>
+                    : it.pickedAt ? <Badge variant="outline" className="bg-green-100 text-green-700 text-xs">{S.picked}</Badge>
+                    : <Badge variant="outline" className="bg-slate-100 text-slate-600 text-xs">{S.pending}</Badge>}
                 </td>
               </tr>
             ))}
@@ -122,18 +125,18 @@ function ShipmentDetailInner() {
 
       {/* Timeline */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-        <h3 className="font-semibold text-slate-800 mb-4">Status Timeline</h3>
+        <h3 className="font-semibold text-slate-800 mb-4">{S.timeline}</h3>
         <div className="space-y-3">
           {task.timeline?.map((tl: any, i: number) => (
             <div key={tl.id} className="flex gap-3 items-start">
               <div className="flex-shrink-0 mt-0.5">{STATUS_ICONS[tl.toStatus] ?? <Circle className="h-4 w-4 text-slate-400" />}</div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium text-slate-800 text-sm">{tl.toStatus?.replace(/_/g, ' ')}</span>
-                  {tl.fromStatus && <span className="text-xs text-slate-400">← {tl.fromStatus.replace(/_/g, ' ')}</span>}
+                  <span className="font-medium text-slate-800 text-sm">{tl.toStatus ? st(tl.toStatus) : ''}</span>
+                  {tl.fromStatus && <span className="text-xs text-slate-400">← {st(tl.fromStatus)}</span>}
                 </div>
                 <p className="text-xs text-slate-500">{tl.description}</p>
-                <p className="text-xs text-slate-400">{formatDate(tl.createdAt)}</p>
+                <p className="text-xs text-slate-400">{fmt.dateTime(tl.createdAt)}</p>
               </div>
             </div>
           ))}
@@ -143,15 +146,15 @@ function ShipmentDetailInner() {
       {/* Shipment timeline */}
       {task.shipment?.timeline?.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-          <h3 className="font-semibold text-slate-800 mb-4">Shipment Timeline — {task.shipment.refNumber}</h3>
+          <h3 className="font-semibold text-slate-800 mb-4">{t(S.shipmentTimeline, { ref: task.shipment.refNumber })}</h3>
           <div className="space-y-3">
             {task.shipment.timeline.map((tl: any) => (
               <div key={tl.id} className="flex gap-3 items-start">
                 <Truck className="h-4 w-4 text-green-500 flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium text-slate-800 text-sm">{tl.status}</p>
+                  <p className="font-medium text-slate-800 text-sm">{st(tl.status)}</p>
                   <p className="text-xs text-slate-500">{tl.description}</p>
-                  <p className="text-xs text-slate-400">{formatDate(tl.createdAt)}</p>
+                  <p className="text-xs text-slate-400">{fmt.dateTime(tl.createdAt)}</p>
                 </div>
               </div>
             ))}

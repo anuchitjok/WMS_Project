@@ -8,9 +8,12 @@ import { Search } from 'lucide-react';
 import { NotificationBell } from './notification-bell';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuthStore } from '@/store/auth.store';
+import { LanguageSwitcher } from './language-switcher';
+import { labelOf, useT } from '@/i18n';
 
 export function AppHeader() {
   const user = useAuthStore((s) => s.user);
+  const { m } = useT();
 
   return (
     <header className="sticky top-0 z-30 hidden lg:flex h-16 flex-shrink-0 items-center gap-4 border-b border-slate-200 bg-white/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-white/80">
@@ -19,13 +22,14 @@ export function AppHeader() {
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <input
           type="search"
-          placeholder="Search…"
-          aria-label="Search"
+          placeholder={m.common.search.placeholder}
+          aria-label={m.common.actions.search}
           className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 transition-colors outline-none focus:border-green-500 focus:bg-white focus:ring-2 focus:ring-green-500/20"
         />
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <LanguageSwitcher />
         <NotificationBell />
 
         <div className="mx-1 h-8 w-px bg-slate-200" aria-hidden="true" />
@@ -34,7 +38,7 @@ export function AppHeader() {
         <div className="flex items-center gap-3 rounded-xl px-2 py-1.5">
           <div className="hidden text-right sm:block">
             <p className="text-sm font-semibold leading-tight text-slate-900">{user?.fullName}</p>
-            <p className="text-xs leading-tight text-slate-400">{user?.role?.replace(/_/g, ' ')}</p>
+            <p className="text-xs leading-tight text-slate-400">{labelOf(m.nav.roles, user?.role)}</p>
           </div>
           <Avatar className="h-9 w-9">
             <AvatarFallback className="bg-green-600 text-xs font-bold text-white">

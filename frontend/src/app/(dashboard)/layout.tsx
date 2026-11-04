@@ -8,12 +8,15 @@ import { useAuthStore } from '@/store/auth.store';
 import { Sidebar } from '@/components/layout/sidebar';
 import { AppHeader } from '@/components/layout/app-header';
 import { cn } from '@/lib/utils';
+import { LanguageSwitcher } from '@/components/layout/language-switcher';
+import { useT } from '@/i18n';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { m } = useT();
 
   // Wait for React's hydration before enforcing the auth guard.
   //
@@ -41,7 +44,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return (
       <div className="flex h-screen items-center justify-center bg-slate-50">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-green-600" />
-        <span className="sr-only">Loading…</span>
+        <span className="sr-only">{m.nav.loading}</span>
       </div>
     );
   }
@@ -68,13 +71,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <div className="flex-1 flex flex-col overflow-hidden print:block print:overflow-visible">
         {/* Mobile top bar */}
         <header className="lg:hidden print:hidden flex items-center gap-3 px-4 h-14 bg-white text-slate-900 border-b border-slate-200 flex-shrink-0">
-          <button onClick={() => setMobileOpen((v) => !v)} aria-label="Toggle menu" className="p-1 text-slate-600">
+          <button onClick={() => setMobileOpen((v) => !v)} aria-label={m.nav.toggleMenu} className="p-1 text-slate-600">
             {mobileOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
           </button>
           <div className="grid h-7 w-7 place-items-center rounded-lg bg-green-600">
             <Warehouse className="h-4 w-4 text-white" />
           </div>
-          <span className="flex-1 font-bold">HSNT WMS</span>
+          <span className="flex-1 font-bold">{m.common.appName}</span>
+          <LanguageSwitcher compact />
           <NotificationBell />
         </header>
 

@@ -1,4 +1,7 @@
+'use client';
+
 import type { LucideIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 import { Inbox } from 'lucide-react';
 
 interface EmptyStateProps {
@@ -8,13 +11,14 @@ interface EmptyStateProps {
   action?: React.ReactNode;
 }
 
-export function EmptyState({ icon: Icon = Inbox, title = 'No data', message, action }: EmptyStateProps) {
+export function EmptyState({ icon: Icon = Inbox, title, message, action }: EmptyStateProps) {
+  const { m } = useT();
   return (
     <div className="flex flex-col items-center justify-center py-12 px-6 text-center">
       <div className="rounded-full bg-slate-100 p-4 mb-3">
         <Icon className="h-7 w-7 text-slate-400" />
       </div>
-      <p className="text-sm font-medium text-slate-700">{title}</p>
+      <p className="text-sm font-medium text-slate-700">{title ?? m.common.states.noData}</p>
       {message && <p className="text-xs text-slate-400 mt-1 max-w-sm">{message}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>

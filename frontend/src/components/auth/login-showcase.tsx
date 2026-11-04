@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Left-hand showcase panel of the login page.
  * Presentation only: no auth logic, no data fetching. Every figure shown
@@ -8,6 +10,7 @@ import { Boxes, BarChart3, ShieldCheck, Warehouse, Package, Truck, Gauge, Trendi
 import type { ReactNode } from 'react';
 import { WarehouseScene } from './warehouse-scene';
 import styles from './login.module.css';
+import { useT } from '@/i18n';
 
 export function BrandMark({ size = 'md' }: { size?: 'md' | 'lg' }) {
   return (
@@ -26,17 +29,17 @@ export function BrandName({ className }: { className?: string }) {
 }
 
 const FEATURES = [
-  { icon: Boxes, title: 'Real-time Inventory', sub: 'Live tracking and updates' },
-  { icon: BarChart3, title: 'Warehouse Analytics', sub: 'Data-driven insights' },
-  { icon: ShieldCheck, title: 'Secure & Reliable', sub: 'Enterprise-grade security' },
-];
+  { icon: Boxes, title: 'f1Title', sub: 'f1Sub' },
+  { icon: BarChart3, title: 'f2Title', sub: 'f2Sub' },
+  { icon: ShieldCheck, title: 'f3Title', sub: 'f3Sub' },
+] as const;
 
 const OVERVIEW = [
-  { icon: Warehouse, label: 'Warehouses', value: '12', sub: 'Sites' },
-  { icon: Package, label: 'Total SKUs', value: '18,560', sub: 'In catalogue' },
-  { icon: BarChart3, label: 'Active Orders', value: '384', sub: 'In progress' },
-  { icon: TrendingUp, label: 'Utilization', value: '92%', sub: 'Capacity used' },
-];
+  { icon: Warehouse, label: 'warehouses', value: '12', sub: 'sites' },
+  { icon: Package, label: 'totalSkus', value: '18,560', sub: 'inCatalogue' },
+  { icon: BarChart3, label: 'activeOrders', value: '384', sub: 'inProgress' },
+  { icon: TrendingUp, label: 'utilization', value: '92%', sub: 'capacityUsed' },
+] as const;
 
 function KpiCard({ className, icon, label, value, sub }: { className: string; icon: ReactNode; label: string; value: string; sub: string }) {
   return (
@@ -52,8 +55,9 @@ function KpiCard({ className, icon, label, value, sub }: { className: string; ic
 }
 
 export function LoginShowcase() {
+  const s = useT().m.auth.showcase;
   return (
-    <section className={styles.hero} aria-label="HSNT WMS overview">
+    <section className={styles.hero} aria-label={s.aria}>
       <div className={styles.heroBrand}>
         <BrandMark />
         <BrandName className={styles.heroBrandName} />
@@ -62,10 +66,10 @@ export function LoginShowcase() {
       <div className={styles.heroMain}>
         <div className={styles.copy}>
           <h1 className={styles.title}>
-            Smart Warehouse
-            <span className={styles.titleAccent}>Smart Operations</span>
+            {s.title}
+            <span className={styles.titleAccent}>{s.titleAccent}</span>
           </h1>
-          <p className={styles.subtitle}>Real-time inventory visibility and intelligent warehouse management.</p>
+          <p className={styles.subtitle}>{s.subtitle}</p>
 
           <ul className={styles.features}>
             {FEATURES.map(({ icon: Icon, title, sub }) => (
@@ -74,8 +78,8 @@ export function LoginShowcase() {
                   <Icon />
                 </span>
                 <span>
-                  <strong>{title}</strong>
-                  <span>{sub}</span>
+                  <strong>{s[title]}</strong>
+                  <span>{s[sub]}</span>
                 </span>
               </li>
             ))}
@@ -86,17 +90,17 @@ export function LoginShowcase() {
         <div className={styles.stageWrap} aria-hidden="true">
           <div className={styles.stage}>
             <WarehouseScene className={styles.scene} />
-            <KpiCard className={styles.kpiInventory} icon={<Boxes />} label="Total Inventory" value="24,560" sub="Units on hand" />
-            <KpiCard className={styles.kpiUtil} icon={<Gauge />} label="Warehouse Utilization" value="92%" sub="Capacity used" />
-            <KpiCard className={styles.kpiOutbound} icon={<Truck />} label="Outbound" value="256" sub="Orders shipped" />
+            <KpiCard className={styles.kpiInventory} icon={<Boxes />} label={s.totalInventory} value="24,560" sub={s.unitsOnHand} />
+            <KpiCard className={styles.kpiUtil} icon={<Gauge />} label={s.warehouseUtilization} value="92%" sub={s.capacityUsed} />
+            <KpiCard className={styles.kpiOutbound} icon={<Truck />} label={s.outbound} value="256" sub={s.ordersShipped} />
           </div>
         </div>
       </div>
 
       <div className={styles.overview}>
         <div className={styles.overviewHead}>
-          <p className={styles.overviewTitle}>Warehouse Overview</p>
-          <span className={styles.sampleTag}>Sample figures</span>
+          <p className={styles.overviewTitle}>{s.overview}</p>
+          <span className={styles.sampleTag}>{s.sample}</span>
         </div>
         <div className={styles.overviewGrid}>
           {OVERVIEW.map(({ icon: Icon, label, value, sub }) => (
@@ -105,9 +109,9 @@ export function LoginShowcase() {
                 <Icon />
               </span>
               <span className={styles.ostatText}>
-                <span className={styles.ostatLabel}>{label}</span>
+                <span className={styles.ostatLabel}>{s[label]}</span>
                 <span className={styles.ostatValue}>{value}</span>
-                <span className={styles.ostatSub}>{sub}</span>
+                <span className={styles.ostatSub}>{s[sub]}</span>
               </span>
             </div>
           ))}

@@ -5,9 +5,11 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export default function InventoryRetiredRedirect() {
   const router = useRouter();
+  const { m } = useT();
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('id');
     router.replace(`/reports?tab=balance${id ? `&stock=${encodeURIComponent(id)}` : ''}`);
@@ -16,7 +18,7 @@ export default function InventoryRetiredRedirect() {
   return (
     <div className="flex items-center justify-center h-full gap-3 text-slate-500">
       <Loader2 className="w-5 h-5 animate-spin" />
-      <span className="text-sm">Inventory moved to Reports → Balance. Redirecting…</span>
+      <span className="text-sm">{m.nav.inventoryMoved}</span>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronRight } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export interface LowStockItem {
   id: string;
@@ -16,6 +17,8 @@ export interface LowStockItem {
 }
 
 export function LowStockTable({ items, loading, limit = 6 }: { items?: LowStockItem[]; loading?: boolean; limit?: number }) {
+  const { m } = useT();
+  const L = m.dashboard.lowStock;
   const rows = [...(items ?? [])]
     .sort((a, b) => (b.minStock - b.available) - (a.minStock - a.available))
     .slice(0, limit);
@@ -23,25 +26,25 @@ export function LowStockTable({ items, loading, limit = 6 }: { items?: LowStockI
   return (
     <div className="h-full bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">Top Low Stock SKU</h2>
+        <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide">{L.title}</h2>
         <Link href="/reports?tab=balance" className="text-xs font-medium text-green-600 hover:text-green-700 flex items-center gap-0.5">
-          View all <ChevronRight className="h-3 w-3" />
+          {m.common.actions.viewAll} <ChevronRight className="h-3 w-3" />
         </Link>
       </div>
 
       {loading ? (
         <div className="space-y-1">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-10" />)}</div>
       ) : !rows.length ? (
-        <p className="text-sm text-slate-400 py-8 text-center">No low-stock SKUs — inventory levels healthy</p>
+        <p className="text-sm text-slate-400 py-8 text-center">{L.empty}</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                <th className="pb-2 pr-2 font-semibold">SKU / Product</th>
-                <th className="pb-2 px-2 text-right font-semibold">Avail</th>
-                <th className="pb-2 px-2 text-right font-semibold" title="Minimum Stock Level set on the product">Min</th>
-                <th className="pb-2 pl-2 text-right font-semibold">Gap</th>
+                <th className="pb-2 pr-2 font-semibold">{L.skuProduct}</th>
+                <th className="pb-2 px-2 text-right font-semibold">{L.avail}</th>
+                <th className="pb-2 px-2 text-right font-semibold" title={L.minHint}>{L.min}</th>
+                <th className="pb-2 pl-2 text-right font-semibold">{L.gap}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">

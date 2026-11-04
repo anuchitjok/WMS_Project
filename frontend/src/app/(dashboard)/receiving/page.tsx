@@ -23,7 +23,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
-import { formatDate, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { labelOf, useT } from '@/i18n';
 
 // ─── Types & constants ────────────────────────────────────────────────────────
 
@@ -72,14 +73,16 @@ const matchesQuery = (gr: any, q: string) =>
 // ─── Process flow indicator ───────────────────────────────────────────────────
 
 const STAGES = [
-  { key: 'receive',    label: 'Receive',   icon: Truck,         desc: 'Goods arrive' },
-  { key: 'inspect',   label: 'Inspect',   icon: ClipboardList, desc: 'QC check' },
-  { key: 'verify',    label: 'Verify',    icon: ShieldCheck,   desc: 'Approve outcome' },
-  { key: 'inventory', label: 'Inventory', icon: PackageCheck,  desc: 'Stock finalized' },
-];
+  { key: 'receive',   icon: Truck },
+  { key: 'inspect',   icon: ClipboardList },
+  { key: 'verify',    icon: ShieldCheck },
+  { key: 'inventory', icon: PackageCheck },
+] as const;
 
 function ProcessFlow({ activeStage }: { activeStage: 'receive' | 'inspect' | 'verify' | 'inventory' }) {
+  const S = useT().m.receiving.stages;
   const idx = STAGES.findIndex((s) => s.key === activeStage);
+  const active = STAGES[idx];
   return (
     <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl px-4 py-3 shadow-sm">
       {STAGES.map((stage, i) => {
@@ -93,7 +96,7 @@ function ProcessFlow({ activeStage }: { activeStage: 'receive' | 'inspect' | 've
               current ? 'bg-blue-600 text-white' : done ? 'bg-green-100 text-green-700' : 'text-slate-400',
             )}>
               <Icon className="h-3.5 w-3.5 flex-shrink-0" />
-              <span className="hidden sm:inline whitespace-nowrap">{stage.label}</span>
+              <span className="hidden sm:inline whitespace-nowrap">{S[stage.key]}</span>
             </div>
             {i < STAGES.length - 1 && (
               <ArrowRight className={cn('h-3.5 w-3.5 flex-shrink-0', i < idx ? 'text-green-400' : 'text-slate-300')} />
@@ -103,8 +106,8 @@ function ProcessFlow({ activeStage }: { activeStage: 'receive' | 'inspect' | 've
       })}
       <div className="ml-auto pl-3 border-l border-slate-200 hidden md:block">
         <p className="text-xs text-slate-500">
-          <span className="font-medium text-blue-600">{STAGES[idx]?.label}</span>
-          {' — '}{STAGES[idx]?.desc}
+          <span className="font-medium text-blue-600">{active ? S[active.key] : ''}</span>
+          {' — '}{active ? S[`${active.key}Desc`] : ''}
         </p>
       </div>
     </div>
@@ -120,6 +123,8 @@ interface GrRowProps {
 }
 
 function GrRow({ gr, onInspectSubmit, inspectBusy }: GrRowProps) {
+  const { m, t, fmt } = useT();
+  const R = m.receiving.row;
   const [open, setOpen] = useState(false);
   const items: any[] = gr.items ?? [];
   const units = items.reduce((s: number, it: any) => s + Number(it.quantity ?? 0), 0);
@@ -162,15 +167,15 @@ function GrRow({ gr, onInspectSubmit, inspectBusy }: GrRowProps) {
               {hasDiscrepancy && (
                 <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-700 border border-orange-300 rounded-full font-semibold">
                   <TriangleAlert className="h-2.5 w-2.5" />
-                  {gr.discrepancies.length} discrepancy
+                  {t(R.discrepancy, { count: gr.discrepancies.length })}
                 </span>
               )}
             </div>
             <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-              <span>{gr.sourceType}</span>
-              {gr.poNumber && <span className="font-mono">PO: {gr.poNumber}</span>}
-              <span>{items.length} item{items.length !== 1 ? 's' : ''} · {units.toLocaleString()} units</span>
-              <span>{formatDate(gr.receivedDate)}</span>
+              <span>{labelOf(m.receiving.sourceType, gr.sourceType)}</span>
+              {gr.poNumber && <span className="font-mono">{t(R.po, { po: gr.poNumber })}</span>}
+              <span>{t(R.itemsUnits, { items: items.length, units: fmt.number(units) })}</span>
+              <span>{fmt.dateTime(gr.receivedDate)}</span>
             </div>
 
             {/* Outcome chips after inspection */}
@@ -186,11 +191,11 @@ function GrRow({ gr, onInspectSubmit, inspectBusy }: GrRowProps) {
           <div className="flex-shrink-0 flex items-center gap-2">
             {finished ? (
               <span className="inline-flex items-center gap-1 text-xs text-green-600 font-medium">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Inspected
+                <CheckCircle2 className="h-3.5 w-3.5" /> {R.inspected}
               </span>
             ) : (
               <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
-                <CircleDot className="h-3.5 w-3.5" /> Awaiting
+                <CircleDot className="h-3.5 w-3.5" /> {R.awaiting}
               </span>
             )}
             {open
@@ -218,16 +223,18 @@ function GrRow({ gr, onInspectSubmit, inspectBusy }: GrRowProps) {
 // ─── Read-only inspection summary (post-inspection) ──────────────────────────
 
 function InspectionSummary({ gr, onClose }: { gr: any; onClose: () => void }) {
+  const { m, t, fmt } = useT();
+  const S = m.receiving.summary;
   const items: any[] = gr.items ?? [];
   return (
     <div className="border-t border-slate-200 bg-slate-50/40">
       <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 bg-white">
         <CheckCircle2 className="h-4 w-4 text-green-600" />
-        <span className="text-sm font-semibold text-slate-800">Inspection Complete</span>
+        <span className="text-sm font-semibold text-slate-800">{S.complete}</span>
         {gr.discrepancies?.length > 0 && (
-          <span className="ml-2 text-xs text-orange-600 font-medium">{gr.discrepancies.length} discrepancy record{gr.discrepancies.length !== 1 ? 's' : ''} filed</span>
+          <span className="ml-2 text-xs text-orange-600 font-medium">{t(S.discrepanciesFiled, { count: gr.discrepancies.length })}</span>
         )}
-        <button onClick={onClose} className="ml-auto text-xs text-slate-400 hover:text-slate-600">Close ↑</button>
+        <button onClick={onClose} className="ml-auto text-xs text-slate-400 hover:text-slate-600">{S.close}</button>
       </div>
       <div className="px-5 py-4 space-y-2">
         {items.map((it: any) => (
@@ -238,9 +245,9 @@ function InspectionSummary({ gr, onClose }: { gr: any; onClose: () => void }) {
                 {it.product?.name}
               </p>
               <p className="text-xs text-slate-400 mt-0.5">
-                Received: {Number(it.quantity).toLocaleString()}
-                {it.inspectedQty != null && ` · Inspected: ${Number(it.inspectedQty).toLocaleString()}`}
-                {it.serialNumber && ` · SN: ${it.serialNumber}`}
+                {t(S.received, { qty: fmt.number(Number(it.quantity)) })}
+                {it.inspectedQty != null && ` · ${t(S.inspected, { qty: fmt.number(Number(it.inspectedQty)) })}`}
+                {it.serialNumber && ` · ${t(S.sn, { sn: it.serialNumber })}`}
               </p>
               {it.inspectorNotes && <p className="text-xs text-slate-500 italic mt-0.5">"{it.inspectorNotes}"</p>}
             </div>
@@ -263,17 +270,13 @@ const OUTCOME_STYLE: Record<string, string> = {
   wrong_item:           'bg-purple-100 text-purple-700 border-purple-300',
   missing_accessories:  'bg-orange-100 text-orange-700 border-orange-300',
 };
-const OUTCOME_LABEL: Record<string, string> = {
-  good: 'Good', doa: 'DOA', damaged: 'Damaged',
-  short_qty: 'Short Qty', wrong_item: 'Wrong Item', missing_accessories: 'Missing Acc.',
-};
-
 function OutcomeChip({ outcome, count }: { outcome: string; count?: number }) {
+  const { m } = useT();
   const style = OUTCOME_STYLE[outcome] ?? 'bg-slate-100 text-slate-600 border-slate-200';
   return (
     <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border', style)}>
       {count != null && <span>{count}×</span>}
-      {OUTCOME_LABEL[outcome] ?? outcome.replace(/_/g, ' ')}
+      {labelOf(m.receiving.outcome, outcome)}
     </span>
   );
 }
@@ -285,6 +288,9 @@ const BLANK_IMPORT_HEADER = {
 };
 
 function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; onCreated: () => void }) {
+  const { m, t, fmt } = useT();
+  const I = m.receiving.import;
+  const F = m.receiving.form;
   const [open, setOpen] = useState(false);
   const [header, setHeader] = useState({ ...BLANK_IMPORT_HEADER });
   const [file, setFile] = useState<File | null>(null);
@@ -302,29 +308,29 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
   }
 
   async function onFile(f: File) {
-    if (!/\.(xlsx|csv)$/i.test(f.name)) { toast.error('Only .xlsx or .csv files are supported'); return; }
+    if (!/\.(xlsx|csv)$/i.test(f.name)) { toast.error(I.onlyXlsx); return; }
     setFile(f); setReimport(false); setBusy(true);
     try {
       const p = await receivingApi.importPreview(f);
       setPreview(p);
-      toast.success(`File read — ${p.summary.valid}/${p.summary.total} rows ready`);
+      toast.success(t(I.fileRead, { valid: p.summary.valid, total: p.summary.total }));
     } catch (e: any) {
       toast.error(e.message); setFile(null); setPreview(null);
     } finally { setBusy(false); }
   }
 
   async function downloadTemplate() {
-    try { await receivingApi.importTemplate(); toast.success('Template downloaded'); }
+    try { await receivingApi.importTemplate(); toast.success(I.templateDownloaded); }
     catch (e: any) { toast.error(e.message); }
   }
 
   async function confirm() {
     if (!file || !preview) return;
-    if (!header.sourceType.trim()) { toast.error('Source Type is required'); return; }
+    if (!header.sourceType.trim()) { toast.error(I.sourceRequired); return; }
     setBusy(true);
     try {
       const r = await receivingApi.importCommit({ ...header, ...(reimport ? { allowReimport: 'true' } : {}) }, file);
-      toast.success(`Created ${r.refNumber} — ${r.inserted} items received (skipped ${r.skipped})`);
+      toast.success(t(I.created, { ref: r.refNumber, inserted: r.inserted, skipped: r.skipped }));
       handleOpen(false);
       onCreated();
     } catch (e: any) {
@@ -335,35 +341,35 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger render={<Button variant="outline" className="gap-1.5" />}>
-        <Upload className="h-4 w-4" /> Import File
+        <Upload className="h-4 w-4" /> {I.button}
       </DialogTrigger>
       <DialogContent className="w-full max-w-3xl sm:max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle>Import Goods Receiving</DialogTitle>
+          <DialogTitle>{I.title}</DialogTitle>
         </DialogHeader>
         <div className="space-y-5">
           {/* Receipt header — applies to the whole file */}
-          <FormSection icon={Truck} title="Receipt Details (applies to all rows)">
+          <FormSection icon={Truck} title={I.headerSection}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 min-w-0">
-                <Label>Source Type <span className="text-red-500">*</span></Label>
+                <Label>{F.sourceType} <span className="text-red-500">*</span></Label>
                 <Select value={header.sourceType} onValueChange={(v) => setHeader((h) => ({ ...h, sourceType: v ?? 'Brand Owner' }))}>
                   <SelectTrigger className="w-full min-w-0">
-                    <span className="flex flex-1 text-left truncate text-sm">{header.sourceType || 'Select…'}</span>
+                    <span className="flex flex-1 text-left truncate text-sm">{header.sourceType ? labelOf(m.receiving.sourceType, header.sourceType) : F.select}</span>
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
                     {['Brand Owner', 'Vendor', 'Customer Return', 'RTV Replacement'].map((s) => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                      <SelectItem key={s} value={s}>{labelOf(m.receiving.sourceType, s)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Default Warehouse <span className="text-slate-400 font-normal">(for rows without warehouseCode)</span></Label>
+                <Label>{I.defaultWarehouse} <span className="text-slate-400 font-normal">{I.defaultWarehouseHint}</span></Label>
                 <Select value={header.warehouseId} onValueChange={(v) => setHeader((h) => ({ ...h, warehouseId: v ?? '' }))}>
                   <SelectTrigger className="w-full min-w-0">
                     <span className={cn('flex flex-1 text-left truncate text-sm', !selectedWarehouse && 'text-muted-foreground')}>
-                      {selectedWarehouse ? selectedWarehouse.name : 'Select warehouse…'}
+                      {selectedWarehouse ? selectedWarehouse.name : m.receiving.form.selectWarehouse}
                     </span>
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
@@ -373,29 +379,29 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
               </div>
               <div className="space-y-1 min-w-0">
                 <Label>AWB <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={header.awbNumber} onChange={(e) => setHeader((h) => ({ ...h, awbNumber: e.target.value }))} placeholder="e.g. AWB-123456789" />
+                <Input value={header.awbNumber} onChange={(e) => setHeader((h) => ({ ...h, awbNumber: e.target.value }))} placeholder="AWB-123456789" />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Invoice No <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} placeholder="e.g. INV-2026-0001" />
+                <Label>{F.invoiceNo} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} placeholder="INV-2026-0001" />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>RMA Reference No <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={header.sourceRef} onChange={(e) => setHeader((h) => ({ ...h, sourceRef: e.target.value }))} placeholder="e.g. RMA case no." />
+                <Label>{F.rmaRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={header.sourceRef} onChange={(e) => setHeader((h) => ({ ...h, sourceRef: e.target.value }))} placeholder={F.rmaPlaceholder} />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Notes <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={header.notes} onChange={(e) => setHeader((h) => ({ ...h, notes: e.target.value }))} placeholder="Internal notes" />
+                <Label>{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={header.notes} onChange={(e) => setHeader((h) => ({ ...h, notes: e.target.value }))} placeholder={F.notes} />
               </div>
             </div>
           </FormSection>
 
           {/* File */}
-          <FormSection icon={Package} title="Item File">
+          <FormSection icon={Package} title={I.fileSection}>
             <div className="flex items-center justify-between gap-3 mb-3">
-              <p className="text-xs text-slate-500">Columns: productCode, serialNumber, batchNumber, quantity, condition, ownershipType, warehouseCode</p>
+              <p className="text-xs text-slate-500">{I.columns}</p>
               <Button variant="outline" size="sm" onClick={downloadTemplate} className="gap-1.5 shrink-0">
-                <FileDown className="h-4 w-4" /> Template
+                <FileDown className="h-4 w-4" /> {I.template}
               </Button>
             </div>
             <div
@@ -409,30 +415,33 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
               <input ref={inputRef} type="file" accept=".xlsx,.csv" hidden
                 onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
               <Upload className="h-8 w-8 mx-auto text-slate-400 mb-2" />
-              <p className="text-sm font-medium text-slate-700">Drag &amp; drop a file, or click to browse</p>
-              <p className="text-xs text-slate-400 mt-1">.xlsx or .csv (max 10MB)</p>
+              <p className="text-sm font-medium text-slate-700">{I.drop}</p>
+              <p className="text-xs text-slate-400 mt-1">{I.fileTypes}</p>
               {file && <p className="text-xs text-green-600 mt-2 font-medium">{file.name}</p>}
             </div>
           </FormSection>
 
           {/* Preview */}
           {preview && (
-            <FormSection icon={CheckCircle2} title="Review Before Import">
+            <FormSection icon={CheckCircle2} title={I.review}>
               <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
-                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">Total {preview.summary.total}</span>
-                <span className="px-2 py-0.5 rounded-md bg-green-100 text-green-700 font-medium">✓ Valid {preview.summary.valid}</span>
-                <span className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 font-medium">✗ Issues {preview.summary.invalid}</span>
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">{t(I.total, { count: preview.summary.total })}</span>
+                <span className="px-2 py-0.5 rounded-md bg-green-100 text-green-700 font-medium">{t(I.valid, { count: preview.summary.valid })}</span>
+                <span className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 font-medium">{t(I.issues, { count: preview.summary.invalid })}</span>
               </div>
               {preview.alreadyImported && (
                 <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900" data-testid="already-received">
                   <p className="font-medium">
-                    This file was already received{preview.alreadyImported.refNumber ? ` as ${preview.alreadyImported.refNumber}` : ''} on{' '}
-                    {new Date(preview.alreadyImported.at).toLocaleString()}{preview.alreadyImported.by ? ` by ${preview.alreadyImported.by}` : ''}.
+                    {t(I.alreadyReceived, {
+                      ref: preview.alreadyImported.refNumber ? t(I.alreadyRef, { ref: preview.alreadyImported.refNumber }) : '',
+                      date: fmt.dateTime(preview.alreadyImported.at),
+                      by: preview.alreadyImported.by ? t(I.alreadyBy, { name: preview.alreadyImported.by }) : '',
+                    })}
                   </p>
-                  <p className="text-xs mt-1">Importing it again receives the same goods a second time.</p>
+                  <p className="text-xs mt-1">{I.alreadyWarn}</p>
                   <label className="mt-2 flex items-center gap-2 text-xs">
                     <input type="checkbox" checked={reimport} onChange={(e) => setReimport(e.target.checked)} id="confirm-rereceive" />
-                    This is a new delivery — receive this file again
+                    {I.newDelivery}
                   </label>
                 </div>
               )}
@@ -441,9 +450,9 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
                   <thead className="sticky top-0">
                     <tr className="bg-slate-50 border-b border-slate-100">
                       <th className="text-left px-2 py-1.5 font-medium text-slate-600">#</th>
-                      <th className="text-left px-2 py-1.5 font-medium text-slate-600">Status</th>
+                      <th className="text-left px-2 py-1.5 font-medium text-slate-600">{I.colStatus}</th>
                       {preview.columns.map((c) => <th key={c} className="text-left px-2 py-1.5 font-medium text-slate-600">{c}</th>)}
-                      <th className="text-left px-2 py-1.5 font-medium text-slate-600">Errors</th>
+                      <th className="text-left px-2 py-1.5 font-medium text-slate-600">{I.colErrors}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
@@ -470,7 +479,7 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
             className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4 mr-1.5" />
-            {busy ? 'Working…' : `Confirm Import ${preview?.summary.valid ?? 0} items →`}
+            {busy ? I.working : t(I.confirm, { count: preview?.summary.valid ?? 0 })}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -481,6 +490,8 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
 // ─── Reverse a mistaken receipt (Phase 6) ──────────────────────────────────────
 
 function ReverseReceiptDialog({ gr, onDone }: { gr: any; onDone: () => void }) {
+  const { m, t } = useT();
+  const V = m.receiving.reverse;
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -490,7 +501,7 @@ function ReverseReceiptDialog({ gr, onDone }: { gr: any; onDone: () => void }) {
     setBusy(true);
     try {
       const r = await receivingApi.reverse(gr.id, reason.trim());
-      toast.success(`${r.refNumber} reversed — ${r.reversedUnits} unit(s) cancelled`);
+      toast.success(t(V.done, { ref: r.refNumber, count: r.reversedUnits }));
       setOpen(false); setReason('');
       onDone();
     } catch (e: any) {
@@ -501,30 +512,25 @@ function ReverseReceiptDialog({ gr, onDone }: { gr: any; onDone: () => void }) {
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setReason(''); }}>
       <DialogTrigger render={<Button variant="outline" size="sm" className="gap-1 h-7 text-xs" />}>
-        <Undo2 className="h-3.5 w-3.5" /> Reverse…
+        <Undo2 className="h-3.5 w-3.5" /> {V.button}
       </DialogTrigger>
       <DialogContent className="w-full max-w-md sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Reverse {gr.refNumber}</DialogTitle>
+          <DialogTitle>{t(V.title, { ref: gr.refNumber })}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 text-sm">
-          <p className="text-slate-600">
-            Use this only for a receipt entered by mistake. The receipt stays on record, marked Cancelled, and its{' '}
-            {gr.items?.length ?? 0} unit(s) are cancelled so the serials can be received correctly.
-          </p>
-          <p className="text-xs text-slate-500">
-            Not possible once any unit has been put away, issued, or sent to RTV / scrap, and not by the person who received it.
-          </p>
+          <p className="text-slate-600">{t(V.body, { count: gr.items?.length ?? 0 })}</p>
+          <p className="text-xs text-slate-500">{V.rule}</p>
           <div className="space-y-1">
-            <Label htmlFor="reverse-reason">Reason <span className="text-red-500">*</span></Label>
-            <Input id="reverse-reason" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Entered against the wrong vendor" />
-            {!ok && reason.length > 0 && <p className="text-xs text-slate-500">At least 5 characters.</p>}
+            <Label htmlFor="reverse-reason">{V.reason} <span className="text-red-500">*</span></Label>
+            <Input id="reverse-reason" value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder={V.reasonPlaceholder} />
+            {!ok && reason.length > 0 && <p className="text-xs text-slate-500">{V.minChars}</p>}
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>Keep receipt</Button>
+          <Button variant="outline" onClick={() => setOpen(false)}>{V.keep}</Button>
           <Button onClick={submit} disabled={!ok || busy} className="bg-red-600 hover:bg-red-700 text-white">
-            {busy ? 'Working…' : 'Reverse receipt'}
+            {busy ? V.working : V.confirm}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -541,6 +547,9 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
   vendors: any[];
   onCreated: () => void;
 }) {
+  const { m, t } = useT();
+  const F = m.receiving.form;
+  const T = m.receiving.toast;
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(BLANK_FORM);
   const [busy, setBusy] = useState(false);
@@ -585,22 +594,22 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
   // Phase 4: what still blocks Receive Goods (the API refuses the same cases).
   const serialEntered = !!form.serialNumber.trim();
   const missingForReceive = [
-    !form.productId && 'product',
-    form.sourceType === 'Vendor' && !form.vendorId && 'vendor',
-    !(Number(form.quantity) >= 1) && 'quantity of at least 1',
-    !!selectedProduct?.serialControlled && !serialEntered && 'serial number',
-    !!selectedProduct?.batchControlled && !form.batchNumber.trim() && 'lot/batch number',
-    serialEntered && Number(form.quantity) !== 1 && 'quantity 1 for a serial number',
+    !form.productId && F.need.product,
+    form.sourceType === 'Vendor' && !form.vendorId && F.need.vendor,
+    !(Number(form.quantity) >= 1) && F.need.quantity,
+    !!selectedProduct?.serialControlled && !serialEntered && F.need.serial,
+    !!selectedProduct?.batchControlled && !form.batchNumber.trim() && F.need.batch,
+    serialEntered && Number(form.quantity) !== 1 && F.need.serialQtyOne,
   ].filter(Boolean) as string[];
 
   async function submit() {
-    if (missingForReceive.length) { toast.error(`Still needed: ${missingForReceive.join(', ')}`); return; }
-    if (!form.productId) { toast.error('Please select a product'); return; }
+    if (missingForReceive.length) { toast.error(t(F.stillNeeded, { list: missingForReceive.join(', ') })); return; }
+    if (!form.productId) { toast.error(T.selectProduct); return; }
     if (selectedProduct?.serialControlled && !form.serialNumber.trim()) {
-      toast.error(`${selectedProduct.code} is serial-controlled — serial number is required`); return;
+      toast.error(t(T.serialRequired, { code: selectedProduct.code })); return;
     }
     if (selectedProduct?.batchControlled && !form.batchNumber.trim()) {
-      toast.error(`${selectedProduct.code} is batch-controlled — lot/batch number is required`); return;
+      toast.error(t(T.batchRequired, { code: selectedProduct.code })); return;
     }
     setBusy(true);
     try {
@@ -623,7 +632,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           batchNumber: form.batchNumber.trim() || undefined,
         }],
       });
-      toast.success('Goods received — pending inspection');
+      toast.success(T.received);
       handleOpen(false);
       onCreated();
     } catch (e: any) {
@@ -636,45 +645,45 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white gap-1.5" />}>
-        <PackagePlus className="h-4 w-4" /> Receive Goods
+        <PackagePlus className="h-4 w-4" /> {F.receiveGoods}
       </DialogTrigger>
       <DialogContent className="w-full max-w-2xl sm:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle>Goods Receiving</DialogTitle>
+          <DialogTitle>{F.dialogTitle}</DialogTitle>
         </DialogHeader>
         <div className="space-y-5">
           {/* Source */}
-          <FormSection icon={Truck} title="Source">
+          <FormSection icon={Truck} title={F.sections.source}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 min-w-0">
-                <Label>Source Type</Label>
+                <Label>{F.sourceType}</Label>
                 <Select value={form.sourceType} onValueChange={(v) => handleSourceTypeChange(v ?? 'Brand Owner')}>
                   <SelectTrigger className="w-full min-w-0">
                     <span className={cn('flex flex-1 text-left truncate text-sm', !form.sourceType && 'text-muted-foreground')}>
-                      {form.sourceType || 'Select…'}
+                      {form.sourceType ? labelOf(m.receiving.sourceType, form.sourceType) : F.select}
                     </span>
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
                     {['Brand Owner', 'Vendor', 'Customer Return', 'RTV Replacement'].map((s) => (
-                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                      <SelectItem key={s} value={s}>{labelOf(m.receiving.sourceType, s)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>PO / Reference No. <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={form.poNumber} onChange={(e) => setForm((f) => ({ ...f, poNumber: e.target.value }))} placeholder="e.g. PO-2026-001" />
+                <Label>{F.poRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.poNumber} onChange={(e) => setForm((f) => ({ ...f, poNumber: e.target.value }))} placeholder="PO-2026-001" />
               </div>
 
               {form.sourceType === 'Brand Owner' && (
                 <div className="space-y-1 min-w-0">
-                  <Label>Brand <span className="text-red-500">*</span>
-                    <span className="ml-2 text-xs font-normal text-slate-400">— narrows Product list below</span>
+                  <Label>{F.brand} <span className="text-red-500">*</span>
+                    <span className="ml-2 text-xs font-normal text-slate-400">{F.brandHint}</span>
                   </Label>
                   <Select value={form.brandId} onValueChange={handleBrandChange}>
                     <SelectTrigger className="w-full min-w-0">
                       <span className={cn('flex flex-1 text-left truncate text-sm', !form.brandId && 'text-muted-foreground')}>
-                        {brands.find((b) => b.id === form.brandId)?.name || 'Select brand…'}
+                        {brands.find((b) => b.id === form.brandId)?.name || F.selectBrand}
                       </span>
                     </SelectTrigger>
                     <SelectContent className="max-h-64">
@@ -686,13 +695,13 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
 
               {form.sourceType === 'Vendor' && (
                 <div className="space-y-1 min-w-0">
-                  <Label>Vendor *
-                    <span className="ml-2 text-xs font-normal text-slate-400">— recorded in notes</span>
+                  <Label>{F.vendor} *
+                    <span className="ml-2 text-xs font-normal text-slate-400">{F.vendorHint}</span>
                   </Label>
                   <Select value={form.vendorId} onValueChange={(v) => setForm((f) => ({ ...f, vendorId: v ?? '' }))}>
                     <SelectTrigger className="w-full min-w-0">
                       <span className={cn('flex flex-1 text-left truncate text-sm', !form.vendorId && 'text-muted-foreground')}>
-                        {vendors.find((v) => v.id === form.vendorId)?.name || 'Select vendor…'}
+                        {vendors.find((v) => v.id === form.vendorId)?.name || F.selectVendor}
                       </span>
                     </SelectTrigger>
                     <SelectContent className="max-h-64">
@@ -705,17 +714,17 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           </FormSection>
 
           {/* Product */}
-          <FormSection icon={Package} title="Product">
+          <FormSection icon={Package} title={F.sections.product}>
             <div className="space-y-1 min-w-0">
-              <Label>Select Product <span className="text-red-500">*</span>
-                <span className="ml-2 text-xs font-normal text-slate-400">— from Product Master only</span>
+              <Label>{F.product} <span className="text-red-500">*</span>
+                <span className="ml-2 text-xs font-normal text-slate-400">{F.productHint}</span>
               </Label>
               <Select value={form.productId} onValueChange={handleProductChange} disabled={form.sourceType === 'Brand Owner' && !form.brandId}>
                 <SelectTrigger className="w-full min-w-0">
                   <span className={cn('flex flex-1 text-left truncate text-sm', !selectedProduct && 'text-muted-foreground')}>
                     {selectedProduct ? `${selectedProduct.code} — ${selectedProduct.name}`
-                      : form.sourceType === 'Brand Owner' && !form.brandId ? 'Select a brand first…'
-                      : 'Search and select a product…'}
+                      : form.sourceType === 'Brand Owner' && !form.brandId ? F.selectBrandFirst
+                      : F.searchProduct}
                   </span>
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
@@ -725,24 +734,24 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                 </SelectContent>
               </Select>
               {form.sourceType === 'Brand Owner' && form.brandId && filteredProducts.length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">No products found for this brand in Product Master.</p>
+                <p className="text-xs text-amber-600 mt-1">{F.noBrandProducts}</p>
               )}
             </div>
             {selectedProduct && (
               <div className="mt-3 rounded-lg border border-green-200 bg-green-50 p-4">
                 <div className="flex items-center gap-1.5 mb-3">
                   <ShieldCheck className="h-4 w-4 text-green-600 flex-shrink-0" />
-                  <span className="text-xs font-semibold text-green-700 uppercase tracking-wide">Product Master Information</span>
-                  <span className="ml-auto text-[10px] text-green-600 bg-green-100 px-2 py-0.5 rounded-full font-medium">Read-only</span>
+                  <span className="text-xs font-semibold text-green-700 uppercase tracking-wide">{F.masterInfo}</span>
+                  <span className="ml-auto text-[10px] text-green-600 bg-green-100 px-2 py-0.5 rounded-full font-medium">{F.readOnly}</span>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-2.5">
                   {[
-                    { label: 'Product Code', value: selectedProduct.code, mono: true },
-                    { label: 'Product Name', value: selectedProduct.name },
-                    { label: 'Model', value: selectedProduct.model },
-                    { label: 'Internal Part Number', value: selectedProduct.partNumber, mono: true },
-                    { label: 'Category', value: selectedProduct.category },
-                    { label: 'UOM', value: selectedProduct.unit },
+                    { label: F.productCode, value: selectedProduct.code, mono: true },
+                    { label: F.productName, value: selectedProduct.name },
+                    { label: F.model, value: selectedProduct.model },
+                    { label: F.partNumber, value: selectedProduct.partNumber, mono: true },
+                    { label: F.category, value: selectedProduct.category },
+                    { label: F.uom, value: selectedProduct.unit },
                   ].map(({ label, value, mono }) => (
                     <div key={label} className="min-w-0">
                       <p className="text-[10px] uppercase tracking-wide text-green-600 font-semibold mb-0.5">{label}</p>
@@ -753,20 +762,20 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                   ))}
                   {selectedProduct.description && (
                     <div className="col-span-2 md:col-span-3 min-w-0">
-                      <p className="text-[10px] uppercase tracking-wide text-green-600 font-semibold mb-0.5">Description</p>
+                      <p className="text-[10px] uppercase tracking-wide text-green-600 font-semibold mb-0.5">{F.description}</p>
                       <p className="text-sm text-slate-800 truncate">{selectedProduct.description}</p>
                     </div>
                   )}
                   <div className="col-span-2 md:col-span-3 flex gap-3 pt-0.5">
                     {[
-                      { active: selectedProduct.serialControlled, term: 'Serial number' },
-                      { active: selectedProduct.batchControlled,  term: 'Batch / lot number' },
+                      { active: selectedProduct.serialControlled, term: F.serialTerm },
+                      { active: selectedProduct.batchControlled,  term: F.batchTerm },
                     ].map(({ active, term }) => (
                       <span key={term} className={cn(
                         'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium border',
                         active ? 'bg-green-100 text-green-700 border-green-300' : 'bg-slate-100 text-slate-400 border-slate-200',
                       )}>
-                        <ShieldCheck className="h-3 w-3" />{term} {active ? 'required' : 'not required'}
+                        <ShieldCheck className="h-3 w-3" />{term} {active ? F.required : F.notRequired}
                       </span>
                     ))}
                   </div>
@@ -776,31 +785,31 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           </FormSection>
 
           {/* Receiving Details */}
-          <FormSection icon={Info} title="Receiving Details">
+          <FormSection icon={Info} title={F.sections.details}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 min-w-0">
-                <Label>Quantity <span className="text-red-500">*</span></Label>
+                <Label>{F.quantity} <span className="text-red-500">*</span></Label>
                 <Input type="number" min={1} value={form.quantity} onChange={(e) => setForm((f) => ({ ...f, quantity: Number(e.target.value) }))} />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Serial Number
-                  {selectedProduct?.serialControlled ? <span className="text-red-500 ml-0.5">*</span> : <span className="text-slate-400 font-normal ml-1">(optional)</span>}
+                <Label>{F.serialNumber}
+                  {selectedProduct?.serialControlled ? <span className="text-red-500 ml-0.5">*</span> : <span className="text-slate-400 font-normal ml-1">{F.optional}</span>}
                 </Label>
                 <Input
                   value={form.serialNumber}
                   onChange={(e) => setForm((f) => ({ ...f, serialNumber: e.target.value }))}
-                  placeholder={selectedProduct?.serialControlled ? 'Required for this product' : 'e.g. SN-001234'}
+                  placeholder={selectedProduct?.serialControlled ? F.requiredForProduct : 'SN-001234'}
                   className={cn(selectedProduct?.serialControlled && !form.serialNumber && 'border-amber-400')}
                 />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Lot / Batch Number
-                  {selectedProduct?.batchControlled ? <span className="text-red-500 ml-0.5">*</span> : <span className="text-slate-400 font-normal ml-1">(optional)</span>}
+                <Label>{F.batchNumber}
+                  {selectedProduct?.batchControlled ? <span className="text-red-500 ml-0.5">*</span> : <span className="text-slate-400 font-normal ml-1">{F.optional}</span>}
                 </Label>
                 <Input
                   value={form.batchNumber}
                   onChange={(e) => setForm((f) => ({ ...f, batchNumber: e.target.value }))}
-                  placeholder={selectedProduct?.batchControlled ? 'Required for this product' : 'e.g. LOT-2026-001'}
+                  placeholder={selectedProduct?.batchControlled ? F.requiredForProduct : 'LOT-2026-001'}
                   className={cn(selectedProduct?.batchControlled && !form.batchNumber && 'border-amber-400')}
                 />
               </div>
@@ -808,13 +817,13 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           </FormSection>
 
           {/* Destination */}
-          <FormSection icon={MapPin} title="Destination">
+          <FormSection icon={MapPin} title={F.sections.destination}>
             <div className="space-y-1 min-w-0">
-              <Label>Warehouse <span className="text-slate-400 font-normal">(optional — can be chosen at Putaway)</span></Label>
+              <Label>{F.warehouse} <span className="text-slate-400 font-normal">{F.warehouseHint}</span></Label>
               <Select value={form.warehouseId} onValueChange={(v) => setForm((f) => ({ ...f, warehouseId: v ?? '' }))}>
                 <SelectTrigger className="w-full min-w-0">
                   <span className={cn('flex flex-1 text-left truncate text-sm', !selectedWarehouse && 'text-muted-foreground')}>
-                    {selectedWarehouse ? selectedWarehouse.name : 'Select warehouse…'}
+                    {selectedWarehouse ? selectedWarehouse.name : m.receiving.form.selectWarehouse}
                   </span>
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
@@ -823,33 +832,33 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
               </Select>
             </div>
             <div className="space-y-1 min-w-0">
-              <Label>Notes <span className="text-slate-400 font-normal">(optional)</span></Label>
-              <Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Internal notes for this receipt" />
+              <Label>{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+              <Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder={F.notesPlaceholder} />
             </div>
           </FormSection>
 
           {/* Reference Documents */}
-          <FormSection icon={ClipboardList} title="Reference Documents">
+          <FormSection icon={ClipboardList} title={F.sections.references}>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1 min-w-0">
-                <Label>AWB <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={form.awbNumber} onChange={(e) => setForm((f) => ({ ...f, awbNumber: e.target.value }))} placeholder="e.g. AWB-123456789" />
+                <Label>{F.awb} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.awbNumber} onChange={(e) => setForm((f) => ({ ...f, awbNumber: e.target.value }))} placeholder="AWB-123456789" />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>Invoice No <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={form.invoiceNumber} onChange={(e) => setForm((f) => ({ ...f, invoiceNumber: e.target.value }))} placeholder="e.g. INV-2026-0001" />
+                <Label>{F.invoiceNo} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.invoiceNumber} onChange={(e) => setForm((f) => ({ ...f, invoiceNumber: e.target.value }))} placeholder="INV-2026-0001" />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>RMA Reference No <span className="text-slate-400 font-normal">(optional)</span></Label>
-                <Input value={form.rmaReference} onChange={(e) => setForm((f) => ({ ...f, rmaReference: e.target.value }))} placeholder="e.g. RMA case no." />
+                <Label>{F.rmaRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.rmaReference} onChange={(e) => setForm((f) => ({ ...f, rmaReference: e.target.value }))} placeholder={F.rmaPlaceholder} />
               </div>
             </div>
           </FormSection>
         </div>
         <DialogFooter>
-          {missingForReceive.length > 0 && <p className="mr-auto self-center text-xs text-amber-700">Still needed: {missingForReceive.join(', ')}</p>}
+          {missingForReceive.length > 0 && <p className="mr-auto self-center text-xs text-amber-700">{t(F.stillNeeded, { list: missingForReceive.join(', ') })}</p>}
           <Button onClick={submit} disabled={missingForReceive.length > 0 || busy} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">
-            {busy ? 'Creating…' : 'Receive Goods →'}
+            {busy ? F.creating : F.submit}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -870,6 +879,8 @@ export default function ReceivingPage() {
   const [query, setQuery] = useState('');
   const [inspectBusy, setInspectBusy] = useState(false);
   const user = useAuthStore((s) => s.user);
+  const { m, fmt } = useT();
+  const RV = m.receiving;
   const canReverse = !!user && REVERSE_ROLES.includes(user.role);
 
   const load = useCallback(async () => {
@@ -898,10 +909,10 @@ export default function ReceivingPage() {
     setInspectBusy(true);
     try {
       await receivingApi.inspect(id, dto);
-      toast.success('Inspection submitted — stock routed');
+      toast.success(RV.toast.inspected);
       load();
     } catch (e: any) {
-      toast.error(e.message ?? 'Inspection failed');
+      toast.error(e.message || RV.toast.inspectFailed);
     } finally {
       setInspectBusy(false);
     }
@@ -935,8 +946,8 @@ export default function ReceivingPage() {
   }, [rows, query]);
 
   const tabs: { key: Tab; label: string; count: number; dot?: string }[] = [
-    { key: 'queue', label: 'Awaiting Inspection', count: stats.awaitingInspection, dot: stats.awaitingInspection > 0 ? 'bg-amber-400' : undefined },
-    { key: 'all',   label: 'All Records',         count: rows.length },
+    { key: 'queue', label: RV.tabs.queue, count: stats.awaitingInspection, dot: stats.awaitingInspection > 0 ? 'bg-amber-400' : undefined },
+    { key: 'all',   label: RV.tabs.all, count: rows.length },
   ];
 
   return (
@@ -946,9 +957,9 @@ export default function ReceivingPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <ClipboardList className="h-5 w-5 text-green-600" />
-            Goods Receiving &amp; Verification
+            {RV.title}
           </h1>
-          <p className="text-sm text-slate-500 mt-0.5">Receive → Inspect → Verify → Inventory</p>
+          <p className="text-sm text-slate-500 mt-0.5">{RV.subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
           <ImportReceivingDialog warehouses={warehouses} onCreated={load} />
@@ -961,11 +972,11 @@ export default function ReceivingPage() {
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <StatTile label="Received Today"       value={loading ? '—' : stats.receivedToday}       icon={PackagePlus}  tone="slate" />
-        <StatTile label="Awaiting Inspection"  value={loading ? '—' : stats.awaitingInspection}  icon={Clock}        tone={stats.awaitingInspection > 0 ? 'amber' : 'slate'} />
-        <StatTile label="Verified Good"        value={loading ? '—' : stats.verifiedGood}        icon={PackageCheck} tone="green" />
-        <StatTile label="Flagged Issues"       value={loading ? '—' : stats.flaggedIssues}       icon={AlertTriangle} tone={stats.flaggedIssues > 0 ? 'red' : 'slate'} />
-        <StatTile label="Pending Resolution"   value={loading ? '—' : stats.pendingResolution}   icon={TriangleAlert} tone={stats.pendingResolution > 0 ? 'amber' : 'slate'} />
+        <StatTile label={RV.kpi.receivedToday}      value={loading ? '—' : stats.receivedToday}       icon={PackagePlus}  tone="slate" />
+        <StatTile label={RV.kpi.awaitingInspection} value={loading ? '—' : stats.awaitingInspection}  icon={Clock}        tone={stats.awaitingInspection > 0 ? 'amber' : 'slate'} />
+        <StatTile label={RV.kpi.verifiedGood}      value={loading ? '—' : stats.verifiedGood}        icon={PackageCheck} tone="green" />
+        <StatTile label={RV.kpi.flaggedIssues}      value={loading ? '—' : stats.flaggedIssues}       icon={AlertTriangle} tone={stats.flaggedIssues > 0 ? 'red' : 'slate'} />
+        <StatTile label={RV.kpi.pendingResolution}  value={loading ? '—' : stats.pendingResolution}   icon={TriangleAlert} tone={stats.pendingResolution > 0 ? 'amber' : 'slate'} />
       </div>
 
       {/* Tab bar + search */}
@@ -996,7 +1007,7 @@ export default function ReceivingPage() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search GR no., source, PO…"
+            placeholder={RV.searchPlaceholder}
             className="pl-9"
           />
         </div>
@@ -1012,8 +1023,8 @@ export default function ReceivingPage() {
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
                 <EmptyState
                   icon={CheckCircle2}
-                  title="Inspection queue clear"
-                  message={query ? 'No matching records await inspection.' : 'All received goods have been inspected.'}
+                  title={RV.empty.queueTitle}
+                  message={query ? RV.empty.queueNoMatch : RV.empty.queueAllDone}
                 />
               </div>
             )
@@ -1029,12 +1040,12 @@ export default function ReceivingPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">
-                <th className="text-left px-4 py-3 font-medium text-slate-600">GR No.</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Source</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Items</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Outcomes</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-slate-600">Received</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.grNo}</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.source}</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.items}</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.outcomes}</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.status}</th>
+                <th className="text-left px-4 py-3 font-medium text-slate-600">{RV.table.received}</th>
                 {canReverse && <th className="px-4 py-3" />}
               </tr>
             </thead>
@@ -1046,7 +1057,7 @@ export default function ReceivingPage() {
                 : allRows.length === 0
                 ? (
                   <tr><td colSpan={canReverse ? 7 : 6} className="px-0 py-0">
-                    <EmptyState icon={FileX} title={rows.length === 0 ? 'No records' : 'No matches'} message={rows.length === 0 ? 'Create a goods receiving to begin.' : 'Try adjusting your search.'} />
+                    <EmptyState icon={FileX} title={rows.length === 0 ? RV.empty.noRecords : RV.empty.noMatches} message={rows.length === 0 ? RV.empty.createFirst : RV.empty.adjustSearch} />
                   </td></tr>
                 )
                 : allRows.map((gr) => {
@@ -1058,8 +1069,8 @@ export default function ReceivingPage() {
                   return (
                     <tr key={gr.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-4 py-3 font-mono text-xs font-bold text-green-700">{gr.refNumber}</td>
-                      <td className="px-4 py-3 text-slate-600">{gr.sourceType}</td>
-                      <td className="px-4 py-3 text-slate-500 text-xs">{gr.items?.length ?? 0} item{gr.items?.length !== 1 ? 's' : ''}</td>
+                      <td className="px-4 py-3 text-slate-600">{labelOf(RV.sourceType, gr.sourceType)}</td>
+                      <td className="px-4 py-3 text-slate-500 text-xs">{m.common.units.items.replace('{count}', String(gr.items?.length ?? 0))}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1 flex-wrap">
                           {Object.entries(outcomes).map(([o, c]) => <OutcomeChip key={o} outcome={o} count={c as number} />)}
@@ -1068,7 +1079,7 @@ export default function ReceivingPage() {
                       <td className="px-4 py-3">
                         <ReceivingStatusBadge status={gr.statusEnum?.toLowerCase() ?? gr.status} />
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{formatDate(gr.receivedDate)}</td>
+                      <td className="px-4 py-3 text-xs text-slate-400">{fmt.dateTime(gr.receivedDate)}</td>
                       {canReverse && (
                         <td className="px-4 py-3 text-right">
                           {canBeReversed(gr) && gr.receivedById !== user?.id
