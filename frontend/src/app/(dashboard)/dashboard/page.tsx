@@ -1,210 +1,208 @@
 'use client';
 
-// Executive WMS Operations Center.
-// Live (no feature flag). Reuses existing production APIs only:
-//   /dashboard/kpis · /dashboard/inventory-health · /dashboard/activity · /dashboard/stats
-// No schema, business-logic, endpoint, or workflow changes. All status text is
-// DERIVED from these existing metrics (threshold classification only).
-
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  PackagePlus, MapPin, ShieldCheck, Truck, Send, AlertTriangle, RefreshCw,
-  Activity, Boxes, ShieldAlert,
-} from 'lucide-react';
+// WMS Operations Control Tower (dashboard).
+// Data: GET /dashboard/overview (KPIs, inventory, trend, warehouse comparison,
+// low stock, control counts — warehouse-scoped on the server) and
+// GET /dashboard/activity (latest operational events). Read-only: every action
+// links to the existing module where the work is done.
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { CalendarRange, LayoutDashboard, RefreshCw, TriangleAlert, Warehouse } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { useT } from '@/i18n';
 import {
   dashboardApi,
-  type DashboardKpis, type InventoryHealth, type ActivityEvent,
+  type ActivityEvent, type DashboardGranularity, type DashboardOverview, type DashboardRange,
 } from '@/lib/api';
-import type { DashboardStats } from '@/types';
-import { KpiCard, type KpiTone, type KpiStatus } from '@/components/dashboard/kpi-card';
-import { ExecutiveCard, type ExecLevel } from '@/components/dashboard/executive-card';
-import { InventoryHealthChart } from '@/components/dashboard/inventory-health-chart';
-import { AlertsPanel } from '@/components/dashboard/alerts-panel';
-import { ActivityFeed } from '@/components/dashboard/activity-feed';
-import { OpenTasksSummary } from '@/components/dashboard/open-tasks-summary';
-import { RecentTransactions } from '@/components/dashboard/recent-transactions';
-import { LowStockTable, type LowStockItem } from '@/components/dashboard/low-stock-table';
-import { Button } from '@/components/ui/button';
-import { useAuthStore } from '@/store/auth.store';
-import { useT } from '@/i18n';
+import { KpiStrip } from '@/components/dashboard/control-tower/kpi-strip';
+import { ALLOWED_GRANULARITY, OperationsTrend } from '@/components/dashboard/control-tower/operations-trend';
+import { InventoryDistribution } from '@/components/dashboard/control-tower/inventory-distribution';
+import { ControlCenter } from '@/components/dashboard/control-tower/control-center';
+import { WarehousePerformance } from '@/components/dashboard/control-tower/warehouse-performance';
+import { LowStockItems } from '@/components/dashboard/control-tower/low-stock-items';
+import { ActivityTable } from '@/components/dashboard/control-tower/activity-table';
 
-// Threshold classifier for backlog/risk metrics (real, value-derived).
-const cls = (v: number, warn: number, crit: number): KpiStatus =>
-  v > crit ? 'critical' : v > warn ? 'attention' : 'normal';
+const RANGES: DashboardRange[] = ['7d', '30d', '90d', '12m'];
+const PREFS_KEY = 'wms_dashboard_prefs';
+
+interface Prefs { range: DashboardRange; granularity: DashboardGranularity; warehouseId: string }
+const DEFAULT_PREFS: Prefs = { range: '30d', granularity: 'day', warehouseId: '' };
+
+// Per-viewer convenience only; the page works without it.
+function readPrefs(): Prefs {
+  try {
+    const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') as Partial<Prefs>;
+    const range = RANGES.includes(p.range as DashboardRange) ? (p.range as DashboardRange) : DEFAULT_PREFS.range;
+    const granularity = ALLOWED_GRANULARITY[range].includes(p.granularity as DashboardGranularity) ? (p.granularity as DashboardGranularity) : ALLOWED_GRANULARITY[range][0];
+    return { range, granularity, warehouseId: typeof p.warehouseId === 'string' ? p.warehouseId : '' };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+const browserZone = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; }
+};
 
 export default function DashboardPage() {
-  const user = useAuthStore((s) => s.user);
   const { m, t, fmt } = useT();
-  const d = m.dashboard;
-  const [kpis, setKpis] = useState<DashboardKpis | null>(null);
-  const [health, setHealth] = useState<InventoryHealth | null>(null);
-  const [activity, setActivity] = useState<ActivityEvent[]>([]);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const C = m.dashboard.ct;
+  const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [overview, setOverview] = useState<DashboardOverview | null>(null);
+  const [activity, setActivity] = useState<ActivityEvent[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const seq = useRef(0);
 
-  const load = useCallback(async () => {
+  useEffect(() => { setPrefs(readPrefs()); }, []);
+
+  const update = (patch: Partial<Prefs>) =>
+    setPrefs((p) => {
+      const next = { ...(p ?? DEFAULT_PREFS), ...patch };
+      if (!ALLOWED_GRANULARITY[next.range].includes(next.granularity)) next.granularity = ALLOWED_GRANULARITY[next.range][0];
+      try { localStorage.setItem(PREFS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+      return next;
+    });
+
+  const load = useCallback(async (p: Prefs) => {
+    const id = ++seq.current; // ignore responses from superseded requests
     setLoading(true);
-    try {
-      const [k, h, a, s] = await Promise.all([
-        dashboardApi.kpis(),
-        dashboardApi.inventoryHealth(),
-        dashboardApi.activity(30),
-        dashboardApi.stats(),
-      ]);
-      setKpis(k); setHealth(h); setActivity(a); setStats(s);
-    } catch {
-      // handled by api client
-    } finally {
-      setLoading(false);
+    const [ov, act] = await Promise.allSettled([
+      dashboardApi.overview({ warehouseId: p.warehouseId || undefined, range: p.range, granularity: p.granularity, tz: browserZone() }),
+      dashboardApi.activity(50),
+    ]);
+    if (id !== seq.current) return;
+    if (ov.status === 'fulfilled') {
+      setOverview(ov.value);
+      // A remembered warehouse that is no longer in scope falls back to all.
+      if (p.warehouseId && !ov.value.warehouses.some((w) => w.id === p.warehouseId)) update({ warehouseId: '' });
     }
+    if (act.status === 'fulfilled') setActivity(act.value);
+    setError(ov.status === 'rejected' || act.status === 'rejected');
+    setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (prefs) load(prefs); }, [prefs, load]);
 
-  // ── Derived executive figures (existing metrics only) ──────────────────────
-  const derived = useMemo(() => {
-    const k = kpis;
-    const h = health;
-    const invTotal = h ? h.available + h.reserved + h.picked + h.qcHold + h.rtvPending : 0;
-    const healthPct = invTotal > 0 ? Math.round((h!.available / invTotal) * 100) : null;
-    const atRisk = h ? h.qcHold + h.rtvPending : 0;
-    const riskShare = invTotal > 0 ? atRisk / invTotal : 0;
-    const openTasks = k ? k.pendingPutaway + k.pendingApproval + k.activeFulfillment : 0;
-    const riskCount = k ? k.lowStockAlerts + k.openReturns : 0;
-
-    // Operations level
-    let opsLevel: ExecLevel = 'ok';
-    if (k && (k.pendingApproval > 15 || k.pendingPutaway > 25)) opsLevel = 'critical';
-    else if (k && (k.pendingApproval + k.pendingPutaway) > 0) opsLevel = 'warn';
-    const opsHeadline = opsLevel === 'ok' ? d.exec.opsOk
-      : opsLevel === 'warn' ? d.exec.opsWarn
-      : d.exec.opsCritical;
-
-    // Inventory level
-    let invLevel: ExecLevel = 'ok';
-    if (invTotal > 0 && (healthPct! < 50 || riskShare > 0.2)) invLevel = 'critical';
-    else if (invTotal > 0 && (healthPct! < 75 || riskShare > 0.1)) invLevel = 'warn';
-    const invHeadline = invTotal === 0 ? d.exec.invNoData
-      : invLevel === 'critical' ? d.exec.invRisk
-      : t(d.exec.invHealth, { pct: healthPct });
-    const invSub = invTotal === 0 ? undefined
-      : invLevel === 'critical' ? t(d.exec.invSubCritical, { pct: healthPct, count: fmt.number(atRisk) })
-      : invLevel === 'warn' ? t(d.exec.invSubWarn, { count: fmt.number(atRisk) })
-      : t(d.exec.invSubOk, { available: fmt.number(h!.available), total: fmt.number(invTotal) });
-
-    // Business risk level (dominant)
-    let riskLevel: ExecLevel = 'ok';
-    if (k && (k.lowStockAlerts > 10 || riskCount > 10)) riskLevel = 'critical';
-    else if (riskCount > 0) riskLevel = 'warn';
-    const riskHeadline = riskLevel === 'ok' ? d.exec.riskOk
-      : riskLevel === 'warn' ? t(d.exec.riskWarn, { count: riskCount })
-      : d.exec.riskCritical;
-    const riskSub = k ? t(d.exec.riskSub, { low: k.lowStockAlerts, exceptions: k.openReturns }) : undefined;
-
-    return { invTotal, healthPct, openTasks, riskCount, opsLevel, opsHeadline,
-      invLevel, invHeadline, invSub, riskLevel, riskHeadline, riskSub };
-  }, [kpis, health, d, t, fmt]);
-
-  const lowStockItems = (stats?.lowStockAlerts ?? []) as unknown as LowStockItem[];
-
-  // Row 2 KPI cards with threshold status indicators.
-  const cards: { label: string; value: number | null; icon: typeof PackagePlus; tone: KpiTone; href: string; status: KpiStatus }[] = [
-    { label: d.metrics.receivingToday, value: kpis?.todayReceiving    ?? null, icon: PackagePlus,   tone: 'blue',   href: '/receiving',            status: 'normal' },
-    { label: d.metrics.pendingPutaway, value: kpis?.pendingPutaway    ?? null, icon: MapPin,        tone: 'blue',   href: '/putaway',              status: cls(kpis?.pendingPutaway ?? 0, 0, 25) },
-    { label: d.metrics.pendingApproval, value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'blue',   href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
-    { label: d.metrics.activeFulfillment, value: kpis?.activeFulfillment ?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: d.metrics.shipmentToday, value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: d.metrics.criticalAlerts, value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/reports?tab=balance',          status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
-  ];
+  const p = prefs ?? DEFAULT_PREFS;
+  const warehouseId = p.warehouseId || undefined;
+  const busy = loading || !prefs;
 
   return (
-    <div className="p-4 sm:p-5 space-y-4 bg-slate-50 min-h-full">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600">{d.company}</p>
-          <h1 className="text-2xl font-bold text-slate-900 mt-0.5">{d.title}</h1>
-          <p className="text-slate-500 text-sm mt-0.5">
-            {t(d.welcome, { name: user?.fullName ?? '' })} · {fmt.dateLong(new Date())}
-          </p>
+    <div className="min-h-full space-y-4 bg-slate-50 p-3 sm:p-5">
+      {/* Header + filters */}
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-green-600 text-white shadow-sm sm:grid">
+            <LayoutDashboard className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-green-700">{m.dashboard.company}</p>
+            <h1 className="text-xl font-bold leading-tight text-slate-900 sm:text-2xl">{C.title}</h1>
+            <p className="text-xs text-slate-500 sm:text-sm">{C.subtitle} · {fmt.dateLong(new Date())}</p>
+          </div>
         </div>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
-          <RefreshCw className={loading ? 'w-4 h-4 animate-spin' : 'w-4 h-4'} /> {m.common.actions.refresh}
-        </Button>
-      </div>
 
-      {/* ROW 1 — Executive Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <ExecutiveCard
-          title={d.exec.operations} icon={Activity} level={derived.opsLevel}
-          headline={derived.opsHeadline}
-          subline={t(d.exec.openTasksAcross, { count: fmt.number(derived.openTasks) })}
-          loading={loading}
-          metrics={[
-            { label: d.metrics.openTasks, value: derived.openTasks },
-            { label: d.metrics.activeFulfillment, value: kpis?.activeFulfillment ?? 0 },
-            { label: d.metrics.pendingPutaway, value: kpis?.pendingPutaway ?? 0 },
-            { label: d.metrics.pendingApproval, value: kpis?.pendingApproval ?? 0 },
-          ]}
-        />
-        <ExecutiveCard
-          title={d.exec.inventory} icon={Boxes} level={derived.invLevel}
-          headline={derived.invHeadline} subline={derived.invSub}
-          loading={loading}
-          metrics={[
-            { label: d.metrics.available, value: health?.available ?? 0 },
-            { label: d.metrics.reserved, value: health?.reserved ?? 0 },
-            { label: d.metrics.qcHold, value: health?.qcHold ?? 0 },
-            { label: d.metrics.rtvPending, value: health?.rtvPending ?? 0 },
-          ]}
-        />
-        <ExecutiveCard
-          title={d.exec.risk} icon={ShieldAlert} level={derived.riskLevel} dominant
-          headline={derived.riskHeadline} subline={derived.riskSub}
-          loading={loading}
-          metrics={[
-            { label: d.metrics.lowStockAlerts, value: kpis?.lowStockAlerts ?? 0 },
-            { label: d.metrics.inventoryExceptions, value: kpis?.openReturns ?? 0 },
-          ]}
-        />
-      </div>
-
-      {/* ROW 2 — KPI Operations Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
-        {cards.map((c) => (
-          <KpiCard key={c.label} label={c.label} value={c.value} icon={c.icon} tone={c.tone} status={c.status} href={c.href} loading={loading} />
-        ))}
-      </div>
-
-      {/* ROW 3 — Critical Alert Center + Inventory Health */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch">
-        <AlertsPanel
-          data={kpis ? { lowStock: kpis.lowStockAlerts, pendingApproval: kpis.pendingApproval, pendingPutaway: kpis.pendingPutaway, inventoryExceptions: kpis.openReturns } : undefined}
-          loading={loading}
-        />
-        <div className="lg:col-span-2">
-          <InventoryHealthChart data={health ?? undefined} loading={loading} />
+        <div className="flex flex-wrap items-center gap-2 xl:shrink-0 xl:flex-nowrap">
+          <FilterSelect icon={Warehouse} label={C.filters.warehouse} value={p.warehouseId} onChange={(v) => update({ warehouseId: v })}>
+            <option value="">{C.allWarehouses}</option>
+            {(overview?.warehouses ?? []).map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
+          </FilterSelect>
+          <FilterSelect icon={CalendarRange} label={C.filters.period} value={p.range} onChange={(v) => update({ range: v as DashboardRange })}>
+            {RANGES.map((r) => <option key={r} value={r}>{C.range[r]}</option>)}
+          </FilterSelect>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={() => prefs && load(prefs)} disabled={busy}>
+            <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} /> {m.common.actions.refresh}
+          </Button>
+          {overview && (
+            <span className="flex h-9 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-600">
+              <span className={cn('h-2 w-2 rounded-full', error ? 'bg-amber-500' : 'bg-emerald-500')} />
+              {t(C.updated, { time: fmt.time(overview.generatedAt) })}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* ROW 4 — Warehouse Activity Timeline (operational heartbeat) */}
-      <ActivityFeed events={activity} loading={loading} />
+      {error && (
+        overview ? (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <TriangleAlert className="h-4 w-4 shrink-0" /> {C.partialError}
+            <button type="button" className="ml-auto font-medium underline" onClick={() => prefs && load(prefs)}>{C.retry}</button>
+          </div>
+        ) : !busy && (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-red-200 bg-white py-14 text-center">
+            <TriangleAlert className="h-8 w-8 text-red-500" />
+            <p className="text-sm text-slate-700">{C.loadError}</p>
+            <Button size="sm" onClick={() => prefs && load(prefs)}>{C.retry}</Button>
+          </div>
+        )
+      )}
 
-      {/* ROW 5 — Workload & Transactions */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-stretch">
-        <OpenTasksSummary
-          data={kpis ? { pendingPutaway: kpis.pendingPutaway, pendingApproval: kpis.pendingApproval, activeFulfillment: kpis.activeFulfillment, shipmentQueue: kpis.shipmentToday } : undefined}
-          loading={loading}
-        />
-        <RecentTransactions logs={stats?.recentAuditLogs} loading={loading} />
-      </div>
+      {(overview || busy) && (
+        <>
+          {/* A — Executive overview */}
+          <KpiStrip data={overview} loading={busy && !overview} warehouseId={warehouseId} />
 
-      {/* ROW 7 — Inventory Risk Monitoring (rendered only when low-stock data exists) */}
-      {(loading || lowStockItems.length > 0) && (
-        <div className="grid grid-cols-1 gap-4">
-          <LowStockTable items={lowStockItems} loading={loading} />
-        </div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+            {/* B — Operations performance  ·  C — Inventory intelligence */}
+            <div className="min-w-0 xl:col-span-7">
+              <OperationsTrend
+                data={overview}
+                loading={busy}
+                range={p.range}
+                granularity={p.granularity}
+                onGranularity={(g) => update({ granularity: g })}
+              />
+            </div>
+            <div className="min-w-0 xl:col-span-5">
+              <InventoryDistribution data={overview} loading={busy} warehouseId={warehouseId} />
+            </div>
+
+            {/* D — Operations control center  ·  E — Warehouse performance */}
+            <div className="min-w-0 xl:col-span-7">
+              <ControlCenter data={overview} loading={busy} />
+            </div>
+            <div className="min-w-0 xl:col-span-5">
+              <WarehousePerformance data={overview} loading={busy} onSelectWarehouse={(id) => { update({ warehouseId: id }); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
+            </div>
+
+            {/* F — Top low stock  ·  G — Recent activity */}
+            <div id="low-stock" className="min-w-0 scroll-mt-4 xl:col-span-6">
+              <LowStockItems data={overview} loading={busy} warehouseId={warehouseId} />
+            </div>
+            <div className="min-w-0 xl:col-span-6">
+              <ActivityTable events={activity} loading={busy} />
+            </div>
+          </div>
+        </>
       )}
     </div>
+  );
+}
+
+function FilterSelect({
+  icon: Icon, label, value, onChange, children,
+}: {
+  icon: typeof Warehouse;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="relative flex h-9 min-w-0 items-center rounded-md border border-slate-200 bg-white pl-2.5 text-sm text-slate-700 shadow-xs focus-within:ring-2 focus-within:ring-green-600/30">
+      <Icon className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+      <span className="sr-only">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-full max-w-[220px] cursor-pointer appearance-none truncate bg-transparent pl-2 pr-7 outline-none"
+      >
+        {children}
+      </select>
+      <svg className="pointer-events-none absolute right-2 h-4 w-4 text-slate-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+        <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+      </svg>
+    </label>
   );
 }

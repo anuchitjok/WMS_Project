@@ -1,17 +1,47 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { DashboardService } from './dashboard.service';
 import { WorkQueueService } from './work-queue.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { warehouseFilter } from '../common/warehouse-scope';
+import { scopedWarehouseIds, warehouseFilter } from '../common/warehouse-scope';
+import {
+  ControlTowerService, DASHBOARD_GRANULARITIES, DASHBOARD_RANGES,
+  type DashboardGranularity, type DashboardRange,
+} from './control-tower.service';
 
 @ApiTags('Dashboard')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('dashboard')
 export class DashboardController {
-  constructor(private readonly dashboardService: DashboardService, private readonly workQueue: WorkQueueService) {}
+  constructor(
+    private readonly dashboardService: DashboardService,
+    private readonly workQueue: WorkQueueService,
+    private readonly controlTower: ControlTowerService,
+  ) {}
+
+  // Operations Control Tower — one read-only payload for the redesigned dashboard
+  // (KPIs, inventory, trend, warehouse comparison, low stock, control counts).
+  @Get('overview')
+  @ApiOperation({ summary: 'Control Tower — KPIs, trend, warehouse comparison and alerts (read-only)' })
+  getOverview(
+    @Query('warehouseId') warehouseId?: string,
+    @Query('range') range: string = '30d',
+    @Query('granularity') granularity: string = 'day',
+    @Query('tz') tz?: string,
+    @CurrentUser() user?: any,
+  ) {
+    if (!DASHBOARD_RANGES.includes(range as DashboardRange)) throw new BadRequestException(`range must be one of ${DASHBOARD_RANGES.join(', ')}`);
+    if (!DASHBOARD_GRANULARITIES.includes(granularity as DashboardGranularity)) throw new BadRequestException(`granularity must be one of ${DASHBOARD_GRANULARITIES.join(', ')}`);
+    return this.controlTower.overview({
+      filter: warehouseFilter(user, warehouseId),
+      scope: scopedWarehouseIds(user),
+      range: range as DashboardRange,
+      granularity: granularity as DashboardGranularity,
+      tz,
+    });
+  }
 
   @Get('stats')
   @ApiOperation({ summary: 'Get dashboard KPIs and stats (legacy V1 — unchanged)' })

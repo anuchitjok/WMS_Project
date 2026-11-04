@@ -42,6 +42,11 @@ const ACTION_MAP: Record<string, ActivityMeta> = {
   HANDOVER_CONFIRMED:        { domain: 'RMA',         label: 'Handover to RMA',       tone: 'green' },
   UNUSED_RETURNED_TO_STOCK:  { domain: 'RMA',         label: 'Unused returned',       tone: 'green' },
   UNUSED_MARKED_DOA:         { domain: 'RMA',         label: 'Return marked DOA',     tone: 'red' },
+  // Returns to vendor
+  RTV_CREATED:               { domain: 'RMA',         label: 'RTV created',           tone: 'amber' },
+  RTV_CASE_CREATED:          { domain: 'RMA',         label: 'RTV case created',      tone: 'amber' },
+  RTV_STATUS_CHANGED:        { domain: 'RMA',         label: 'RTV status changed',    tone: 'amber' },
+  RTV_REPLACEMENT_RECEIVED:  { domain: 'RMA',         label: 'RTV replacement received', tone: 'green' },
   // Inventory movements
   STOCK_RESERVED:            { domain: 'INVENTORY',   label: 'Stock reserved',        tone: 'slate' },
   STOCK_RESERVATION_RELEASED:{ domain: 'INVENTORY',   label: 'Reservation released',  tone: 'slate' },
