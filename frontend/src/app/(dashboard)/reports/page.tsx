@@ -58,15 +58,15 @@ function SummarySection() {
 }
 
 // ─── Inventory report viewer ──────────────────────────────────────────────────
-function ReportViewer({ report, warehouses, initialStockId }: { report: ReportType; warehouses: any[]; initialStockId?: string }) {
+function ReportViewer({ report, warehouses, initialStockId, initialWarehouseId, initialQ }: { report: ReportType; warehouses: any[]; initialStockId?: string; initialWarehouseId?: string; initialQ?: string }) {
   const [detailId, setDetailId] = useState<string | null>(initialStockId ?? null);
   const [result, setResult] = useState<ReportResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [warehouseId, setWarehouseId] = useState('');
+  const [warehouseId, setWarehouseId] = useState(initialWarehouseId ?? '');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(initialQ ?? '');
   const { m, t, fmt } = useT();
   const RP = m.reports;
   const colHeader = (key: string, fallback: string) => (RP.columns as Record<string, string>)[key] ?? fallback;
@@ -192,6 +192,7 @@ export default function ReportsPage() {
   const [tab, setTab] = useState<ReportType>('master-data');
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [linkedStock, setLinkedStock] = useState<string | undefined>();
+  const [linkedFilter, setLinkedFilter] = useState<{ warehouseId?: string; q?: string }>({});
   const { m } = useT();
   const RP = m.reports;
 
@@ -205,6 +206,8 @@ export default function ReportsPage() {
     if (t && REPORTS.includes(t as ReportType)) setTab(t as ReportType);
     const s = params.get('stock');
     if (s) setLinkedStock(s);
+    // Dashboard drill-downs: ?warehouse=<id>&q=<sku>
+    setLinkedFilter({ warehouseId: params.get('warehouse') ?? undefined, q: params.get('q') ?? undefined });
   }, []);
 
   return (
@@ -222,7 +225,7 @@ export default function ReportsPage() {
           {REPORTS.map((r) => (
             <TabsContent key={r} value={r} className="mt-4">
               <p className="text-sm text-slate-500 mb-3">{RP.desc[r]}</p>
-              {tab === r && <ReportViewer report={r} warehouses={warehouses} initialStockId={r === 'balance' ? linkedStock : undefined} />}
+              {tab === r && <ReportViewer key={r === 'balance' ? `${linkedFilter.warehouseId ?? ''}|${linkedFilter.q ?? ''}` : r} report={r} warehouses={warehouses} initialStockId={r === 'balance' ? linkedStock : undefined} initialWarehouseId={r === 'balance' ? linkedFilter.warehouseId : undefined} initialQ={r === 'balance' ? linkedFilter.q : undefined} />}
             </TabsContent>
           ))}
         </Tabs>

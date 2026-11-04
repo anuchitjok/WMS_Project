@@ -128,5 +128,9 @@ export const status: Messages['status'] = {
     UNUSED_MARKED_DOA: 'ระบุสินค้าคืนเป็น DOA',
     STOCK_RESERVED: 'จองสต็อก',
     STOCK_RESERVATION_RELEASED: 'ปลดการจอง',
+    RTV_CREATED: 'สร้าง RTV',
+    RTV_CASE_CREATED: 'สร้างเคส RTV',
+    RTV_STATUS_CHANGED: 'เปลี่ยนสถานะ RTV',
+    RTV_REPLACEMENT_RECEIVED: 'รับสินค้าทดแทน RTV',
   },
 };

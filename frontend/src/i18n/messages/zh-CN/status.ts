@@ -128,5 +128,9 @@ export const status: Messages['status'] = {
     UNUSED_MARKED_DOA: '退回物品标记为 DOA',
     STOCK_RESERVED: '库存已预留',
     STOCK_RESERVATION_RELEASED: '预留已释放',
+    RTV_CREATED: 'RTV 已创建',
+    RTV_CASE_CREATED: 'RTV 案例已创建',
+    RTV_STATUS_CHANGED: 'RTV 状态已变更',
+    RTV_REPLACEMENT_RECEIVED: 'RTV 替换件已收货',
   },
 };

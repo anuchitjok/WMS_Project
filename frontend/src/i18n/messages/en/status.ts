@@ -130,5 +130,9 @@ export const status = {
     UNUSED_MARKED_DOA: 'Return marked DOA',
     STOCK_RESERVED: 'Stock reserved',
     STOCK_RESERVATION_RELEASED: 'Reservation released',
+    RTV_CREATED: 'RTV created',
+    RTV_CASE_CREATED: 'RTV case created',
+    RTV_STATUS_CHANGED: 'RTV status changed',
+    RTV_REPLACEMENT_RECEIVED: 'RTV replacement received',
   },
 };

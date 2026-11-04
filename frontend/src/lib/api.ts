@@ -166,8 +166,50 @@ export interface ActivityEvent {
   detail: string | null;
   createdAt: string;
   user?: { fullName: string } | null;
+  /** Document number resolved by the backend (GR/request/task/shipment/RTV, or SKU · serial). */
+  ref?: string | null;
 }
+
+// Operations Control Tower (/dashboard/overview)
+export type DashboardRange = '7d' | '30d' | '90d' | '12m';
+export type DashboardGranularity = 'day' | 'week' | 'month';
+export type FlowKey = 'receiving' | 'putaway' | 'fulfillment' | 'shipment';
+export type FlowCounts = Record<FlowKey, number>;
+export interface WarehouseStock { available: number; reserved: number; picked: number; qcHold: number; rtvPending: number; total: number }
+export interface DashboardOverview {
+  generatedAt: string;
+  timeZone: string;
+  period: { range: DashboardRange; granularity: DashboardGranularity; start: string; previousStart: string };
+  kpis: DashboardKpis & { rtvOverdue: number | null };
+  inventory: InventoryHealth;
+  flows: { current: FlowCounts; previous: FlowCounts };
+  trend: ({ bucket: string } & FlowCounts)[];
+  control: {
+    overdueApprovals: number;
+    overduePicking: number;
+    overdueRtv: number | null;
+    fulfillmentExceptions: number;
+    doaAwaitingRtv: number;
+  };
+  warehouses: { id: string; code: string; name: string }[];
+  byWarehouse: { id: string | null; code: string | null; name: string | null; stock: WarehouseStock; volume: FlowCounts }[];
+  lowStock: {
+    count: number;
+    top: {
+      id: string; code: string; name: string; available: number; minStock: number;
+      thresholdSource: 'product' | 'system'; shortage: number; severity: 'critical' | 'warning';
+      warehouses: { id: string | null; code: string | null; available: number }[];
+    }[];
+  };
+}
+
 export const dashboardApi = {
+  overview: (p: { warehouseId?: string; range: DashboardRange; granularity: DashboardGranularity; tz?: string }) => {
+    const q = new URLSearchParams({ range: p.range, granularity: p.granularity });
+    if (p.warehouseId) q.set('warehouseId', p.warehouseId);
+    if (p.tz) q.set('tz', p.tz);
+    return request<DashboardOverview>(`/dashboard/overview?${q}`);
+  },
   stats: () => request<DashboardStats>('/dashboard/stats'),
   // Dashboard V2 (now the live dashboard)
   kpis: (warehouseId?: string) =>

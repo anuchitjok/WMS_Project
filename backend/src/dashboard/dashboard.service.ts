@@ -2,7 +2,7 @@ import { RTV_CLOSED } from '../rtv/rtv.service';
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StockStatus, RequestStatus, FulfillmentStatus } from '@prisma/client';
-import { getLowStockProducts } from '../common/inventory-metrics';
+import { getLowStockProducts, type LowStockProduct } from '../common/inventory-metrics';
 import { SystemSettingsService } from '../settings/system-settings.service';
 
 /** Prisma filter for StockItem/FulfillmentTask.warehouseId; undefined = all warehouses. */
@@ -76,7 +76,9 @@ export class DashboardService {
   }
 
   // ── Dashboard V2 (additive — Section A: Executive KPIs) ─────────────────────
-  async getKpis(warehouseId?: WarehouseFilter) {
+  // `lowStockList` lets a caller that already computed the shared low-stock
+  // metric for the same scope pass it in instead of querying it twice.
+  async getKpis(warehouseId?: WarehouseFilter, lowStockList?: LowStockProduct[]) {
     const since = startOfToday();
     const whStock = warehouseId ? { warehouseId } : {};
     const [
@@ -96,7 +98,7 @@ export class DashboardService {
       this.prisma.shipment.count({ where: { shippedAt: { gte: since } } }),
       this.prisma.withdrawalRequest.count({ where: { status: { not: RequestStatus.COMPLETED }, items: { some: { usageStatus: { in: ['UNUSED', 'WRONG_ITEM'] } } } } }),
       this.prisma.rTVCase.count({ where: { status: { notIn: ['COMPLETED', 'CANCELLED'] as any }, ...(warehouseId ? { stockItem: { warehouseId } } : {}) } }),
-      this.lowStock(warehouseId),
+      lowStockList ?? this.lowStock(warehouseId),
     ]);
 
     return {
@@ -133,13 +135,42 @@ export class DashboardService {
       'SHIPMENT_CREATED', 'SHIPMENT_DISPATCHED', 'SHIPMENT_GOODS_ISSUED', 'GOODS_ISSUED',
       // RMA / Returns
       'RMA_USAGE_CONFIRMED', 'HANDOVER_CONFIRMED', 'UNUSED_RETURNED_TO_STOCK', 'UNUSED_MARKED_DOA',
+      // RTV (returns to vendor)
+      'RTV_CREATED', 'RTV_CASE_CREATED', 'RTV_STATUS_CHANGED', 'RTV_REPLACEMENT_RECEIVED',
     ];
-    return this.prisma.auditLog.findMany({
+    const logs = await this.prisma.auditLog.findMany({
       where: { action: { in: OPERATIONAL_ACTIONS } },
       include: { user: { select: { fullName: true } } },
       orderBy: { createdAt: 'desc' },
       take: Math.min(limit, 50),
     });
+    const refs = await this.activityRefs(logs);
+    return logs.map((l) => ({ ...l, ref: (l.entityId && refs.get(`${l.entityType}:${l.entityId}`)) || null }));
+  }
+
+  /** Document numbers for activity rows (entityId is an internal id). Read-only lookups, batched per type. */
+  private async activityRefs(logs: { entityType: string | null; entityId: string | null }[]) {
+    const idsOf = (type: string) => [...new Set(logs.filter((l) => l.entityType === type && l.entityId).map((l) => l.entityId!))];
+    const [gr, req, task, ship, stock, rtv] = await Promise.all([
+      this.prisma.goodsReceiving.findMany({ where: { id: { in: idsOf('GoodsReceiving') } }, select: { id: true, refNumber: true } }),
+      this.prisma.withdrawalRequest.findMany({ where: { id: { in: idsOf('WithdrawalRequest') } }, select: { id: true, refNumber: true } }),
+      this.prisma.fulfillmentTask.findMany({ where: { id: { in: idsOf('FulfillmentTask') } }, select: { id: true, refNumber: true } }),
+      // SHIPMENT_GOODS_ISSUED logs the shipment ref as entityId; others log the id.
+      this.prisma.shipment.findMany({
+        where: { OR: [{ id: { in: idsOf('Shipment') } }, { refNumber: { in: idsOf('Shipment') } }] },
+        select: { id: true, refNumber: true },
+      }),
+      this.prisma.stockItem.findMany({ where: { id: { in: idsOf('StockItem') } }, select: { id: true, serialNumber: true, product: { select: { code: true } } } }),
+      this.prisma.rTVCase.findMany({ where: { id: { in: idsOf('RTVCase') } }, select: { id: true, refNumber: true } }),
+    ]);
+    const map = new Map<string, string>();
+    gr.forEach((r) => map.set(`GoodsReceiving:${r.id}`, r.refNumber));
+    req.forEach((r) => map.set(`WithdrawalRequest:${r.id}`, r.refNumber));
+    task.forEach((r) => map.set(`FulfillmentTask:${r.id}`, r.refNumber));
+    ship.forEach((r) => { map.set(`Shipment:${r.id}`, r.refNumber); map.set(`Shipment:${r.refNumber}`, r.refNumber); });
+    stock.forEach((r) => map.set(`StockItem:${r.id}`, r.serialNumber ? `${r.product.code} · ${r.serialNumber}` : r.product.code));
+    rtv.forEach((r) => map.set(`RTVCase:${r.id}`, r.refNumber));
+    return map;
   }
 
   // ── Dashboard V2 (additive — Section B: Inventory Health) ───────────────────
