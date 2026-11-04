@@ -14,7 +14,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import Link from 'next/link';
-import { REQUEST_STAGE_COLORS, REQUEST_STAGE_LABELS, REQUEST_STATUS_COLORS, formatDate } from '@/lib/utils';
+import { REQUEST_STAGE_COLORS, REQUEST_STAGE_LABELS, REQUEST_STATUS_COLORS } from '@/lib/utils';
+import { labelOf, useT } from '@/i18n';
 import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckCircle2, Eye, Send, X, Truck } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -22,6 +23,7 @@ import { toast } from 'sonner';
 function TimelineRow({ label, who, at, done, tone = 'slate' }: {
   label: string; who?: string; at?: string | null; done: boolean; tone?: 'slate' | 'green' | 'red';
 }) {
+  const { fmt } = useT();
   const dot = !done ? 'bg-slate-200' : tone === 'red' ? 'bg-red-500' : tone === 'green' ? 'bg-green-500' : 'bg-slate-400';
   return (
     <li className="flex items-start gap-3">
@@ -30,7 +32,7 @@ function TimelineRow({ label, who, at, done, tone = 'slate' }: {
         <p className={`text-sm ${done ? 'text-slate-800' : 'text-slate-400'}`}>{label}</p>
         {(who || at) && (
           <p className="text-xs text-slate-400">
-            {who}{who && at ? ' · ' : ''}{at ? formatDate(at) : ''}
+            {who}{who && at ? ' · ' : ''}{at ? fmt.dateTime(at) : ''}
           </p>
         )}
       </div>
@@ -60,23 +62,21 @@ interface ItemRow {
 
 // Filter by the derived stage (request + its fulfillment task), the same value
 // the badges show — so every request is reachable, including in-fulfillment ones.
-const STAGE_OPTIONS: { value: RequestStage | 'ALL'; label: string }[] = [
-  { value: 'ALL', label: 'All Statuses' },
-  ...(Object.keys(REQUEST_STAGE_LABELS) as RequestStage[]).map((s) => ({ value: s, label: REQUEST_STAGE_LABELS[s] })),
-];
+const STAGE_VALUES: (RequestStage | 'ALL')[] = ['ALL', ...(Object.keys(REQUEST_STAGE_LABELS) as RequestStage[])];
 
 /** Badge for a request: the derived stage when the API sent one, else the raw status. */
 function RequestStageBadge({ req }: { req: WithdrawalRequest }) {
+  const { m } = useT();
   if (req.stage) {
     return (
       <Badge className={REQUEST_STAGE_COLORS[req.stage]} variant="outline">
-        {REQUEST_STAGE_LABELS[req.stage]}
+        {labelOf(m.status.stage, req.stage)}
       </Badge>
     );
   }
   return (
     <Badge className={REQUEST_STATUS_COLORS[req.status]} variant="outline">
-      {req.status.replace(/_/g, ' ')}
+      {labelOf(m.status.request, req.status)}
     </Badge>
   );
 }
@@ -105,6 +105,7 @@ function SearchableDropdown({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const ref = useRef<HTMLDivElement>(null);
+  const { m } = useT();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -144,7 +145,7 @@ function SearchableDropdown({
               <input
                 autoFocus
                 className="w-full pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-md outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/20"
-                placeholder="Search…"
+                placeholder={m.common.search.placeholder}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -152,7 +153,7 @@ function SearchableDropdown({
           </div>
           <ul className="max-h-56 overflow-y-auto py-1">
             {filtered.length === 0 ? (
-              <li className="px-3 py-3 text-sm text-slate-400 text-center">No results found</li>
+              <li className="px-3 py-3 text-sm text-slate-400 text-center">{m.common.states.noResults}</li>
             ) : (
               filtered.map((o) => (
                 <li
@@ -201,6 +202,8 @@ function ItemCard({
   onUpdate: (patch: Partial<ItemRow>) => void;
   onRemove: () => void;
 }) {
+  const { m, t, fmt } = useT();
+  const R = m.requests;
   const overQty = !!selectedProduct && item.quantity > selectedProduct.availableQty;
   const stockOk = !!selectedProduct && selectedProduct.availableQty > 0;
 
@@ -210,7 +213,7 @@ function ItemCard({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-xs font-semibold px-2.5 py-0.5">
-              Item #{idx + 1}
+              {t(R.itemNo, { n: idx + 1 })}
             </Badge>
           </div>
           {canRemove && (
@@ -233,7 +236,7 @@ function ItemCard({
           {/* Brand */}
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">
-              Brand <span className="text-red-500">*</span>
+              {R.brand} <span className="text-red-500">*</span>
             </Label>
             <Select
               value={item.brandId}
@@ -243,7 +246,7 @@ function ItemCard({
                 <SelectValue>
                   {item.brandId
                     ? brands.find((b) => b.id === item.brandId)?.name
-                    : <span className="text-muted-foreground">Select brand…</span>}
+                    : <span className="text-muted-foreground">{R.selectBrand}</span>}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -257,16 +260,16 @@ function ItemCard({
           {/* SKU */}
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">
-              SKU <span className="text-red-500">*</span>
+              {R.sku} <span className="text-red-500">*</span>
             </Label>
             <SearchableDropdown
-              placeholder={item.brandId ? 'Search SKU…' : 'Select brand first'}
+              placeholder={item.brandId ? R.searchSku : R.selectBrandFirst}
               disabled={!item.brandId}
               value={item.productId}
               options={brandProducts.map((p) => ({
                 value: p.id,
                 label: `${p.code} — ${p.name}`,
-                sublabel: `Avail: ${p.availableQty}`,
+                sublabel: t(R.avail, { qty: p.availableQty }),
               }))}
               renderOption={(o) => {
                 const prod = brandProducts.find((p) => p.id === o.value);
@@ -302,7 +305,7 @@ function ItemCard({
           {/* Quantity */}
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">
-              Quantity <span className="text-red-500">*</span>
+              {R.quantity} <span className="text-red-500">*</span>
             </Label>
             <Input
               type="number"
@@ -316,7 +319,7 @@ function ItemCard({
 
           {/* Available Stock display */}
           <div className="space-y-1.5">
-            <Label className="text-sm font-medium text-muted-foreground">Available Stock</Label>
+            <Label className="text-sm font-medium text-muted-foreground">{R.availableStock}</Label>
             {selectedProduct ? (
               <div className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm font-semibold ${
                 stockOk
@@ -326,12 +329,12 @@ function ItemCard({
                 {stockOk
                   ? <CheckCircle2 className="h-4 w-4 shrink-0" />
                   : <AlertTriangle className="h-4 w-4 shrink-0" />}
-                {selectedProduct.availableQty.toLocaleString()} Units
+                {t(R.unitsCount, { count: fmt.number(selectedProduct.availableQty) })}
               </div>
             ) : (
               <div className="flex items-center gap-2 px-3 py-2 rounded-md border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-400">
                 <Package className="h-4 w-4" />
-                Select SKU first
+                {R.selectSkuFirst}
               </div>
             )}
           </div>
@@ -340,23 +343,23 @@ function ItemCard({
         {/* Product Summary Panel */}
         {selectedProduct && (
           <div className="rounded-lg bg-muted/30 border border-border p-3">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Product Detail</p>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{R.productDetail}</p>
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div>
-                <p className="text-xs text-muted-foreground">SKU</p>
+                <p className="text-xs text-muted-foreground">{R.sku}</p>
                 <p className="font-mono font-semibold text-slate-800">{selectedProduct.code}</p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Available</p>
+                <p className="text-xs text-muted-foreground">{R.available}</p>
                 <Badge
                   variant="secondary"
                   className={`text-xs mt-0.5 ${stockOk ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}
                 >
-                  {selectedProduct.availableQty} Units
+                  {t(R.unitsCount, { count: fmt.number(selectedProduct.availableQty) })}
                 </Badge>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Brand</p>
+                <p className="text-xs text-muted-foreground">{R.brand}</p>
                 <p className="text-slate-700 font-medium truncate">{selectedProduct.brand?.name ?? '—'}</p>
               </div>
             </div>
@@ -369,8 +372,8 @@ function ItemCard({
           <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
             <span>
-              Quantity exceeds available stock.
-              Maximum allowed: <span className="font-bold">{selectedProduct!.availableQty}</span>
+              {R.overQty}{' '}
+              {R.maxAllowed} <span className="font-bold">{selectedProduct!.availableQty}</span>
             </span>
           </div>
         )}
@@ -383,6 +386,8 @@ function ItemCard({
 
 export default function RequestsPage() {
   const { user } = useAuthStore();
+  const { m, t, fmt } = useT();
+  const R = m.requests;
 
   const [data, setData] = useState<PaginatedResponse<WithdrawalRequest> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -485,11 +490,11 @@ export default function RequestsPage() {
     setActionLoading('submit');
     try {
       await requestsApi.submit(id);
-      toast.success('Request submitted for approval');
+      toast.success(R.toast.submitted);
       setDetailOpen(false);
       load();
     } catch (e: any) {
-      toast.error(e.message ?? 'Failed to submit');
+      toast.error(e.message || R.toast.submitFailed);
     } finally {
       setActionLoading(null);
     }
@@ -499,11 +504,11 @@ export default function RequestsPage() {
     setActionLoading('cancel');
     try {
       await requestsApi.cancel(id);
-      toast.success('Request cancelled');
+      toast.success(R.toast.cancelled);
       setDetailOpen(false);
       load();
     } catch (e: any) {
-      toast.error(e.message ?? 'Failed to cancel');
+      toast.error(e.message || R.toast.cancelFailed);
     } finally {
       setActionLoading(null);
     }
@@ -511,21 +516,21 @@ export default function RequestsPage() {
 
   // Phase 4: what still blocks Create Request (same checks as handleSubmit and the API).
   const missingForCreate = [
-    !rmaCaseNumber.trim() && 'RMA Case Number',
-    items.some((i) => !i.brandId) && 'Brand on every item',
-    items.some((i) => !i.productId) && 'SKU on every item',
-    items.some((i) => !(Number(i.quantity) >= 1)) && 'quantity of at least 1',
+    !rmaCaseNumber.trim() && R.need.rma,
+    items.some((i) => !i.brandId) && R.need.brand,
+    items.some((i) => !i.productId) && R.need.sku,
+    items.some((i) => !(Number(i.quantity) >= 1)) && R.need.qty,
   ].filter(Boolean) as string[];
 
   async function handleSubmit() {
-    if (!rmaCaseNumber.trim()) { toast.error('RMA Case Number is required'); return; }
-    if (items.some((i) => !i.brandId)) { toast.error('Please select a Brand for all items'); return; }
-    if (items.some((i) => !i.productId)) { toast.error('Please select an SKU for all items'); return; }
-    if (items.some((i) => i.quantity < 1)) { toast.error('Quantity must be at least 1'); return; }
+    if (!rmaCaseNumber.trim()) { toast.error(R.toast.rmaRequired); return; }
+    if (items.some((i) => !i.brandId)) { toast.error(R.toast.brandRequired); return; }
+    if (items.some((i) => !i.productId)) { toast.error(R.toast.skuRequired); return; }
+    if (items.some((i) => i.quantity < 1)) { toast.error(R.toast.qtyMin); return; }
     for (const item of items) {
       const prod = getProduct(item.productId);
       if (prod && item.quantity > prod.availableQty) {
-        toast.error(`${prod.code}: Quantity exceeds available stock (${prod.availableQty})`);
+        toast.error(t(R.toast.overStock, { code: prod.code, qty: prod.availableQty }));
         return;
       }
     }
@@ -537,12 +542,12 @@ export default function RequestsPage() {
         remark: remark.trim() || undefined,
         items: items.map((i) => ({ productId: i.productId, quantity: Number(i.quantity) })),
       });
-      toast.success('Request created successfully');
+      toast.success(R.toast.created);
       setOpen(false);
       resetForm();
       load();
     } catch (e: any) {
-      toast.error(e.message ?? 'Failed to create request');
+      toast.error(e.message || R.toast.createFailed);
     } finally {
       setSubmitting(false);
     }
@@ -555,13 +560,13 @@ export default function RequestsPage() {
       {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Withdrawal Requests</h1>
-          <p className="text-slate-500 text-sm mt-1">{data ? `${data.total} requests` : 'Loading…'}</p>
+          <h1 className="text-2xl font-bold text-slate-900">{R.title}</h1>
+          <p className="text-slate-500 text-sm mt-1">{data ? t(R.count, { count: fmt.number(data.total) }) : m.common.states.loading}</p>
         </div>
 
         <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) resetForm(); }}>
           <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white" />}>
-            <Plus className="h-4 w-4 mr-2" />New Request
+            <Plus className="h-4 w-4 mr-2" />{R.newRequest}
           </DialogTrigger>
 
           {/* ── Modal ── */}
@@ -570,18 +575,18 @@ export default function RequestsPage() {
 
             {/* ── Fixed header ── */}
             <DialogHeader className="px-6 pt-5 pb-4 border-b shrink-0">
-              <DialogTitle className="text-lg font-semibold">New Withdrawal Request</DialogTitle>
+              <DialogTitle className="text-lg font-semibold">{R.newTitle}</DialogTitle>
             </DialogHeader>
 
             {/* ── Pinned: Request Information (never scrolls away) ── */}
             <div className="shrink-0 px-6 py-4 border-b bg-muted/20">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                Request Information
+                {R.requestInfo}
               </p>
               <div className="grid grid-cols-2 gap-4">
                 {/* Created By */}
                 <div className="space-y-1.5">
-                  <Label className="text-sm font-medium text-muted-foreground">Created By</Label>
+                  <Label className="text-sm font-medium text-muted-foreground">{R.createdBy}</Label>
                   <div className="flex items-center gap-2 px-3 py-2.5 bg-background border border-border rounded-md text-sm">
                     <User className="h-4 w-4 text-muted-foreground shrink-0" />
                     <span className="font-medium text-slate-800 truncate">{user?.fullName ?? '—'}</span>
@@ -593,10 +598,10 @@ export default function RequestsPage() {
                 {/* RMA Case Number */}
                 <div className="space-y-1.5">
                   <Label className="text-sm font-medium">
-                    RMA Case Number <span className="text-red-500">*</span>
+                    {R.rmaCase} <span className="text-red-500">*</span>
                   </Label>
                   <Input
-                    placeholder="e.g. RMA-2026-0001"
+                    placeholder="RMA-2026-0001"
                     value={rmaCaseNumber}
                     onChange={(e) => setRmaCaseNumber(e.target.value)}
                   />
@@ -611,13 +616,13 @@ export default function RequestsPage() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-base font-semibold text-slate-800">
-                    Requested Items
+                    {R.requestedItems}
                     <span className="ml-2 text-sm font-normal text-muted-foreground">
-                      ({items.length} {items.length === 1 ? 'item' : 'items'})
+                      {t(R.itemCount, { count: items.length })}
                     </span>
                   </h3>
                   <Button type="button" variant="outline" size="sm" onClick={addItem} className="gap-1.5">
-                    <Plus className="h-3.5 w-3.5" /> Add Item
+                    <Plus className="h-3.5 w-3.5" /> {R.addItem}
                   </Button>
                 </div>
 
@@ -641,13 +646,13 @@ export default function RequestsPage() {
               {/* ── Remarks ── */}
               <Card>
                 <CardHeader className="border-b pb-3">
-                  <CardTitle className="text-base font-semibold">Remarks</CardTitle>
+                  <CardTitle className="text-base font-semibold">{R.remarks}</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-4 space-y-2">
                   <textarea
                     rows={5}
                     maxLength={500}
-                    placeholder="Additional notes or reason for this request…"
+                    placeholder={R.remarksPlaceholder}
                     value={remark}
                     onChange={(e) => setRemark(e.target.value)}
                     className="w-full px-3 py-2.5 text-sm border border-input rounded-md bg-background resize-none focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-colors"
@@ -659,20 +664,20 @@ export default function RequestsPage() {
 
             {/* ── Sticky Footer (plain div — avoids DialogFooter's -mx-4 -mb-4 that assumes p-4 on dialog) ── */}
             <div className="shrink-0 flex justify-end items-center gap-2 px-6 py-4 border-t bg-background">
-              {missingForCreate.length > 0 && <p className="mr-auto text-xs text-amber-700">Still needed: {missingForCreate.join(', ')}</p>}
+              {missingForCreate.length > 0 && <p className="mr-auto text-xs text-amber-700">{t(R.stillNeeded, { list: missingForCreate.join(', ') })}</p>}
               <Button
                 variant="outline"
                 onClick={() => { setOpen(false); resetForm(); }}
                 disabled={submitting}
               >
-                Cancel
+                {m.common.actions.cancel}
               </Button>
               <Button
                 className="bg-green-600 hover:bg-green-700 text-white min-w-[140px]"
                 onClick={handleSubmit}
                 disabled={submitting || missingForCreate.length > 0}
               >
-                {submitting ? 'Creating…' : 'Create Request'}
+                {submitting ? R.creating : R.create}
               </Button>
             </div>
           </DialogContent>
@@ -683,10 +688,10 @@ export default function RequestsPage() {
       <div className="flex gap-3">
         <Select value={status} onValueChange={(v) => { setStatus(v ?? 'ALL'); setPage(1); }}>
           <SelectTrigger className="w-52">
-            <SelectValue />
+            <SelectValue>{status === 'ALL' ? R.allStatuses : labelOf(m.status.stage, status)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {STAGE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            {STAGE_VALUES.map((v) => <SelectItem key={v} value={v}>{v === 'ALL' ? R.allStatuses : labelOf(m.status.stage, v)}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>
@@ -700,7 +705,7 @@ export default function RequestsPage() {
                 <DialogTitle className="text-base font-semibold font-mono text-green-700">
                   {detailReq.refNumber}
                 </DialogTitle>
-                <p className="text-xs text-muted-foreground mt-0.5">{formatDate(detailReq.createdAt)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{fmt.dateTime(detailReq.createdAt)}</p>
               </div>
               <RequestStageBadge req={detailReq} />
             </DialogHeader>
@@ -709,16 +714,16 @@ export default function RequestsPage() {
               {/* Meta */}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">Created By</p>
+                  <p className="text-xs text-muted-foreground mb-1">{R.createdBy}</p>
                   <p className="font-medium">{detailReq.requester?.fullName ?? '—'}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1">RMA Case Number</p>
+                  <p className="text-xs text-muted-foreground mb-1">{R.rmaCase}</p>
                   <p className="font-mono font-semibold text-blue-700">{detailReq.rmaCaseNumber ?? '—'}</p>
                 </div>
                 {detailReq.notes && (
                   <div className="col-span-2">
-                    <p className="text-xs text-muted-foreground mb-1">Remark</p>
+                    <p className="text-xs text-muted-foreground mb-1">{R.remark}</p>
                     <p className="text-slate-700">{detailReq.notes}</p>
                   </div>
                 )}
@@ -727,16 +732,16 @@ export default function RequestsPage() {
               {/* Items */}
               <div>
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                  Requested Items ({detailReq.items?.length ?? 0})
+                  {t(R.detailItems, { count: detailReq.items?.length ?? 0 })}
                 </p>
                 <div className="rounded-lg border border-slate-200 overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">SKU</th>
-                        <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">Product</th>
-                        <th className="text-right px-3 py-2 text-xs font-medium text-slate-500">Qty Requested</th>
-                        <th className="text-right px-3 py-2 text-xs font-medium text-slate-500">Qty Approved</th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">{R.sku}</th>
+                        <th className="text-left px-3 py-2 text-xs font-medium text-slate-500">{R.product}</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-slate-500">{R.qtyRequested}</th>
+                        <th className="text-right px-3 py-2 text-xs font-medium text-slate-500">{R.qtyApproved}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -759,19 +764,19 @@ export default function RequestsPage() {
 
               {/* Progress timeline — real milestones the requester can trust */}
               <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Progress</p>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{R.progress}</p>
                 <ol className="space-y-2.5">
-                  <TimelineRow done label="Created" who={detailReq.requester?.fullName} at={detailReq.createdAt} />
-                  <TimelineRow done={detailReq.status !== 'DRAFT'} label="Submitted for approval" />
+                  <TimelineRow done label={R.tl.created} who={detailReq.requester?.fullName} at={detailReq.createdAt} />
+                  <TimelineRow done={detailReq.status !== 'DRAFT'} label={R.tl.submitted} />
                   {detailReq.status === 'REJECTED'
-                    ? <TimelineRow done label="Rejected" tone="red" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />
-                    : <TimelineRow done={!!detailReq.approvedAt} label="Approved" tone="green" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />}
+                    ? <TimelineRow done label={R.tl.rejected} tone="red" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />
+                    : <TimelineRow done={!!detailReq.approvedAt} label={R.tl.approved} tone="green" who={detailReq.approver?.fullName} at={detailReq.approvedAt} />}
                   {detailReq.status !== 'REJECTED' && (
                     <TimelineRow
                       done={!!(detailReq as any).fulfillmentStatus || detailReq.status === 'COMPLETED'}
                       label={(detailReq as any).fulfillmentStatus
-                        ? `Fulfillment · ${String((detailReq as any).fulfillmentStatus).replace(/_/g, ' ')}`
-                        : 'Fulfillment (allocate → pick → pack → ship)'}
+                        ? t(R.tl.fulfillmentAt, { status: labelOf(m.status.fulfillment, String((detailReq as any).fulfillmentStatus)) })
+                        : R.tl.fulfillment}
                     />
                   )}
                 </ol>
@@ -782,8 +787,8 @@ export default function RequestsPage() {
                 <div className="flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-2.5 text-sm text-green-800">
                   <Truck className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>
-                    Approved — the warehouse is now preparing your items. Track progress on the{' '}
-                    <Link href="/outbound/fulfillment" className="font-semibold underline underline-offset-2">Fulfillment Board</Link>.
+                    {R.approvedHint}{' '}
+                    <Link href="/outbound/fulfillment" className="font-semibold underline underline-offset-2">{R.fulfillmentBoard}</Link>.
                   </span>
                 </div>
               )}
@@ -792,12 +797,12 @@ export default function RequestsPage() {
               {detailReq.status === 'DRAFT' && (
                 <div className="flex items-start gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                  This request is still a Draft — click <strong className="mx-1">Submit for Approval</strong> to send it to the approver
+                  <span>{R.draftHint} <strong className="mx-1">{R.submitForApproval}</strong> {R.draftHint2}</span>
                 </div>
               )}
               {detailReq.rejectReason && (
                 <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2.5 text-sm text-red-700">
-                  <p className="font-semibold mb-0.5">Reject Reason</p>
+                  <p className="font-semibold mb-0.5">{R.rejectReason}</p>
                   <p>{detailReq.rejectReason}</p>
                 </div>
               )}
@@ -815,13 +820,13 @@ export default function RequestsPage() {
                     onClick={() => handleCancelReq(detailReq.id)}
                   >
                     <X className="h-3.5 w-3.5 mr-1" />
-                    {actionLoading === 'cancel' ? 'Cancelling…' : 'Cancel Request'}
+                    {actionLoading === 'cancel' ? R.cancelling : R.cancelRequest}
                   </Button>
                 )}
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => setDetailOpen(false)}>
-                  Close
+                  {m.common.actions.close}
                 </Button>
                 {detailReq.status === 'DRAFT' && (
                   <Button
@@ -831,7 +836,7 @@ export default function RequestsPage() {
                     onClick={() => handleSubmitReq(detailReq.id)}
                   >
                     <Send className="h-3.5 w-3.5 mr-1" />
-                    {actionLoading === 'submit' ? 'Submitting…' : 'Submit for Approval'}
+                    {actionLoading === 'submit' ? R.submitting : R.submitForApproval}
                   </Button>
                 )}
               </div>
@@ -845,13 +850,13 @@ export default function RequestsPage() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Ref #</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Created By</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">RMA Case</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Items</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Created</th>
-              <th className="text-left px-4 py-3 font-medium text-slate-600">Actions</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.ref}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.createdBy}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.rmaCase}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.status}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.items}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.created}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.actions}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
@@ -865,7 +870,7 @@ export default function RequestsPage() {
               ))
             ) : data?.data.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-slate-400">No requests found</td>
+                <td colSpan={7} className="px-4 py-12 text-center text-slate-400">{R.empty}</td>
               </tr>
             ) : (
               data?.data.map((req) => (
@@ -883,7 +888,7 @@ export default function RequestsPage() {
                     <RequestStageBadge req={req} />
                   </td>
                   <td className="px-4 py-3 text-slate-600">{req.items?.length ?? 0}</td>
-                  <td className="px-4 py-3 text-xs text-slate-400">{formatDate(req.createdAt)}</td>
+                  <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">{fmt.dateTime(req.createdAt)}</td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       <Button
@@ -892,7 +897,7 @@ export default function RequestsPage() {
                         className="h-7 px-2 text-slate-500 hover:text-slate-800"
                         onClick={() => openDetail(req)}
                       >
-                        <Eye className="h-3.5 w-3.5 mr-1" /> View
+                        <Eye className="h-3.5 w-3.5 mr-1" /> {R.view}
                       </Button>
                       {req.status === 'DRAFT' && (
                         <Button
@@ -902,7 +907,7 @@ export default function RequestsPage() {
                           onClick={() => handleSubmitReq(req.id)}
                           disabled={actionLoading === 'submit'}
                         >
-                          <Send className="h-3.5 w-3.5 mr-1" /> Submit
+                          <Send className="h-3.5 w-3.5 mr-1" /> {R.submit}
                         </Button>
                       )}
                     </div>
@@ -914,10 +919,10 @@ export default function RequestsPage() {
         </table>
         {data && data.totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 bg-slate-50">
-            <p className="text-sm text-slate-500">Page {data.page} of {data.totalPages}</p>
+            <p className="text-sm text-slate-500">{t(m.common.pagination.pageOf, { page: data.page, pages: data.totalPages })}</p>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>Previous</Button>
-              <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
+              <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>{m.common.actions.previous}</Button>
+              <Button variant="outline" size="sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>{m.common.actions.next}</Button>
             </div>
           </div>
         )}

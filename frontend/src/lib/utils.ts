@@ -1,22 +1,20 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import type { StockStatus, RequestStatus, RequestStage } from '@/types';
+import { currentLocale, makeFormatters } from '@/i18n';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatDate(date: string | Date | undefined) {
-  if (!date) return '—';
-  return new Intl.DateTimeFormat('en-GB', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  }).format(new Date(date));
+// Date helpers follow the selected language (see src/i18n). Components that
+// render dates should call useT() so they re-render when the language changes.
+export function formatDate(date: string | Date | undefined | null) {
+  return makeFormatters(currentLocale()).dateTime(date);
 }
 
-export function formatDateShort(date: string | Date | undefined) {
-  if (!date) return '—';
-  return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(date));
+export function formatDateShort(date: string | Date | undefined | null) {
+  return makeFormatters(currentLocale()).date(date);
 }
 
 // Shallow-safe dirty check for plain form objects (strings/numbers/booleans).
@@ -66,6 +64,7 @@ export const REQUEST_STATUS_COLORS: Record<RequestStatus, string> = {
   CANCELLED: 'bg-slate-100 text-slate-500',
 };
 
+/** English labels — prefer labelOf(m.status.stage, stage) in components so the label follows the language. */
 export const REQUEST_STAGE_LABELS: Record<RequestStage, string> = {
   DRAFT: 'Draft',
   PENDING_APPROVAL: 'Pending Approval',

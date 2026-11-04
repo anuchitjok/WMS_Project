@@ -8,6 +8,7 @@ import { Search, ScanLine, X } from 'lucide-react';
 import { inventoryApi } from '@/lib/api';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { getT, labelOf, useT } from '@/i18n';
 
 export interface PickedStock {
   id: string;
@@ -20,7 +21,7 @@ export interface PickedStock {
 }
 
 export function StockPicker({
-  value, onChange, allowedStatuses, label = 'Stock unit', placeholder = 'Type serial, product code or name — or scan a barcode',
+  value, onChange, allowedStatuses, label: labelProp, placeholder: placeholderProp,
 }: {
   value: PickedStock | null;
   onChange: (s: PickedStock | null) => void;
@@ -33,6 +34,11 @@ export function StockPicker({
   const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState('');
   const seq = useRef(0);
+  const { m, t } = useT();
+  const S = m.shared.stockPicker;
+  const label = labelProp ?? S.label;
+  const placeholder = placeholderProp ?? S.placeholder;
+  const statusLabel = (s: string) => labelOf(m.status.stock, s);
 
   const allowed = (s: PickedStock) => !allowedStatuses || allowedStatuses.includes(s.status);
 
@@ -47,9 +53,9 @@ export function StockPicker({
         if (mine !== seq.current) return;
         const rows = (res.data ?? []) as unknown as PickedStock[];
         setResults(rows);
-        setMessage(rows.length === 0 ? 'No stock found' : '');
+        setMessage(rows.length === 0 ? getT().m.shared.stockPicker.noStock : '');
       } catch (e: any) {
-        if (mine === seq.current) { setResults([]); setMessage(e.message ?? 'Search failed'); }
+        if (mine === seq.current) { setResults([]); setMessage(e.message || getT().m.shared.stockPicker.searchFailed); }
       } finally {
         if (mine === seq.current) setSearching(false);
       }
@@ -65,11 +71,11 @@ export function StockPicker({
     if (!code) return;
     try {
       const item = (await inventoryApi.barcode(code)) as unknown as PickedStock;
-      if (!allowed(item)) { setMessage(`${item.serialNumber ?? code} is ${item.status.replace(/_/g, ' ').toLowerCase()} — it can't be used here`); return; }
+      if (!allowed(item)) { setMessage(t(S.cantUse, { name: item.serialNumber ?? code, status: statusLabel(item.status) })); return; }
       onChange(item);
       setQ('');
     } catch {
-      setMessage(results.length ? 'No exact barcode match — pick from the list' : `No stock found for ${code}`);
+      setMessage(results.length ? S.noExact : t(S.noStockFor, { code }));
     }
   }
 
@@ -81,9 +87,9 @@ export function StockPicker({
           <div className="min-w-0 text-sm">
             <p className="font-mono font-semibold text-slate-900 truncate">{value.serialNumber ?? value.batchNumber ?? value.id.slice(-8)}</p>
             <p className="text-xs text-slate-600 truncate">{value.product?.code} · {value.product?.name}</p>
-            <p className="text-xs text-slate-500">{value.status.replace(/_/g, ' ')} · qty {value.quantity} · {value.warehouse?.code ?? '—'}</p>
+            <p className="text-xs text-slate-500">{statusLabel(value.status)} · {t(S.qty, { qty: value.quantity })} · {value.warehouse?.code ?? '—'}</p>
           </div>
-          <button type="button" onClick={() => onChange(null)} aria-label="Change stock unit" className="text-slate-400 hover:text-slate-700"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={() => onChange(null)} aria-label={S.change} className="text-slate-400 hover:text-slate-700"><X className="h-4 w-4" /></button>
         </div>
       </div>
     );
@@ -97,7 +103,7 @@ export function StockPicker({
         <Input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKeyDown} placeholder={placeholder} className="pl-8 pr-8" aria-label={label} autoComplete="off" />
         <ScanLine className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" aria-hidden />
       </div>
-      {(searching || message) && <p className="text-xs text-slate-500">{searching ? 'Searching…' : message}</p>}
+      {(searching || message) && <p className="text-xs text-slate-500">{searching ? S.searching : message}</p>}
       {results.length > 0 && (
         <ul className="max-h-56 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100 bg-white">
           {results.map((r) => {
@@ -108,7 +114,7 @@ export function StockPicker({
                   className={cn('w-full text-left px-3 py-2 text-sm', ok ? 'hover:bg-slate-50' : 'opacity-50 cursor-not-allowed')}>
                   <span className="font-mono font-medium text-slate-800">{r.serialNumber ?? r.batchNumber ?? r.id.slice(-8)}</span>
                   <span className="text-slate-500"> · {r.product?.code} · {r.product?.name}</span>
-                  <span className="block text-xs text-slate-400">{r.status.replace(/_/g, ' ')} · qty {r.quantity} · {r.warehouse?.code ?? '—'}{!ok && ' · not allowed here'}</span>
+                  <span className="block text-xs text-slate-400">{statusLabel(r.status)} · {t(S.qty, { qty: r.quantity })} · {r.warehouse?.code ?? '—'}{!ok && S.notAllowed}</span>
                 </button>
               </li>
             );

@@ -8,6 +8,9 @@ import { authApi } from '@/lib/api';
 import { User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, Loader2, Info } from 'lucide-react';
 import { LoginShowcase, BrandMark, BrandName } from '@/components/auth/login-showcase';
 import styles from '@/components/auth/login.module.css';
+import { LanguageSwitcher } from '@/components/layout/language-switcher';
+import { getT, useLocaleStore, useT } from '@/i18n';
+import { localizeError } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,6 +19,8 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showResetHelp, setShowResetHelp] = useState(false);
   const [form, setForm] = useState({ username: '', password: '' });
+  const { m } = useT();
+  const applyForUser = useLocaleStore((s) => s.applyForUser);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -24,10 +29,13 @@ export default function LoginPage() {
     try {
       const res = await authApi.login(form.username, form.password);
       setAuth(res.user, res.accessToken, res.refreshToken);
-      toast.success(`Welcome back, ${res.user.fullName}`);
+      // Restore this user's saved language (or keep the one just picked on this screen).
+      applyForUser(res.user.id);
+      const after = getT();
+      toast.success(after.t(after.m.auth.welcomeToast, { name: res.user.fullName }));
       router.push('/dashboard');
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'Login failed');
+      toast.error(err instanceof Error ? localizeError(err) : m.auth.loginFailed);
     } finally {
       setLoading(false);
     }
@@ -38,25 +46,28 @@ export default function LoginPage() {
       <LoginShowcase />
 
       <main className={styles.auth}>
+        <div className="absolute right-4 top-4 z-10">
+          <LanguageSwitcher className="bg-white/90 shadow-sm ring-1 ring-slate-200" />
+        </div>
         <div className={styles.card}>
           <div className={styles.cardBrand}>
             <BrandMark size="lg" />
             <BrandName className={styles.cardBrandName} />
-            <span className={styles.cardBrandTag}>Warehouse Management System</span>
+            <span className={styles.cardBrandTag}>{m.auth.systemName}</span>
           </div>
 
-          <h2 className={styles.welcome}>Welcome back</h2>
-          <p className={styles.welcomeSub}>Sign in to your account to continue</p>
+          <h2 className={styles.welcome}>{m.auth.welcome}</h2>
+          <p className={styles.welcomeSub}>{m.auth.welcomeSub}</p>
 
           <form onSubmit={handleSubmit} className={styles.form}>
             <div className={styles.field}>
-              <label htmlFor="username">Username</label>
+              <label htmlFor="username">{m.auth.username}</label>
               <div className={styles.inputWrap}>
                 <User className={styles.inputIcon} aria-hidden="true" />
                 <input
                   id="username"
                   name="username"
-                  placeholder="Enter your username"
+                  placeholder={m.auth.usernamePlaceholder}
                   value={form.username}
                   onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
                   autoComplete="username"
@@ -70,14 +81,14 @@ export default function LoginPage() {
             </div>
 
             <div className={styles.field}>
-              <label htmlFor="password">Password</label>
+              <label htmlFor="password">{m.auth.password}</label>
               <div className={styles.inputWrap}>
                 <Lock className={styles.inputIcon} aria-hidden="true" />
                 <input
                   id="password"
                   name="password"
                   type={showPassword ? 'text' : 'password'}
-                  placeholder="Enter your password"
+                  placeholder={m.auth.passwordPlaceholder}
                   value={form.password}
                   onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
                   autoComplete="current-password"
@@ -88,7 +99,7 @@ export default function LoginPage() {
                   type="button"
                   className={styles.eye}
                   onClick={() => setShowPassword((v) => !v)}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-label={showPassword ? m.auth.hidePassword : m.auth.showPassword}
                   aria-pressed={showPassword}
                   aria-controls="password"
                 >
@@ -105,13 +116,13 @@ export default function LoginPage() {
                 aria-expanded={showResetHelp}
                 aria-controls="reset-help"
               >
-                Forgot password?
+                {m.auth.forgot}
               </button>
             </div>
             {showResetHelp && (
               <p id="reset-help" className={styles.resetHelp} role="status">
                 <Info aria-hidden="true" />
-                <span>Passwords are reset by your system administrator. Please contact them to regain access.</span>
+                <span>{m.auth.resetHelp}</span>
               </p>
             )}
 
@@ -122,18 +133,18 @@ export default function LoginPage() {
               aria-busy={loading}
             >
               {loading ? <Loader2 className={styles.spin} aria-hidden="true" /> : null}
-              <span>{loading ? 'Signing in…' : 'Sign In'}</span>
+              <span>{loading ? m.auth.signingIn : m.auth.signIn}</span>
               {loading ? null : <ArrowRight className={styles.submitArrow} aria-hidden="true" />}
             </button>
           </form>
 
           <p className={styles.secure}>
             <ShieldCheck aria-hidden="true" />
-            Secure login protected by enterprise security
+            {m.auth.secure}
           </p>
         </div>
 
-        <p className={styles.copyright}>© 2026 HSNT WMS. All rights reserved.</p>
+        <p className={styles.copyright}>{m.auth.copyright}</p>
       </main>
     </div>
   );

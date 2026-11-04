@@ -14,16 +14,21 @@ import { useAuthStore } from '@/store/auth.store';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import type { UserRole } from '@/types';
+import { labelOf, useT, type Messages } from '@/i18n';
+
+type NavLabel = keyof Messages['nav']['items'];
+type NavGroupKey = keyof Messages['nav']['groups'];
 
 interface NavItem {
   href: string;
-  label: string;
+  /** Key into m.nav.items — the visible text comes from the translation files. */
+  label: NavLabel;
   icon: React.ComponentType<{ className?: string }>;
   roles?: UserRole[];
 }
 
 interface NavGroup {
-  group: string;
+  group: NavGroupKey;
   items: NavItem[];
 }
 
@@ -32,40 +37,40 @@ const WH: UserRole[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVIS
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    group: 'Overview',
+    group: 'overview',
     items: [
-      { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { href: '/work-queue', label: 'Work Queue', icon: ListTodo, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF', 'DEPT_APPROVER', 'RTV_OFFICER', 'RMA_TEAM'] },
-      { href: '/reports', label: 'Reports', icon: BarChart3 },
-      { href: '/planning', label: 'Project Planning', icon: PlanIcon, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER', 'FINANCE_VIEWER', 'AUDITOR'] },
+      { href: '/dashboard', label: 'dashboard', icon: LayoutDashboard },
+      { href: '/work-queue', label: 'workQueue', icon: ListTodo, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF', 'DEPT_APPROVER', 'RTV_OFFICER', 'RMA_TEAM'] },
+      { href: '/reports', label: 'reports', icon: BarChart3 },
+      { href: '/planning', label: 'projectPlanning', icon: PlanIcon, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER', 'FINANCE_VIEWER', 'AUDITOR'] },
     ],
   },
   {
     // CR-MASTER-001: Master Data group — only items backed by a real page/route are listed here.
-    group: 'Master Data',
+    group: 'masterData',
     items: [
-      { href: '/setup-checklist', label: 'Setup Checklist', icon: ClipboardCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
-      { href: '/products', label: 'Product Master', icon: Tag, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
-      { href: '/business-partners', label: 'Business Partners', icon: Handshake, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
-      { href: '/warehouse-master', label: 'Warehouse Master', icon: Building2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF'] },
-      { href: '/users', label: 'Users', icon: Users, roles: ADMIN },
-      { href: '/roles', label: 'Roles & Permissions', icon: ShieldCheck, roles: ['SYSTEM_ADMIN'] },
-      { href: '/settings', label: 'System Settings', icon: Settings, roles: ['SYSTEM_ADMIN'] },
-      { href: '/company-profile', label: 'Company Profile', icon: BadgeCheck, roles: ['SYSTEM_ADMIN'] },
-      { href: '/system-master', label: 'Lists & Codes', icon: ListChecks, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
-      { href: '/approval-rules', label: 'Approval Rules', icon: GitBranch, roles: ['SYSTEM_ADMIN'] },
-      { href: '/notification-templates', label: 'Notification Templates', icon: BellRing, roles: ['SYSTEM_ADMIN'] },
+      { href: '/setup-checklist', label: 'setupChecklist', icon: ClipboardCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
+      { href: '/products', label: 'productMaster', icon: Tag, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
+      { href: '/business-partners', label: 'businessPartners', icon: Handshake, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
+      { href: '/warehouse-master', label: 'warehouseMaster', icon: Building2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF'] },
+      { href: '/users', label: 'users', icon: Users, roles: ADMIN },
+      { href: '/roles', label: 'roles', icon: ShieldCheck, roles: ['SYSTEM_ADMIN'] },
+      { href: '/settings', label: 'systemSettings', icon: Settings, roles: ['SYSTEM_ADMIN'] },
+      { href: '/company-profile', label: 'companyProfile', icon: BadgeCheck, roles: ['SYSTEM_ADMIN'] },
+      { href: '/system-master', label: 'listsCodes', icon: ListChecks, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
+      { href: '/approval-rules', label: 'approvalRules', icon: GitBranch, roles: ['SYSTEM_ADMIN'] },
+      { href: '/notification-templates', label: 'notificationTemplates', icon: BellRing, roles: ['SYSTEM_ADMIN'] },
     ],
   },
   {
-    group: 'Warehouse',
+    group: 'warehouse',
     items: [
-      { href: '/warehouse-layout', label: 'Warehouse Operations', icon: Warehouse, roles: WH },
-      { href: '/receiving', label: 'Goods Receiving', icon: PackagePlus, roles: WH },
-      { href: '/putaway', label: 'Putaway', icon: MapPin, roles: WH },
-      { href: '/outbound/fulfillment', label: 'Fulfillment Board', icon: Truck, roles: WH },
-      { href: '/handover', label: 'Handover', icon: CheckCircle2, roles: WH },
-      { href: '/warehouse/returns', label: 'Returns — Inbound', icon: RefreshCw, roles: WH },
+      { href: '/warehouse-layout', label: 'warehouseOperations', icon: Warehouse, roles: WH },
+      { href: '/receiving', label: 'goodsReceiving', icon: PackagePlus, roles: WH },
+      { href: '/putaway', label: 'putaway', icon: MapPin, roles: WH },
+      { href: '/outbound/fulfillment', label: 'fulfillmentBoard', icon: Truck, roles: WH },
+      { href: '/handover', label: 'handover', icon: CheckCircle2, roles: WH },
+      { href: '/warehouse/returns', label: 'returnsInbound', icon: RefreshCw, roles: WH },
       // Phase 2: Inventory, Stock Transfer, Stock Adjustment, Barcode Scanner and
       // Cycle Count (Step 5) are retired from navigation. Their pages still open
       // as read-only history; /inventory redirects to Reports → Balance.
@@ -73,41 +78,41 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     // Same legacy roles as the backend access rules (mrpView / warrantyView); the API enforces the real permission.
-    group: 'Planning',
+    group: 'planning',
     items: [
-      { href: '/mrp', label: 'Material Planning', icon: Boxes, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER'] },
-      { href: '/warranty', label: 'Warranty', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'RMA_TEAM', 'RTV_OFFICER'] },
+      { href: '/mrp', label: 'materialPlanning', icon: Boxes, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER'] },
+      { href: '/warranty', label: 'warranty', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'RMA_TEAM', 'RTV_OFFICER'] },
     ],
   },
   {
-    group: 'Requester',
+    group: 'requester',
     items: [
-      { href: '/requests', label: 'Withdrawal Requests', icon: ClipboardList },
-      { href: '/issued-items', label: 'My Issued Items', icon: PackageCheck },
-      { href: '/returns', label: 'Pending Returns', icon: Undo2 },
+      { href: '/requests', label: 'withdrawalRequests', icon: ClipboardList },
+      { href: '/issued-items', label: 'issuedItems', icon: PackageCheck },
+      { href: '/returns', label: 'pendingReturns', icon: Undo2 },
     ],
   },
   {
     // Step 4 (Use & Return): defective units go DOA → RTV → replacement, or to scrap.
-    group: 'Use & Return — RTV',
+    group: 'useReturn',
     items: [
-      { href: '/doa', label: 'DOA / Defective', icon: AlertTriangle, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'RMA_TEAM'] },
-      { href: '/rtv', label: 'RTV Cases', icon: RotateCcw, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER'] },
-      { href: '/scrap', label: 'Scrap Management', icon: Trash2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'WAREHOUSE_SUPERVISOR'] },
+      { href: '/doa', label: 'doa', icon: AlertTriangle, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'RMA_TEAM'] },
+      { href: '/rtv', label: 'rtvCases', icon: RotateCcw, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER'] },
+      { href: '/scrap', label: 'scrap', icon: Trash2, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'RTV_OFFICER', 'WAREHOUSE_SUPERVISOR'] },
     ],
   },
   {
-    group: 'Approvals',
+    group: 'approvals',
     items: [
-      { href: '/approvals', label: 'Approval Workspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
+      { href: '/approvals', label: 'approvalWorkspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
     ],
   },
   {
-    group: 'Admin',
+    group: 'admin',
     items: [
-      { href: '/data-io', label: 'Import / Export', icon: Database, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
-      { href: '/notifications', label: 'Notifications', icon: Bell },
-      { href: '/audit', label: 'Audit Trail', icon: ScrollText, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'AUDITOR'] },
+      { href: '/data-io', label: 'importExport', icon: Database, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
+      { href: '/notifications', label: 'notifications', icon: Bell },
+      { href: '/audit', label: 'auditTrail', icon: ScrollText, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'AUDITOR'] },
     ],
   },
 ];
@@ -116,6 +121,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { user, clearAuth } = useAuthStore();
+  const { m } = useT();
 
   function handleLogout() {
     clearAuth();
@@ -135,7 +141,7 @@ export function Sidebar() {
         </div>
         <div>
           <p className="text-base font-bold tracking-tight leading-tight text-slate-900">HSNT WMS</p>
-          <p className="text-xs text-slate-400">Warehouse System</p>
+          <p className="text-xs text-slate-400">{m.common.appTagline}</p>
         </div>
       </div>
 
@@ -146,7 +152,7 @@ export function Sidebar() {
           if (items.length === 0) return null;
           return (
             <div key={g.group}>
-              <p className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{g.group}</p>
+              <p className="px-3 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{m.nav.groups[g.group]}</p>
               <div className="space-y-0.5">
                 {items.map((item) => {
                   const active = pathname === item.href;
@@ -163,7 +169,7 @@ export function Sidebar() {
                     >
                       {active && <span className="absolute left-0 top-1.5 bottom-1.5 w-1 rounded-r-full bg-green-600" />}
                       <item.icon className={cn('h-4 w-4 flex-shrink-0', active ? 'text-green-600' : 'text-slate-400 group-hover:text-slate-600')} />
-                      <span className="flex-1">{item.label}</span>
+                      <span className="flex-1 min-w-0 leading-snug">{m.nav.items[item.label]}</span>
                       {active && <ChevronRight className="h-3 w-3 text-green-500" />}
                     </Link>
                   );
@@ -184,7 +190,7 @@ export function Sidebar() {
           </Avatar>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate text-slate-900">{user?.fullName}</p>
-            <p className="text-xs text-slate-400 truncate">{user?.role?.replace(/_/g, ' ')}</p>
+            <p className="text-xs text-slate-400 truncate">{labelOf(m.nav.roles, user?.role)}</p>
           </div>
         </div>
         <Button
@@ -194,7 +200,7 @@ export function Sidebar() {
           onClick={handleLogout}
         >
           <LogOut className="h-4 w-4 mr-2" />
-          Sign out
+          {m.nav.signOut}
         </Button>
       </div>
     </aside>

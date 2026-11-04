@@ -7,9 +7,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: "Segoe UI", "Segoe UI Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-sans: var(--font-ui);
   --font-mono: "Cascadia Code", "Consolas", "Courier New", monospace;
-  --font-heading: "Segoe UI", "Segoe UI Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-ui);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -52,6 +52,11 @@
 }
 
 :root {
+  /* UI font stack with Thai and Simplified-Chinese fallbacks (system fonts — nothing to download).
+     Latin text keeps Segoe UI; Thai and Chinese characters fall through to a font that has them. */
+  --font-ui: "Segoe UI", "Segoe UI Variable", "Leelawadee UI", "Noto Sans Thai", "Thonburi", "Tahoma",
+    "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Hiragino Sans GB",
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   /* White + Green enterprise theme (HSNT WMS) */
   --background: #f8fafc;          /* slate-50 app canvas */
   --foreground: #111827;          /* gray-900 primary text */
@@ -130,12 +135,28 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: "Segoe UI", "Segoe UI Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: var(--font-ui);
     font-feature-settings: "kern" 1, "liga" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
   html {
     @apply font-sans;
+  }
+
+  /* Thai and Chinese: put the script's own fonts first so punctuation and digits match,
+     and drop the extra letter-spacing used for Latin caps (it breaks Thai vowel/tone marks). */
+  html:lang(th) {
+    --font-ui: "Leelawadee UI", "Noto Sans Thai", "Thonburi", "Segoe UI", "Tahoma", ui-sans-serif, system-ui, sans-serif;
+  }
+  html:lang(zh-CN) {
+    --font-ui: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", "Noto Sans CJK SC", "Hiragino Sans GB", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  }
+  html:lang(th) [class*="tracking-"], html:lang(zh-CN) [class*="tracking-"] {
+    letter-spacing: normal;
+  }
+  /* Thai stacks vowels and tone marks above/below the line; tight leading clips them. */
+  html:lang(th) .leading-tight {
+    line-height: 1.35;
   }
 }

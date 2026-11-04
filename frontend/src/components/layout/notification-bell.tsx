@@ -7,8 +7,9 @@ import { Bell, CheckCheck, X } from 'lucide-react';
 import { notifApi } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { cn, formatDate } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import Link from 'next/link';
+import { useT } from '@/i18n';
 
 const TYPE_ICONS: Record<string, string> = {
   REQUEST_SUBMITTED: '📋', REQUEST_APPROVED: '✅', REQUEST_REJECTED: '❌',
@@ -41,6 +42,8 @@ interface PanelPos {
 
 export function NotificationBell() {
   const router = useRouter();
+  const { m, t, fmt } = useT();
+  const N = m.nav.notifications;
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<any>(null);
   const [mounted, setMounted] = useState(false);
@@ -155,7 +158,7 @@ export function NotificationBell() {
       <div
         ref={dropRef}
         role="dialog"
-        aria-label="Notifications"
+        aria-label={N.title}
         aria-modal="false"
         style={{
           position : 'fixed',
@@ -177,7 +180,7 @@ export function NotificationBell() {
         {/* ── Sticky header (never scrolls) ── */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-slate-50 flex-shrink-0 min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
-            <h3 className="font-semibold text-slate-800 text-sm truncate">Notifications</h3>
+            <h3 className="font-semibold text-slate-800 text-sm truncate">{N.title}</h3>
             {unread > 0 && (
               <Badge className="bg-red-100 text-red-700 flex-shrink-0 tabular-nums" variant="outline">
                 {unread}
@@ -193,14 +196,14 @@ export function NotificationBell() {
                 onClick={readAll}
               >
                 <CheckCheck className="h-3.5 w-3.5 mr-1" />
-                All read
+                {N.allRead}
               </Button>
             )}
             <Button
               size="sm"
               variant="ghost"
               className="h-7 w-7 p-0 flex-shrink-0"
-              aria-label="Close notifications"
+              aria-label={N.close}
               onClick={() => setOpen(false)}
             >
               <X className="h-3.5 w-3.5" />
@@ -211,7 +214,7 @@ export function NotificationBell() {
         {/* ── Scrollable list (only this section scrolls) ── */}
         <div className="overflow-y-auto overflow-x-hidden overscroll-contain flex-1">
           {!data?.data?.length ? (
-            <p className="text-center text-slate-400 text-sm py-10 px-4">No notifications</p>
+            <p className="text-center text-slate-400 text-sm py-10 px-4">{N.empty}</p>
           ) : (
             <div className="divide-y divide-slate-50">
               {data.data.map((n: any) => (
@@ -219,7 +222,7 @@ export function NotificationBell() {
                   key={n.id}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${n.isRead ? '' : 'Unread — '}${n.title}${TYPE_ROUTES[n.type] ? ' — click to open' : ''}`}
+                  aria-label={`${n.isRead ? '' : `${N.unread} — `}${n.title}${TYPE_ROUTES[n.type] ? ` — ${N.clickToOpen}` : ''}`}
                   onClick={() => readOne(n)}
                   onKeyDown={(e) => e.key === 'Enter' && readOne(n)}
                   className={cn(
@@ -252,7 +255,7 @@ export function NotificationBell() {
                         {n.message}
                       </p>
                       <p className="text-[10px] text-slate-400 mt-1 tabular-nums">
-                        {formatDate(n.createdAt)}
+                        {fmt.dateTime(n.createdAt)}
                       </p>
                     </div>
 
@@ -260,7 +263,7 @@ export function NotificationBell() {
                     {!n.isRead && (
                       <div
                         className="h-2 w-2 rounded-full bg-green-500 flex-shrink-0 mt-1.5"
-                        aria-label="Unread"
+                        aria-label={N.unread}
                       />
                     )}
                   </div>
@@ -277,7 +280,7 @@ export function NotificationBell() {
               variant="ghost"
               className="w-full text-xs text-slate-500 hover:text-green-600 h-8"
             >
-              View all notifications
+              {N.viewAll}
             </Button>
           </Link>
         </div>
@@ -292,7 +295,7 @@ export function NotificationBell() {
       <button
         ref={bellRef}
         onClick={() => setOpen((v) => !v)}
-        aria-label={unread > 0 ? `${unread} unread notifications` : 'Notifications'}
+        aria-label={unread > 0 ? t(N.unreadCount, { count: unread }) : N.title}
         aria-expanded={open}
         aria-haspopup="dialog"
         className={cn(

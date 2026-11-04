@@ -7,6 +7,7 @@ import { Skeleton, } from '@/components/ui/skeleton';
 import { formatDate } from '@/lib/utils';
 import { classifyActivity } from '@/lib/activity-timeline';
 import type { AuditLog } from '@/types';
+import { useT } from '@/i18n';
 
 const DOMAIN_DOT: Record<string, string> = {
   RECEIVING: 'bg-teal-500', PUTAWAY: 'bg-emerald-500', APPROVAL: 'bg-amber-500',
@@ -15,13 +16,14 @@ const DOMAIN_DOT: Record<string, string> = {
 };
 
 export function RecentTransactions({ logs, loading }: { logs?: AuditLog[]; loading?: boolean }) {
+  const { m, fmt } = useT();
   return (
     <div className="h-full bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-4">Recent Transactions</h2>
+      <h2 className="text-sm font-semibold text-slate-900 uppercase tracking-wide mb-4">{m.dashboard.recent.title}</h2>
       {loading ? (
         <div className="space-y-1">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-11" />)}</div>
       ) : !logs?.length ? (
-        <p className="text-sm text-slate-400 py-8 text-center">No recent transactions</p>
+        <p className="text-sm text-slate-400 py-8 text-center">{m.dashboard.recent.empty}</p>
       ) : (
         <ul className="divide-y divide-slate-100">
           {logs.map((l) => {
@@ -30,12 +32,12 @@ export function RecentTransactions({ logs, loading }: { logs?: AuditLog[]; loadi
               <li key={l.id} className="flex items-center gap-3 py-2.5">
                 <span className={cn('w-2 h-2 rounded-full flex-shrink-0', DOMAIN_DOT[meta.domain] ?? 'bg-slate-300')} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-800 capitalize truncate">{meta.label}</p>
+                  <p className="text-sm font-medium text-slate-800 truncate">{(m.status.action as Record<string, string>)[l.action] ?? meta.label}</p>
                   <p className="text-xs text-slate-400 truncate">
-                    {l.user?.fullName ?? 'System'}{l.entityType ? ` · ${l.entityType}` : ''}
+                    {l.user?.fullName ?? m.common.states.system}{l.entityType ? ` · ${l.entityType}` : ''}
                   </p>
                 </div>
-                <time className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0 tabular-nums">{formatDate(l.createdAt)}</time>
+                <time className="text-xs text-slate-400 whitespace-nowrap flex-shrink-0 tabular-nums">{fmt.dateTime(l.createdAt)}</time>
               </li>
             );
           })}

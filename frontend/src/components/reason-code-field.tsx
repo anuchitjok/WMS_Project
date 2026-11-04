@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { masterDataApi, type ReasonCategory } from '@/lib/api';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { useT } from '@/i18n';
 
 export interface ReasonValue { reasonCode?: string; reason?: string }
 
@@ -13,7 +14,7 @@ export interface ReasonValue { reasonCode?: string; reason?: string }
  * enforces the same rule). With no codes configured it falls back to free text.
  */
 export function ReasonCodeField({
-  category, value, onChange, label = 'Reason', placeholder,
+  category, value, onChange, label: labelProp, placeholder,
 }: {
   category: ReasonCategory;
   value: ReasonValue;
@@ -22,6 +23,8 @@ export function ReasonCodeField({
   placeholder?: string;
 }) {
   const [codes, setCodes] = useState<{ code: string; description: string }[] | null>(null);
+  const { m } = useT();
+  const label = labelProp ?? m.shared.reasonField.label;
 
   useEffect(() => {
     let alive = true;
@@ -48,7 +51,7 @@ export function ReasonCodeField({
         value={value.reasonCode ?? ''}
         onChange={(e) => onChange({ reasonCode: e.target.value || undefined })}
       >
-        <option value="">Select a reason…</option>
+        <option value="">{m.shared.reasonField.select}</option>
         {codes.map((c) => <option key={c.code} value={c.code}>{c.description} ({c.code})</option>)}
       </select>
     </div>

@@ -1,4 +1,7 @@
+'use client';
+
 import { cn } from '@/lib/utils';
+import { labelOf, useT } from '@/i18n';
 
 interface StatusCfg {
   label: string;
@@ -27,6 +30,8 @@ const CFG: Record<string, StatusCfg> = {
  * Falls back gracefully for any unmapped status string.
  */
 export function ReceivingStatusBadge({ status }: { status?: string }) {
+  const { m } = useT();
+  const key = (status ?? '').toLowerCase();
   const cfg =
     CFG[(status ?? '').toLowerCase()] ??
     { label: status || '—', bg: 'bg-slate-100', text: 'text-slate-600', dot: 'bg-slate-400' };
@@ -39,7 +44,7 @@ export function ReceivingStatusBadge({ status }: { status?: string }) {
       )}
     >
       <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', cfg.dot)} />
-      {cfg.label}
+      {key in m.receiving.status ? labelOf(m.receiving.status, key) : cfg.label}
     </span>
   );
 }
@@ -53,11 +58,13 @@ const CONDITION_CFG: Record<string, { label: string; bg: string; text: string }>
 };
 
 export function ConditionChip({ condition, count }: { condition: string; count?: number }) {
+  const { m } = useT();
+  const ck = (condition ?? '').toLowerCase();
   const c = CONDITION_CFG[(condition ?? '').toLowerCase()] ?? { label: condition || '—', bg: 'bg-slate-100', text: 'text-slate-700' };
   return (
     <span className={cn('inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md whitespace-nowrap', c.bg, c.text)}>
       {count != null && <span className="font-semibold">{count}</span>}
-      {c.label}
+      {ck in m.receiving.condition ? labelOf(m.receiving.condition, ck) : c.label}
     </span>
   );
 }

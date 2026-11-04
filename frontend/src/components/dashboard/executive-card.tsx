@@ -7,6 +7,7 @@
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { LucideIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export type ExecLevel = 'ok' | 'warn' | 'critical';
 
@@ -59,6 +60,7 @@ export interface ExecutiveCardProps {
 
 export function ExecutiveCard({ title, icon: Icon, level, headline, subline, metrics, dominant, loading }: ExecutiveCardProps) {
   const s = LEVEL[level];
+  const { fmt } = useT();
 
   return (
     <div
@@ -93,7 +95,7 @@ export function ExecutiveCard({ title, icon: Icon, level, headline, subline, met
               <Skeleton className="h-6 w-12" />
             ) : (
               <p className="text-xl font-bold text-slate-900 tabular-nums leading-none">
-                {typeof m.value === 'number' ? m.value.toLocaleString() : m.value}
+                {typeof m.value === 'number' ? fmt.number(m.value) : m.value}
               </p>
             )}
             <p className="mt-1 text-xs text-slate-500 truncate">{m.label}</p>

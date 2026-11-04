@@ -7,9 +7,11 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export default function FulfillmentLegacyRedirect() {
   const router = useRouter();
+  const { m, t } = useT();
   useEffect(() => {
     router.replace('/outbound/fulfillment');
   }, [router]);
@@ -17,7 +19,7 @@ export default function FulfillmentLegacyRedirect() {
   return (
     <div className="flex items-center justify-center h-full gap-3 text-slate-500">
       <Loader2 className="w-5 h-5 animate-spin" />
-      <span className="text-sm">Redirecting to Fulfillment Board…</span>
+      <span className="text-sm">{t(m.nav.redirecting, { page: m.nav.items.fulfillmentBoard })}</span>
     </div>
   );
 }

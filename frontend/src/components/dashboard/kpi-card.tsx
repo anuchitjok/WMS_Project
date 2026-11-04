@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { LucideIcon } from 'lucide-react';
+import { useT } from '@/i18n';
 
 export type KpiTone = 'blue' | 'green' | 'amber' | 'red' | 'violet' | 'slate';
 
@@ -25,11 +26,6 @@ const STATUS_DOT: Record<KpiStatus, string> = {
   attention: 'bg-amber-500',
   critical: 'bg-red-500',
 };
-const STATUS_LABEL: Record<KpiStatus, string> = {
-  normal: 'Normal',
-  attention: 'Attention',
-  critical: 'Critical',
-};
 const STATUS_ACCENT: Record<KpiStatus, string> = {
   normal: 'before:bg-emerald-400',
   attention: 'before:bg-amber-400',
@@ -48,7 +44,8 @@ export interface KpiCardProps {
   emptyText?: string;
 }
 
-export function KpiCard({ label, value, icon: Icon, tone = 'blue', status, delta, href, loading, emptyText = 'N/A' }: KpiCardProps) {
+export function KpiCard({ label, value, icon: Icon, tone = 'blue', status, delta, href, loading, emptyText }: KpiCardProps) {
+  const { m, fmt } = useT();
   const body = (
     <div
       className={cn(
@@ -66,7 +63,7 @@ export function KpiCard({ label, value, icon: Icon, tone = 'blue', status, delta
         {!loading && status && (
           <span className="flex items-center gap-1.5">
             <span className={cn('h-2 w-2 rounded-full', STATUS_DOT[status])} />
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{STATUS_LABEL[status]}</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{m.dashboard.kpiStatus[status]}</span>
           </span>
         )}
         {!loading && !status && typeof delta === 'number' && delta !== 0 && (
@@ -79,7 +76,7 @@ export function KpiCard({ label, value, icon: Icon, tone = 'blue', status, delta
         <Skeleton className="h-9 w-16 mt-3" />
       ) : (
         <p className="mt-3 text-[2rem] font-bold text-slate-900 tabular-nums leading-none">
-          {value === null ? emptyText : typeof value === 'number' ? value.toLocaleString() : value}
+          {value === null ? (emptyText ?? m.common.states.notAvailable) : typeof value === 'number' ? fmt.number(value) : value}
         </p>
       )}
       <p className="mt-2 text-[13px] font-medium text-slate-500 leading-tight">{label}</p>

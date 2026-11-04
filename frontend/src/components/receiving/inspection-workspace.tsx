@@ -9,6 +9,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { labelOf, useT, type Messages } from '@/i18n';
+
+type InspMsgs = Messages['receiving']['inspection'];
+const IMPACT: Record<string, keyof InspMsgs> = {
+  good: 'impactGood', doa: 'impactDoa', damaged: 'impactDamaged',
+  short_qty: 'impactShort', wrong_item: 'impactWrong', missing_accessories: 'impactMissing',
+};
 
 // ─── Outcome config ──────────────────────────────────────────────────────────
 
@@ -16,85 +23,71 @@ type Outcome = 'good' | 'doa' | 'damaged' | 'short_qty' | 'wrong_item' | 'missin
 
 const OUTCOMES: {
   id: Outcome;
-  label: string;
   icon: React.ComponentType<{ className?: string }>;
   color: string;
   border: string;
   activeColor: string;
   activeBorder: string;
-  impact: (qty: number) => string;
   stockResult: string;
   severity: 'success' | 'error' | 'warning' | 'info';
 }[] = [
   {
     id: 'good',
-    label: 'Good',
     icon: CheckCircle2,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-green-400 hover:bg-green-50',
     activeColor: 'text-green-700',
     activeBorder: 'border-green-500 bg-green-50 ring-2 ring-green-200',
-    impact: (qty) => `${qty} unit${qty !== 1 ? 's' : ''} → Putaway Queue (PENDING_INSPECTION)`,
     stockResult: 'PENDING_INSPECTION',
     severity: 'success',
   },
   {
     id: 'doa',
-    label: 'DOA',
     icon: XCircle,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-red-400 hover:bg-red-50',
     activeColor: 'text-red-700',
     activeBorder: 'border-red-500 bg-red-50 ring-2 ring-red-200',
-    impact: (qty) => `${qty} unit${qty !== 1 ? 's' : ''} → Return to Vendor queue (RTV_PENDING)`,
     stockResult: 'RTV_PENDING',
     severity: 'error',
   },
   {
     id: 'damaged',
-    label: 'Damaged',
     icon: AlertTriangle,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-amber-400 hover:bg-amber-50',
     activeColor: 'text-amber-700',
     activeBorder: 'border-amber-500 bg-amber-50 ring-2 ring-amber-200',
-    impact: (qty) => `${qty} unit${qty !== 1 ? 's' : ''} → On Hold (QUARANTINE)`,
     stockResult: 'QUARANTINE',
     severity: 'warning',
   },
   {
     id: 'short_qty',
-    label: 'Short Qty',
     icon: MinusCircle,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-blue-400 hover:bg-blue-50',
     activeColor: 'text-blue-700',
     activeBorder: 'border-blue-500 bg-blue-50 ring-2 ring-blue-200',
-    impact: (qty) => `${qty} unit${qty !== 1 ? 's' : ''} inspected → Putaway Queue + Discrepancy created`,
-    stockResult: 'PENDING_INSPECTION (partial)',
+    stockResult: 'PENDING_INSPECTION',
     severity: 'info',
   },
   {
     id: 'wrong_item',
-    label: 'Wrong Item',
     icon: RotateCcw,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-purple-400 hover:bg-purple-50',
     activeColor: 'text-purple-700',
     activeBorder: 'border-purple-500 bg-purple-50 ring-2 ring-purple-200',
-    impact: () => 'Unit put On Hold → Return process initiated + Discrepancy created',
     stockResult: 'QUARANTINE',
     severity: 'error',
   },
   {
     id: 'missing_accessories',
-    label: 'Missing Acc.',
     icon: Package,
     color: 'text-slate-600',
     border: 'border-slate-200 bg-white hover:border-orange-400 hover:bg-orange-50',
     activeColor: 'text-orange-700',
     activeBorder: 'border-orange-500 bg-orange-50 ring-2 ring-orange-200',
-    impact: (qty) => `${qty} unit${qty !== 1 ? 's' : ''} → On Hold + Discrepancy noted`,
     stockResult: 'QUARANTINE',
     severity: 'warning',
   },
@@ -114,6 +107,8 @@ interface ItemState {
 
 function ImpactPreview({ outcome, qty }: { outcome: Outcome; qty: number }) {
   const cfg = OUTCOMES.find((o) => o.id === outcome)!;
+  const { m, t } = useT();
+  const I = m.receiving.inspection;
   const Icon = cfg.icon;
   const colors = {
     success: 'bg-green-50 border-green-200 text-green-800',
@@ -126,9 +121,9 @@ function ImpactPreview({ outcome, qty }: { outcome: Outcome; qty: number }) {
     <div className={cn('rounded-lg border p-3 flex gap-3 items-start', colors)}>
       <Icon className="h-4 w-4 mt-0.5 flex-shrink-0" />
       <div className="min-w-0">
-        <p className="text-xs font-semibold uppercase tracking-wide mb-0.5">Inventory Impact</p>
-        <p className="text-sm font-medium">{cfg.impact(qty)}</p>
-        <p className="text-xs mt-1 opacity-75">Stock status → <span className="font-mono font-semibold">{cfg.stockResult}</span></p>
+        <p className="text-xs font-semibold uppercase tracking-wide mb-0.5">{I.impact}</p>
+        <p className="text-sm font-medium">{t(I[IMPACT[outcome]], { qty })}</p>
+        <p className="text-xs mt-1 opacity-75">{I.stockStatusTo} <span className="font-mono font-semibold">{cfg.stockResult}</span>{outcome === 'short_qty' ? ` ${I.partial}` : ''}</p>
       </div>
     </div>
   );
@@ -153,6 +148,9 @@ interface InspectionWorkspaceProps {
 }
 
 export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionWorkspaceProps) {
+  const { m, t, fmt } = useT();
+  const I = m.receiving.inspection;
+  const F = m.receiving.form;
   const items: any[] = gr.items ?? [];
 
   // Per-item state keyed by GR item id
@@ -202,8 +200,8 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
       {/* Workspace header */}
       <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 bg-white">
         <ClipboardList className="h-4 w-4 text-blue-600" />
-        <span className="text-sm font-semibold text-slate-800">Inspection Workspace</span>
-        <span className="ml-1 text-xs text-slate-400">— {items.length} item{items.length !== 1 ? 's' : ''} to inspect</span>
+        <span className="text-sm font-semibold text-slate-800">{I.workspace}</span>
+        <span className="ml-1 text-xs text-slate-400">{t(I.toInspect, { count: items.length })}</span>
       </div>
 
       <div className="px-5 py-4 space-y-6">
@@ -221,21 +219,21 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
               <div className="bg-green-50 border-b border-green-200 px-4 py-3">
                 <div className="flex items-center gap-1.5 mb-2">
                   <ShieldCheck className="h-3.5 w-3.5 text-green-600" />
-                  <span className="text-[10px] font-bold text-green-700 uppercase tracking-wide">Product Master</span>
+                  <span className="text-[10px] font-bold text-green-700 uppercase tracking-wide">{I.productMaster}</span>
                   {items.length > 1 && (
-                    <span className="ml-auto text-[10px] text-green-600 font-medium">Item {idx + 1} of {items.length}</span>
+                    <span className="ml-auto text-[10px] text-green-600 font-medium">{t(I.itemOf, { n: idx + 1, total: items.length })}</span>
                   )}
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1.5">
-                  <PF label="Product Code" value={product?.code} mono />
-                  <PF label="Product Name" value={product?.name} />
-                  <PF label="Model"   value={product?.model} />
-                  <PF label="Category" value={product?.category} />
-                  <PF label="UOM"     value={product?.unit} />
-                  <PF label="Internal Part No" value={product?.partNumber} mono />
+                  <PF label={F.productCode} value={product?.code} mono />
+                  <PF label={F.productName} value={product?.name} />
+                  <PF label={F.model}   value={product?.model} />
+                  <PF label={F.category} value={product?.category} />
+                  <PF label={F.uom}     value={product?.unit} />
+                  <PF label={I.internalPartNo} value={product?.partNumber} mono />
                   <div className="col-span-2 flex gap-2 pt-0.5">
-                    <ControlBadge active={isSerial} label={isSerial ? 'Serial no. required' : 'Serial no. not required'} />
-                    <ControlBadge active={isBatch}  label={isBatch ? 'Batch no. required' : 'Batch no. not required'} />
+                    <ControlBadge active={isSerial} label={isSerial ? I.serialReq : I.serialNotReq} />
+                    <ControlBadge active={isBatch}  label={isBatch ? I.batchReq : I.batchNotReq} />
                   </div>
                 </div>
               </div>
@@ -245,15 +243,15 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {/* Received qty — locked */}
                   <div className="space-y-1">
-                    <Label className="text-xs text-slate-500">Received Qty <span className="text-slate-300">(locked)</span></Label>
+                    <Label className="text-xs text-slate-500">{I.receivedQty} <span className="text-slate-300">{I.locked}</span></Label>
                     <div className="h-9 flex items-center px-3 rounded-lg bg-slate-100 border border-slate-200 text-sm font-medium text-slate-600 font-mono">
-                      {Number(item.quantity).toLocaleString()}
+                      {fmt.number(Number(item.quantity))}
                     </div>
                   </div>
 
                   {/* Inspect qty — editable */}
                   <div className="space-y-1">
-                    <Label className="text-xs">Inspect Qty <span className="text-red-500">*</span></Label>
+                    <Label className="text-xs">{I.inspectQty} <span className="text-red-500">*</span></Label>
                     <Input
                       type="number"
                       min={0}
@@ -267,14 +265,14 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                   {/* Serial */}
                   <div className="space-y-1">
                     <Label className="text-xs">
-                      Serial No {isSerial
+                      {I.serialNo} {isSerial
                         ? <span className="text-red-500">*</span>
-                        : <span className="text-slate-300">(optional)</span>}
+                        : <span className="text-slate-300">{F.optional}</span>}
                     </Label>
                     <Input
                       value={s.serial}
                       onChange={(e) => update(item.id, { serial: e.target.value })}
-                      placeholder={isSerial ? 'Required' : '—'}
+                      placeholder={isSerial ? I.requiredShort : '—'}
                       className={cn('h-9 font-mono text-xs', isSerial && !s.serial && 'border-amber-400')}
                     />
                   </div>
@@ -282,14 +280,14 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                   {/* Batch */}
                   <div className="space-y-1">
                     <Label className="text-xs">
-                      Lot / Batch {isBatch
+                      {I.lotBatch} {isBatch
                         ? <span className="text-red-500">*</span>
-                        : <span className="text-slate-300">(optional)</span>}
+                        : <span className="text-slate-300">{F.optional}</span>}
                     </Label>
                     <Input
                       value={s.batch}
                       onChange={(e) => update(item.id, { batch: e.target.value })}
-                      placeholder={isBatch ? 'Required' : '—'}
+                      placeholder={isBatch ? I.requiredShort : '—'}
                       className={cn('h-9 font-mono text-xs', isBatch && !s.batch && 'border-amber-400')}
                     />
                   </div>
@@ -298,12 +296,12 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                 {/* Inspector notes */}
                 <div className="space-y-1">
                   <Label className="text-xs text-slate-500">
-                    <Info className="inline h-3 w-3 mr-1" />Inspector Notes <span className="text-slate-300">(optional)</span>
+                    <Info className="inline h-3 w-3 mr-1" />{I.notes} <span className="text-slate-300">{F.optional}</span>
                   </Label>
                   <Input
                     value={s.notes}
                     onChange={(e) => update(item.id, { notes: e.target.value })}
-                    placeholder="Observations, damage description, discrepancy details…"
+                    placeholder={I.notesPlaceholder}
                     className="h-9 text-sm"
                   />
                 </div>
@@ -312,7 +310,7 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                 <div className="space-y-2">
                   <Label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
-                    Inspection Outcome <span className="text-red-500 ml-0.5">*</span>
+                    {I.outcome} <span className="text-red-500 ml-0.5">*</span>
                   </Label>
                   <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
                     {OUTCOMES.map((o) => {
@@ -329,7 +327,7 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
                           )}
                         >
                           <Icon className={cn('h-4 w-4', active ? o.activeColor : 'text-slate-400')} />
-                          {o.label}
+                          {labelOf(m.receiving.outcome, o.id)}
                         </button>
                       );
                     })}
@@ -352,7 +350,7 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
             onClick={onClose}
             className="text-sm text-slate-500 hover:text-slate-700 transition-colors"
           >
-            Cancel
+            {m.common.actions.cancel}
           </button>
           <Button
             onClick={handleSubmit}
@@ -360,7 +358,7 @@ export function InspectionWorkspace({ gr, onSubmit, onClose, busy }: InspectionW
             className="bg-blue-600 hover:bg-blue-700 text-white gap-2 disabled:opacity-50"
           >
             <ClipboardList className="h-4 w-4" />
-            {busy ? 'Submitting…' : 'Submit Inspection →'}
+            {busy ? I.submitting : I.submit}
           </Button>
         </div>
       </div>

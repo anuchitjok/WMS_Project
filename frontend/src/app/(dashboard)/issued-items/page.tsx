@@ -16,15 +16,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { REQUEST_STATUS_COLORS } from '@/lib/utils';
 import type { RequestStatus } from '@/types';
+import { labelOf, useT } from '@/i18n';
 
-const USAGE_OPTIONS: { value: string; label: string }[] = [
-  { value: 'USED', label: 'Used' },
-  { value: 'UNUSED', label: 'Unused — returning' },
-  { value: 'WRONG_ITEM', label: 'Wrong item — returning' },
-  { value: 'DOA', label: 'DOA' },
-  { value: 'DEFECTIVE', label: 'Defective' },
-];
-const usageLabel = (u: string | null) => USAGE_OPTIONS.find((o) => o.value === u)?.label ?? u ?? '';
+// Values sent to the API — never translated; only their labels are.
+const USAGE_VALUES = ['USED', 'UNUSED', 'WRONG_ITEM', 'DOA', 'DEFECTIVE'] as const;
 
 export default function IssuedItemsPage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -32,6 +27,10 @@ export default function IssuedItemsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [split, setSplit] = useState<{ req: any; units: IssuedUnitRow[] } | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
+  const { m, t } = useT();
+  const RT = m.returns;
+  const I = RT.issued;
+  const usageLabel = (u: string | null) => (u ? labelOf(RT.usage, u) : '');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -41,7 +40,7 @@ export default function IssuedItemsPage() {
 
   async function setUsage(id: string, usage: string) {
     setBusyId(id);
-    try { await rmaApi.confirmUsage(id, usage); toast.success(`Usage confirmed: ${usageLabel(usage)}`); load(); }
+    try { await rmaApi.confirmUsage(id, usage); toast.success(t(I.toastConfirmed, { usage: usageLabel(usage) })); load(); }
     catch (e: any) { toast.error(e.message); }
     finally { setBusyId(null); }
   }
@@ -61,7 +60,7 @@ export default function IssuedItemsPage() {
     setBusyId(split.req.id);
     try {
       await rmaApi.confirmUnits(split.req.id, units);
-      toast.success(`Recorded ${units.length} unit(s)`);
+      toast.success(t(I.toastRecorded, { count: units.length }));
       setSplit(null); load();
     } catch (e: any) { toast.error(e.message); }
     finally { setBusyId(null); }
@@ -72,19 +71,19 @@ export default function IssuedItemsPage() {
 
   return (
     <div className="p-6 space-y-5">
-      <PageHeader title="My Issued Items" subtitle="Confirm usage of issued goods — Used, DOA, or Unused return. Use “Per unit” when only part was used." icon={PackageCheck} />
+      <PageHeader title={I.title} subtitle={I.subtitle} icon={PackageCheck} />
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-slate-100 bg-slate-50">
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Request</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">RMA</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Items</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Status</th>
-            <th className="text-left px-4 py-3 font-medium text-slate-600">Usage Action</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{RT.col.request}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{RT.col.rma}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{RT.col.items}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{RT.col.status}</th>
+            <th className="text-left px-4 py-3 font-medium text-slate-600">{RT.col.usageAction}</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {loading ? [...Array(3)].map((_, i) => <tr key={i}>{[...Array(5)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
-              : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-12 text-center text-slate-400">No issued items awaiting usage confirmation</td></tr>
+              : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-12 text-center text-slate-400">{I.empty}</td></tr>
               : rows.map((r) => {
                 const recorded = r.unitUsages?.length ?? 0;
                 const legacyDone = !recorded && r.items?.some((it: any) => it.usageStatus);
@@ -94,20 +93,20 @@ export default function IssuedItemsPage() {
                     <td className="px-4 py-3 text-slate-600">{r.rmaCaseNumber ?? '—'}</td>
                     <td className="px-4 py-3 text-slate-600">{r.items?.map((it: any) => it.product?.code).join(', ')}</td>
                     <td className="px-4 py-3">
-                      <Badge variant="outline" className={REQUEST_STATUS_COLORS[r.status as RequestStatus]}>{r.status.replace(/_/g, ' ')}</Badge>
-                      {recorded > 0 && <p className="mt-1 text-xs text-slate-500">{recorded} unit(s) recorded</p>}
+                      <Badge variant="outline" className={REQUEST_STATUS_COLORS[r.status as RequestStatus]}>{labelOf(m.status.request, r.status)}</Badge>
+                      {recorded > 0 && <p className="mt-1 text-xs text-slate-500">{t(I.unitsRecorded, { count: recorded })}</p>}
                     </td>
                     <td className="px-4 py-3 space-x-1 whitespace-nowrap">
-                      {legacyDone ? <span className="text-xs text-slate-500">Usage confirmed</span> : (
+                      {legacyDone ? <span className="text-xs text-slate-500">{I.usageConfirmed}</span> : (
                         <>
                           {recorded === 0 && (
                             <>
-                              <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'USED')}>Used</Button>
-                              <Button size="sm" className="h-7 bg-red-600 hover:bg-red-700 text-white" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'DOA')}>DOA</Button>
-                              <Button size="sm" variant="outline" className="h-7" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'UNUSED')}>Unused</Button>
+                              <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'USED')}>{I.used}</Button>
+                              <Button size="sm" className="h-7 bg-red-600 hover:bg-red-700 text-white" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'DOA')}>{I.doa}</Button>
+                              <Button size="sm" variant="outline" className="h-7" disabled={busyId === r.id} onClick={() => setUsage(r.id, 'UNUSED')}>{I.unused}</Button>
                             </>
                           )}
-                          <Button size="sm" variant="outline" className="h-7" disabled={busyId === r.id} onClick={() => openSplit(r)}>Per unit…</Button>
+                          <Button size="sm" variant="outline" className="h-7" disabled={busyId === r.id} onClick={() => openSplit(r)}>{I.perUnit}</Button>
                         </>
                       )}
                     </td>
@@ -120,17 +119,17 @@ export default function IssuedItemsPage() {
 
       <Dialog open={!!split} onOpenChange={(o) => { if (!o) setSplit(null); }}>
         <DialogContent className="sm:max-w-2xl">
-          <DialogHeader><DialogTitle>Usage per unit · {split?.req.refNumber}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{t(I.splitTitle, { ref: split?.req.refNumber ?? '' })}</DialogTitle></DialogHeader>
           <p className="text-sm text-slate-600">
-            Pick what happened to each unit. Returned units count as stock again only after the warehouse receives and puts them away.
+            {I.splitHint}
           </p>
           <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-slate-200">
             <table className="w-full text-sm">
               <thead><tr className="border-b border-slate-100 bg-slate-50">
-                <th className="text-left px-3 py-2 font-medium text-slate-600">Product</th>
-                <th className="text-left px-3 py-2 font-medium text-slate-600">Serial / batch</th>
-                <th className="text-left px-3 py-2 font-medium text-slate-600">Qty</th>
-                <th className="text-left px-3 py-2 font-medium text-slate-600">What happened</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-600">{RT.col.product}</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-600">{RT.col.serialBatch}</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-600">{RT.col.qty}</th>
+                <th className="text-left px-3 py-2 font-medium text-slate-600">{RT.col.whatHappened}</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-50">
                 {split?.units.map((u) => (
@@ -139,11 +138,11 @@ export default function IssuedItemsPage() {
                     <td className="px-3 py-2 font-mono text-xs text-slate-600">{u.serialNumber ?? u.batchNumber ?? '—'}</td>
                     <td className="px-3 py-2 tabular-nums">{u.quantity} {u.unit ?? ''}</td>
                     <td className="px-3 py-2">
-                      {u.usage ? <span className="text-xs text-slate-500">{usageLabel(u.usage)}{u.returnStatus ? ` · return ${u.returnStatus.toLowerCase()}` : ''}</span> : (
-                        <select aria-label={`Usage for ${u.serialNumber ?? u.productCode}`} className="w-full border border-slate-200 rounded-md px-2 py-1 text-sm bg-white"
+                      {u.usage ? <span className="text-xs text-slate-500">{usageLabel(u.usage)}{u.returnStatus ? t(I.returnState, { status: u.returnStatus.toLowerCase() }) : ''}</span> : (
+                        <select aria-label={t(I.usageFor, { name: u.serialNumber ?? u.productCode })} className="w-full border border-slate-200 rounded-md px-2 py-1 text-sm bg-white"
                           value={choice[u.stockItemId] ?? ''} onChange={(e) => setChoice({ ...choice, [u.stockItemId]: e.target.value })}>
-                          <option value="">Not yet</option>
-                          {USAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          <option value="">{I.notYet}</option>
+                          {USAGE_VALUES.map((v) => <option key={v} value={v}>{RT.usage[v]}</option>)}
                         </select>
                       )}
                     </td>
@@ -152,9 +151,9 @@ export default function IssuedItemsPage() {
               </tbody>
             </table>
           </div>
-          <p className="text-xs text-slate-500">{chosen} of {open.length} open unit(s) selected. Units left as “Not yet” can be recorded later.</p>
+          <p className="text-xs text-slate-500">{t(I.selected, { chosen, open: open.length })}</p>
           <DialogFooter>
-            <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={!chosen || busyId === split?.req.id} onClick={saveSplit}>Record {chosen || ''} unit(s)</Button>
+            <Button className="bg-green-600 hover:bg-green-700 text-white" disabled={!chosen || busyId === split?.req.id} onClick={saveSplit}>{t(I.record, { count: chosen || '' })}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

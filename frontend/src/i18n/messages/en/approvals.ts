@@ -1,0 +1,28 @@
+export const approvals = {
+  title: 'Approval Workspace',
+  subtitle: 'Global request approval & validation queue',
+  col: {
+    request: 'Request',
+    requester: 'Requester',
+    rma: 'RMA',
+    stockCheck: 'Stock check',
+    status: 'Status',
+    action: 'Action',
+  },
+  empty: 'No requests pending approval',
+  stockAvailable: 'Stock available',
+  short: 'Short {count} item(s)',
+  shortLine: '{name}: need {need}, have {have}',
+  approve: 'Approve',
+  reject: 'Reject',
+  rejectTitle: 'Reject {ref}',
+  reasonLabel: 'Reason for rejection',
+  reasonPlaceholder: 'e.g. Insufficient stock / duplicate request / wrong RMA reference',
+  reasonHint: 'The requester will see this reason on their request.',
+  confirmReject: 'Confirm rejection',
+  toast: {
+    approved: 'Request approved',
+    reasonRequired: 'Please enter a reason for rejection',
+    rejected: 'Request rejected',
+  },
+};

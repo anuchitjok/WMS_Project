@@ -1,4 +1,5 @@
 import type { DashboardStats, PaginatedResponse, StockItem, WithdrawalRequest, User, AuditLog } from '@/types';
+import { getT } from '@/i18n';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -8,6 +9,43 @@ function getToken(): string | null {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ─── Error localization ────────────────────────────────────────────────────────
+// Messages the web app creates are shown in the user's language. Messages from the
+// API are translated when they match a known message (errors.api) or are empty
+// (then a message for the HTTP status is used); any other API message is shown as
+// sent. The original text stays on `rawMessage`, and `status`/`body` are unchanged,
+// so code that branches on them keeps working.
+type ApiError = Error & { status?: number; body?: unknown; rawMessage?: string };
+
+function localizeServerMessage(raw: string | undefined, status?: number): string {
+  const { m, t } = getT();
+  const api = m.errors.api as Record<string, string>;
+  const http = m.errors.http as Record<string, string>;
+  const text = (raw ?? '').trim();
+  if (text && api[text]) return api[text];
+  if (!text || /^(Request|Upload|Print|Import) failed/.test(text)) {
+    if (status && http[status]) return http[status];
+    return status ? t(m.errors.requestFailedStatus, { status }) : m.errors.requestFailed;
+  }
+  return text;
+}
+
+function apiError(raw: string | undefined, status?: number, body?: unknown): ApiError {
+  return Object.assign(new Error(localizeServerMessage(raw, status)), { status, body, rawMessage: raw });
+}
+
+/** Readable, localized message for any caught error (for toasts). */
+export function localizeError(err: unknown): string {
+  const { m } = getT();
+  if (err instanceof Error) return err.message || m.errors.unexpected;
+  if (typeof err === 'string' && err) return localizeServerMessage(err);
+  return m.errors.unexpected;
+}
+
+function serverMessage(err: any): string | undefined {
+  return Array.isArray(err?.message) ? err.message.join(', ') : err?.message;
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
@@ -30,7 +68,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch (networkErr) {
       lastErr = networkErr;
       if (attempt < maxAttempts) { await sleep(300 * attempt); continue; }
-      throw new Error('Network error — please check your connection and try again');
+      throw Object.assign(new Error(getT().m.errors.network), { rawMessage: 'Network error' });
     }
 
     // A 401 from the login call means bad credentials, not an expired session:
@@ -40,7 +78,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       localStorage.removeItem('wms_token');
       localStorage.removeItem('wms_user');
       if (typeof window !== 'undefined') window.location.href = '/login';
-      throw new Error('Unauthorized');
+      throw apiError('Unauthorized', 401);
     }
 
     // Retry transient server errors (5xx) and rate-limit (429) for GETs
@@ -50,16 +88,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     }
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ message: 'Request failed' }));
-      const msg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
+      const err = await res.json().catch(() => ({ message: '' }));
       // Keep the structured body (e.g. cycle-count `conflicts`) for callers that need it.
-      throw Object.assign(new Error(msg || `Request failed (${res.status})`), { status: res.status, body: err });
+      throw apiError(serverMessage(err), res.status, err);
     }
 
     return res.json();
   }
 
-  throw lastErr instanceof Error ? lastErr : new Error('Request failed');
+  throw lastErr instanceof Error ? lastErr : apiError(undefined);
 }
 
 // Auth
@@ -585,7 +622,7 @@ export const productsApi = {
       body: fd,
     }).then(async (r) => {
       const json = await r.json();
-      if (!r.ok) throw new Error(json.message ?? 'Import failed');
+      if (!r.ok) throw apiError(serverMessage(json), r.status, json);
       return json;
     });
   },
@@ -699,12 +736,11 @@ async function uploadFile<T>(path: string, file: File): Promise<T> {
   if (res.status === 401) {
     localStorage.removeItem('wms_token');
     if (typeof window !== 'undefined') window.location.href = '/login';
-    throw new Error('Unauthorized');
+    throw apiError('Unauthorized', 401);
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-    const msg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
-    throw new Error(msg || `Upload failed (${res.status})`);
+    const err = await res.json().catch(() => ({ message: '' }));
+    throw apiError(serverMessage(err), res.status, err);
   }
   return res.json();
 }
@@ -724,12 +760,11 @@ async function uploadMultipart<T>(path: string, file: File, fields: Record<strin
   if (res.status === 401) {
     localStorage.removeItem('wms_token');
     if (typeof window !== 'undefined') window.location.href = '/login';
-    throw new Error('Unauthorized');
+    throw apiError('Unauthorized', 401);
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: 'Upload failed' }));
-    const msg = Array.isArray(err.message) ? err.message.join(', ') : err.message;
-    throw new Error(msg || `Upload failed (${res.status})`);
+    const err = await res.json().catch(() => ({ message: '' }));
+    throw apiError(serverMessage(err), res.status, err);
   }
   return res.json();
 }
@@ -740,7 +775,7 @@ async function downloadFile(path: string, fallbackName: string): Promise<void> {
   const res = await fetch(`${BASE}/api${path}`, {
     headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  if (!res.ok) throw apiError(undefined, res.status);
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const match = disposition.match(/filename="?([^"]+)"?/);
@@ -772,7 +807,7 @@ async function downloadPost(path: string, body: any, fallbackName: string): Prom
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({ message: 'Print failed' }))).message || `Print failed (${res.status})`);
+  if (!res.ok) { const err = await res.json().catch(() => ({ message: '' })); throw apiError(serverMessage(err), res.status, err); }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

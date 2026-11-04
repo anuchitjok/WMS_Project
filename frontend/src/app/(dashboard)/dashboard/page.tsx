@@ -26,6 +26,7 @@ import { RecentTransactions } from '@/components/dashboard/recent-transactions';
 import { LowStockTable, type LowStockItem } from '@/components/dashboard/low-stock-table';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/store/auth.store';
+import { useT } from '@/i18n';
 
 // Threshold classifier for backlog/risk metrics (real, value-derived).
 const cls = (v: number, warn: number, crit: number): KpiStatus =>
@@ -33,6 +34,8 @@ const cls = (v: number, warn: number, crit: number): KpiStatus =>
 
 export default function DashboardPage() {
   const user = useAuthStore((s) => s.user);
+  const { m, t, fmt } = useT();
+  const d = m.dashboard;
   const [kpis, setKpis] = useState<DashboardKpis | null>(null);
   const [health, setHealth] = useState<InventoryHealth | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
@@ -73,45 +76,45 @@ export default function DashboardPage() {
     let opsLevel: ExecLevel = 'ok';
     if (k && (k.pendingApproval > 15 || k.pendingPutaway > 25)) opsLevel = 'critical';
     else if (k && (k.pendingApproval + k.pendingPutaway) > 0) opsLevel = 'warn';
-    const opsHeadline = opsLevel === 'ok' ? 'Warehouse Operating Normally'
-      : opsLevel === 'warn' ? 'Operations Require Attention'
-      : 'Operations Critical — Action Needed';
+    const opsHeadline = opsLevel === 'ok' ? d.exec.opsOk
+      : opsLevel === 'warn' ? d.exec.opsWarn
+      : d.exec.opsCritical;
 
     // Inventory level
     let invLevel: ExecLevel = 'ok';
     if (invTotal > 0 && (healthPct! < 50 || riskShare > 0.2)) invLevel = 'critical';
     else if (invTotal > 0 && (healthPct! < 75 || riskShare > 0.1)) invLevel = 'warn';
-    const invHeadline = invTotal === 0 ? 'No inventory data'
-      : invLevel === 'critical' ? 'Inventory Risk Detected'
-      : `Inventory Health ${healthPct}%`;
+    const invHeadline = invTotal === 0 ? d.exec.invNoData
+      : invLevel === 'critical' ? d.exec.invRisk
+      : t(d.exec.invHealth, { pct: healthPct });
     const invSub = invTotal === 0 ? undefined
-      : invLevel === 'critical' ? `Health ${healthPct}% · ${atRisk.toLocaleString()} units in QC / RTV`
-      : invLevel === 'warn' ? `${atRisk.toLocaleString()} units in QC / RTV need review`
-      : `${h!.available.toLocaleString()} of ${invTotal.toLocaleString()} units available`;
+      : invLevel === 'critical' ? t(d.exec.invSubCritical, { pct: healthPct, count: fmt.number(atRisk) })
+      : invLevel === 'warn' ? t(d.exec.invSubWarn, { count: fmt.number(atRisk) })
+      : t(d.exec.invSubOk, { available: fmt.number(h!.available), total: fmt.number(invTotal) });
 
     // Business risk level (dominant)
     let riskLevel: ExecLevel = 'ok';
     if (k && (k.lowStockAlerts > 10 || riskCount > 10)) riskLevel = 'critical';
     else if (riskCount > 0) riskLevel = 'warn';
-    const riskHeadline = riskLevel === 'ok' ? 'No Critical Risks'
-      : riskLevel === 'warn' ? `${riskCount} Alert${riskCount === 1 ? '' : 's'} — Review Recommended`
-      : 'Immediate Action Required';
-    const riskSub = k ? `${k.lowStockAlerts} low stock · ${k.openReturns} inventory exceptions` : undefined;
+    const riskHeadline = riskLevel === 'ok' ? d.exec.riskOk
+      : riskLevel === 'warn' ? t(d.exec.riskWarn, { count: riskCount })
+      : d.exec.riskCritical;
+    const riskSub = k ? t(d.exec.riskSub, { low: k.lowStockAlerts, exceptions: k.openReturns }) : undefined;
 
     return { invTotal, healthPct, openTasks, riskCount, opsLevel, opsHeadline,
       invLevel, invHeadline, invSub, riskLevel, riskHeadline, riskSub };
-  }, [kpis, health]);
+  }, [kpis, health, d, t, fmt]);
 
   const lowStockItems = (stats?.lowStockAlerts ?? []) as unknown as LowStockItem[];
 
   // Row 2 KPI cards with threshold status indicators.
   const cards: { label: string; value: number | null; icon: typeof PackagePlus; tone: KpiTone; href: string; status: KpiStatus }[] = [
-    { label: 'Receiving Today',    value: kpis?.todayReceiving    ?? null, icon: PackagePlus,   tone: 'blue',   href: '/receiving',            status: 'normal' },
-    { label: 'Pending Putaway',    value: kpis?.pendingPutaway    ?? null, icon: MapPin,        tone: 'blue',   href: '/putaway',              status: cls(kpis?.pendingPutaway ?? 0, 0, 25) },
-    { label: 'Pending Approval',   value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'blue',   href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
-    { label: 'Active Fulfillment', value: kpis?.activeFulfillment ?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: 'Shipment Today',     value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
-    { label: 'Critical Alerts',    value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/reports?tab=balance',          status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
+    { label: d.metrics.receivingToday, value: kpis?.todayReceiving    ?? null, icon: PackagePlus,   tone: 'blue',   href: '/receiving',            status: 'normal' },
+    { label: d.metrics.pendingPutaway, value: kpis?.pendingPutaway    ?? null, icon: MapPin,        tone: 'blue',   href: '/putaway',              status: cls(kpis?.pendingPutaway ?? 0, 0, 25) },
+    { label: d.metrics.pendingApproval, value: kpis?.pendingApproval   ?? null, icon: ShieldCheck,   tone: 'blue',   href: '/approvals',            status: cls(kpis?.pendingApproval ?? 0, 0, 15) },
+    { label: d.metrics.activeFulfillment, value: kpis?.activeFulfillment ?? null, icon: Truck,         tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
+    { label: d.metrics.shipmentToday, value: kpis?.shipmentToday     ?? null, icon: Send,          tone: 'blue',   href: '/outbound/fulfillment', status: 'normal' },
+    { label: d.metrics.criticalAlerts, value: kpis?.lowStockAlerts    ?? null, icon: AlertTriangle, tone: 'red',    href: '/reports?tab=balance',          status: cls(kpis?.lowStockAlerts ?? 0, 0, 10) },
   ];
 
   return (
@@ -119,49 +122,49 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600">Hightpoint Service Network</p>
-          <h1 className="text-2xl font-bold text-slate-900 mt-0.5">Operations Center</h1>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600">{d.company}</p>
+          <h1 className="text-2xl font-bold text-slate-900 mt-0.5">{d.title}</h1>
           <p className="text-slate-500 text-sm mt-0.5">
-            Welcome back, {user?.fullName} · {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            {t(d.welcome, { name: user?.fullName ?? '' })} · {fmt.dateLong(new Date())}
           </p>
         </div>
         <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
-          <RefreshCw className={loading ? 'w-4 h-4 animate-spin' : 'w-4 h-4'} /> Refresh
+          <RefreshCw className={loading ? 'w-4 h-4 animate-spin' : 'w-4 h-4'} /> {m.common.actions.refresh}
         </Button>
       </div>
 
       {/* ROW 1 — Executive Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <ExecutiveCard
-          title="Operations Status" icon={Activity} level={derived.opsLevel}
+          title={d.exec.operations} icon={Activity} level={derived.opsLevel}
           headline={derived.opsHeadline}
-          subline={`${derived.openTasks.toLocaleString()} open tasks across queues`}
+          subline={t(d.exec.openTasksAcross, { count: fmt.number(derived.openTasks) })}
           loading={loading}
           metrics={[
-            { label: 'Open Tasks', value: derived.openTasks },
-            { label: 'Active Fulfillment', value: kpis?.activeFulfillment ?? 0 },
-            { label: 'Pending Putaway', value: kpis?.pendingPutaway ?? 0 },
-            { label: 'Pending Approval', value: kpis?.pendingApproval ?? 0 },
+            { label: d.metrics.openTasks, value: derived.openTasks },
+            { label: d.metrics.activeFulfillment, value: kpis?.activeFulfillment ?? 0 },
+            { label: d.metrics.pendingPutaway, value: kpis?.pendingPutaway ?? 0 },
+            { label: d.metrics.pendingApproval, value: kpis?.pendingApproval ?? 0 },
           ]}
         />
         <ExecutiveCard
-          title="Inventory Status" icon={Boxes} level={derived.invLevel}
+          title={d.exec.inventory} icon={Boxes} level={derived.invLevel}
           headline={derived.invHeadline} subline={derived.invSub}
           loading={loading}
           metrics={[
-            { label: 'Available', value: health?.available ?? 0 },
-            { label: 'Reserved', value: health?.reserved ?? 0 },
-            { label: 'QC Hold', value: health?.qcHold ?? 0 },
-            { label: 'RTV Pending', value: health?.rtvPending ?? 0 },
+            { label: d.metrics.available, value: health?.available ?? 0 },
+            { label: d.metrics.reserved, value: health?.reserved ?? 0 },
+            { label: d.metrics.qcHold, value: health?.qcHold ?? 0 },
+            { label: d.metrics.rtvPending, value: health?.rtvPending ?? 0 },
           ]}
         />
         <ExecutiveCard
-          title="Business Risk" icon={ShieldAlert} level={derived.riskLevel} dominant
+          title={d.exec.risk} icon={ShieldAlert} level={derived.riskLevel} dominant
           headline={derived.riskHeadline} subline={derived.riskSub}
           loading={loading}
           metrics={[
-            { label: 'Low Stock Alerts', value: kpis?.lowStockAlerts ?? 0 },
-            { label: 'Inventory Exceptions', value: kpis?.openReturns ?? 0 },
+            { label: d.metrics.lowStockAlerts, value: kpis?.lowStockAlerts ?? 0 },
+            { label: d.metrics.inventoryExceptions, value: kpis?.openReturns ?? 0 },
           ]}
         />
       </div>
