@@ -30,6 +30,7 @@ export const nav: Messages['nav'] = {
     warehouseOperations: '仓库作业',
     goodsReceiving: '收货',
     putaway: '上架',
+    inventory: '库存',
     fulfillmentBoard: '履约看板',
     handover: '交接',
     returnsInbound: '退货入库',

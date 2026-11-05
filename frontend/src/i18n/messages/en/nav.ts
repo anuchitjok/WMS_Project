@@ -29,6 +29,7 @@ export const nav = {
     warehouseOperations: 'Warehouse Operations',
     goodsReceiving: 'Goods Receiving',
     putaway: 'Putaway',
+    inventory: 'Inventory',
     fulfillmentBoard: 'Fulfillment Board',
     handover: 'Handover',
     returnsInbound: 'Returns — Inbound',

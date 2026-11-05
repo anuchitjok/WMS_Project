@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
-  LayoutDashboard, ClipboardList, RotateCcw, Users, ScrollText,
+  LayoutDashboard, Package, ClipboardList, RotateCcw, Users, ScrollText,
   LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Trash2, ListTodo,
@@ -68,12 +68,12 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/warehouse-layout', label: 'warehouseOperations', icon: Warehouse, roles: WH },
       { href: '/receiving', label: 'goodsReceiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'putaway', icon: MapPin, roles: WH },
+      { href: '/inventory', label: 'inventory', icon: Package },
       { href: '/outbound/fulfillment', label: 'fulfillmentBoard', icon: Truck, roles: WH },
       { href: '/handover', label: 'handover', icon: CheckCircle2, roles: WH },
       { href: '/warehouse/returns', label: 'returnsInbound', icon: RefreshCw, roles: WH },
-      // Phase 2: Inventory, Stock Transfer, Stock Adjustment, Barcode Scanner and
-      // Cycle Count (Step 5) are retired from navigation. Their pages still open
-      // as read-only history; /inventory redirects to Reports → Balance.
+      // Phase 2: Stock Transfer, Stock Adjustment, Barcode Scanner and Cycle Count
+      // (Step 5) are retired from navigation. Their pages still open as read-only history.
     ],
   },
   {

@@ -30,6 +30,7 @@ export const nav: Messages['nav'] = {
     warehouseOperations: 'ปฏิบัติการคลังสินค้า',
     goodsReceiving: 'รับสินค้า',
     putaway: 'จัดเก็บสินค้า',
+    inventory: 'สต็อกสินค้า',
     fulfillmentBoard: 'กระดานจัดส่งสินค้า',
     handover: 'ส่งมอบ',
     returnsInbound: 'รับคืนสินค้า',
