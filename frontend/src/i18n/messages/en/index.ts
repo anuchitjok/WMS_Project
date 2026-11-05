@@ -10,6 +10,7 @@ import { dataio } from './dataio';
 import { setup } from './setup';
 import { approvals } from './approvals';
 import { reports } from './reports';
+import { inventory } from './inventory';
 import { scrap } from './scrap';
 import { shared } from './shared';
 import { rtv } from './rtv';
@@ -35,6 +36,7 @@ export const en = {
   shared,
   scrap,
   reports,
+  inventory,
   approvals,
   setup,
   dataio,
