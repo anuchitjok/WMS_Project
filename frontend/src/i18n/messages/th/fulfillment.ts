@@ -4,6 +4,7 @@ export const fulfillment: Messages['fulfillment'] = {
   title: 'ดำเนินการจัดเตรียมสินค้า',
   subtitle: 'หยิบ / แพ็ก / จัดส่ง',
   lanes: {
+    awaiting: 'รอจัดสรร',
     all: 'งานทั้งหมด',
     allocated: 'รอสต็อก',
     picking: 'กำลังหยิบ',
@@ -86,6 +87,14 @@ export const fulfillment: Messages['fulfillment'] = {
     notes: 'หมายเหตุ',
     warning: 'การยืนยันปล่อยของจะตัดจ่ายสินค้า (Goods Issue) — สต็อกจะถูกหักออกจากคลัง',
     dispatch: 'ปล่อยของและตัดสต็อก',
+  },
+  awaiting: {
+    title: 'รอจัดสรร',
+    hint: 'ใบขอเบิกที่อนุมัติแล้วแต่ยังไม่มีงาน fulfillment กดจัดสรรเพื่อจองสต็อกและเริ่มหยิบของ',
+    newBadge: 'ใหม่ {count}',
+    approvedAt: 'อนุมัติ {time}',
+    viewAll: 'ดูทั้งหมด',
+    more: 'รออีก {count} รายการ',
   },
   toast: {
     loadFailed: 'โหลดบอร์ดไม่สำเร็จ',

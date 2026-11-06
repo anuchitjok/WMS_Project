@@ -90,4 +90,24 @@ export const nav = {
   },
   redirecting: 'Redirecting to {page}…',
   inventoryMoved: 'Inventory moved to Reports → Balance. Redirecting…',
+  // P7 7.1 — optional modules that an admin can switch off (data and code are kept).
+  modules: {
+    names: {
+      warranty: 'Warranty',
+      mrp: 'Material Planning (MRP)',
+      floorPlan2d: 'Floor plan 2D editor',
+    },
+    offTitle: '{module} is not enabled',
+    offBody: 'This module is switched off for now. Its data is kept and nothing has been deleted.',
+    offAdmin: 'A system administrator can switch it on in System Settings.',
+    openSettings: 'Open System Settings',
+    checking: 'Checking module availability…',
+    settingsTitle: 'Modules',
+    settingsBody: 'Choose which optional modules appear in the menu. A module that is off disappears from the menu and its page shows a notice. Data and code are kept, so you can switch it back on at any time.',
+    on: 'Shown',
+    off: 'Hidden',
+    save: 'Save modules',
+    saved: 'Module settings saved',
+    defaultNote: 'Not saved yet — using the built-in default (all hidden).',
+  },
 };

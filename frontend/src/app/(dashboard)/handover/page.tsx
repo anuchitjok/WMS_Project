@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { REQUEST_STATUS_COLORS } from '@/lib/utils';
 import type { RequestStatus } from '@/types';
 import { labelOf, useT } from '@/i18n';
+import { RequestQrButton } from '@/components/documents/request-qr-dialog';
 
 export default function HandoverPage() {
   const [rows, setRows] = useState<any[]>([]);
@@ -50,7 +51,7 @@ export default function HandoverPage() {
   return (
     <div className="p-6 space-y-5">
       <PageHeader title={H.title} subtitle={H.subtitle} icon={CheckCircle2} />
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-slate-100 bg-slate-50">
             <th className="text-left px-4 py-3 font-medium text-slate-600">{H.col.request}</th>
@@ -64,11 +65,20 @@ export default function HandoverPage() {
               : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-12 text-center text-slate-400">{H.empty}</td></tr>
               : rows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold text-green-700">{r.refNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs">
+                    <span className="font-semibold text-green-700">{r.refNumber}</span>
+                    {r.requestRef && <span className="block text-slate-500">{r.requestRef}</span>}
+                  </td>
                   <td className="px-4 py-3 text-slate-700">{r.requester?.fullName}</td>
                   <td className="px-4 py-3 text-slate-600">{r.items?.length ?? 0}</td>
                   <td className="px-4 py-3"><Badge variant="outline" className={REQUEST_STATUS_COLORS[r.status as RequestStatus]}>{(m.status.fulfillment as Record<string, string>)[r.status] ?? labelOf(m.status.request, r.status)}</Badge></td>
-                  <td className="px-4 py-3"><Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => openConfirm(r)}>{H.confirm}</Button></td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {/* Plan P5 5.3: the requester scans this QR and confirms receipt on their phone */}
+                      {r.requestRef && <RequestQrButton refNumber={r.requestRef} className="h-7" />}
+                      <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" onClick={() => openConfirm(r)}>{H.confirm}</Button>
+                    </div>
+                  </td>
                 </tr>
               ))}
           </tbody>

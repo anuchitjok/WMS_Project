@@ -4,12 +4,29 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ProductType, ProductStatus } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { diffFields, describeChanges } from '../common/audit-diff';
+import { resolveAuditNames, resolveProductName, nameAfterUpdate } from './product-audit-names';
 
 // Product fields whose old → new values are kept in the audit trail.
 const PRODUCT_AUDIT_FIELDS = [
   'name', 'description', 'manufacturer', 'model', 'partNumber', 'vendorPartNumber', 'productType', 'category',
   'unit', 'unitCost', 'serialControlled', 'batchControlled', 'minStock', 'brandId', 'productStatus', 'isActive',
+  'partType', 'defaultPrice', 'lengthCm', 'widthCm', 'heightCm',
 ] as const;
+
+/** Optional numeric field from a DTO: undefined = leave as is, null/'' = clear. */
+function optNum(v: unknown): number | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+/** Optional text field from a DTO: undefined = leave as is, blank = clear. */
+function optText(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  const t = String(v).trim();
+  return t ? t : null;
+}
 
 // Column definitions shared between export & template
 const STOCK_REGISTER_COLS = [
@@ -27,6 +44,12 @@ const STOCK_REGISTER_COLS = [
   { key: 'description',      header: 'Description',    width: 36 },
   { key: 'warehouse',        header: 'WH',             width: 16 },
   { key: 'qty',              header: 'Qty',            width: 8 },
+  // Migration 31 — appended; the headers above never change (old files still import).
+  { key: 'partType',         header: 'Part Type',      width: 16 },
+  { key: 'defaultPrice',     header: 'Default Price',  width: 14 },
+  { key: 'lengthCm',         header: 'Length (cm)',    width: 12 },
+  { key: 'widthCm',          header: 'Width (cm)',     width: 12 },
+  { key: 'heightCm',         header: 'Height (cm)',    width: 12 },
 ];
 
 @Injectable()
@@ -63,8 +86,45 @@ export class ProductsService {
     return p;
   }
 
+  /** GET /products/:id — the product plus Created By / Last Modified By names. */
+  async findOneWithNames(id: string) {
+    return this.withAuditNames(await this.findOne(id));
+  }
+
+  /** Product with Created By / Last Modified By display names (stored id, else the audit trail). */
+  private async withAuditNames<T extends { id: string; createdById?: string | null; updatedById?: string | null }>(p: T) {
+    const names = (await resolveAuditNames(this.prisma as any, [p])).get(p.id);
+    return { ...p, createdByName: names?.createdBy ?? null, updatedByName: names?.updatedBy ?? null };
+  }
+
+  /**
+   * Internal product code for a new product. The SKU (partNumber) is the identifier
+   * users see; the code stays unique and is derived from it (suffix on clash).
+   */
+  private async generateCode(base: string): Promise<string> {
+    const root = base.trim().slice(0, 40) || `P-${Date.now()}`;
+    if (!(await this.prisma.product.findUnique({ where: { code: root } }))) return root;
+    for (let i = 2; i < 50; i++) {
+      const c = `${root}-${i}`;
+      if (!(await this.prisma.product.findUnique({ where: { code: c } }))) return c;
+    }
+    return `${root}-${Date.now()}`;
+  }
+
   async create(dto: any, userId: string) {
     if (dto.unit !== undefined) dto.unit = await this.masterData.assertUom(dto.unit);
+    if (typeof dto.partNumber === 'string') dto.partNumber = dto.partNumber.trim() || undefined;
+    // Acumatica: Description is the item name — new products take name := description when no name is sent.
+    const name = resolveProductName(dto.name, dto.description);
+    if (!name) throw new BadRequestException('Description is required');
+    let code = typeof dto.code === 'string' ? dto.code.trim() : '';
+    if (code) {
+      const clash = await this.prisma.product.findUnique({ where: { code } });
+      if (clash) throw new ConflictException(`Product code already exists: ${code}`);
+    } else {
+      if (!dto.partNumber) throw new BadRequestException('Inventory ID / SKU is required');
+      code = await this.generateCode(dto.partNumber);
+    }
     if (dto.partNumber) {
       const exists = await this.prisma.product.findUnique({ where: { partNumber: dto.partNumber } });
       if (exists) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
@@ -72,7 +132,7 @@ export class ProductsService {
     const status: ProductStatus = dto.productStatus ?? ProductStatus.ACTIVE;
     const p = await this.prisma.product.create({
       data: {
-        code: dto.code, name: dto.name, description: dto.description ?? null,
+        code, name, description: dto.description ?? null,
         manufacturer: dto.manufacturer ?? null, model: dto.model ?? null,
         partNumber: dto.partNumber ?? null, vendorPartNumber: dto.vendorPartNumber ?? null,
         productType: dto.productType ?? ProductType.SPARE_PART,
@@ -83,6 +143,13 @@ export class ProductsService {
         minStock: dto.minStock ?? 0,
         productStatus: status,
         isActive: status === ProductStatus.ACTIVE,
+        partType: optText(dto.partType) ?? null,
+        defaultPrice: optNum(dto.defaultPrice) ?? null,
+        lengthCm: optNum(dto.lengthCm) ?? null,
+        widthCm: optNum(dto.widthCm) ?? null,
+        heightCm: optNum(dto.heightCm) ?? null,
+        createdById: userId ?? null,
+        updatedById: userId ?? null,
       },
       include: { brand: true },
     });
@@ -95,17 +162,22 @@ export class ProductsService {
   async update(id: string, dto: any, userId: string) {
     if (dto.unit !== undefined) dto.unit = await this.masterData.assertUom(dto.unit);
     const before = await this.findOne(id);
+    if (typeof dto.partNumber === 'string') dto.partNumber = dto.partNumber.trim() || undefined;
     if (dto.partNumber) {
       const clash = await this.prisma.product.findFirst({ where: { partNumber: dto.partNumber, NOT: { id } } });
       if (clash) throw new ConflictException(`Part number already exists: ${dto.partNumber}`);
     }
     const data: any = {
-      name: dto.name, description: dto.description, manufacturer: dto.manufacturer,
+      name: nameAfterUpdate(before, dto), description: dto.description, manufacturer: dto.manufacturer,
       model: dto.model, partNumber: dto.partNumber, vendorPartNumber: dto.vendorPartNumber ?? null,
       productType: dto.productType, category: dto.category, unit: dto.unit,
       unitCost: dto.unitCost, serialControlled: dto.serialControlled,
       batchControlled: dto.batchControlled,
       minStock: dto.minStock, brandId: dto.brandId || undefined,
+      partType: optText(dto.partType),
+      defaultPrice: optNum(dto.defaultPrice),
+      lengthCm: optNum(dto.lengthCm), widthCm: optNum(dto.widthCm), heightCm: optNum(dto.heightCm),
+      updatedById: userId ?? undefined,
     };
     if (dto.productStatus !== undefined) {
       data.productStatus = dto.productStatus;
@@ -130,7 +202,7 @@ export class ProductsService {
     if (product.productStatus === newStatus) return product;
     const p = await this.prisma.product.update({
       where: { id },
-      data: { productStatus: newStatus, isActive: newStatus === ProductStatus.ACTIVE },
+      data: { productStatus: newStatus, isActive: newStatus === ProductStatus.ACTIVE, updatedById: userId ?? undefined },
       include: { brand: true },
     });
     await this.prisma.auditLog.create({
@@ -238,7 +310,14 @@ export class ProductsService {
               rack: { select: { code: true } },
               slot: { select: { code: true } },
               goodsReceivingItems: {
-                include: { receiving: { select: { awbNumber: true, invoiceNumber: true, gswNumber: true, receivedDate: true, sourceType: true, refNumber: true } } },
+                include: {
+                  receiving: {
+                    select: {
+                      awbNumber: true, invoiceNumber: true, gswNumber: true, receivedDate: true, sourceType: true, refNumber: true,
+                      poNumber: true, sourceRef: true, receivedBy: { select: { fullName: true } },
+                    },
+                  },
+                },
                 take: 1,
               },
             },
@@ -259,6 +338,9 @@ export class ProductsService {
       this.prisma.product.count({ where }),
     ]);
 
+    // Created By / Last Modified By for the whole page in two batched queries.
+    const auditNames = await resolveAuditNames(this.prisma as any, products);
+
     const rows = products.map((p) => {
       const items = p.stockItems;
       const totalQty = items.reduce((a, i) => a + i.quantity, 0);
@@ -267,7 +349,9 @@ export class ProductsService {
       const primaryWh = items[0]?.warehouse?.code ?? '';
       const primaryRack = items[0]?.rack?.code ?? '';
       const primarySlot = items[0]?.slot?.code ?? '';
-      const latestRcv = items[0]?.goodsReceivingItems[0]?.receiving;
+      const latestRcvItem = items[0]?.goodsReceivingItems[0];
+      const latestRcv = latestRcvItem?.receiving;
+      const names = auditNames.get(p.id);
       const serialCount = items.filter((i) => i.serialNumber).length;
       const latestRmaRef = p.withdrawalRequestItems[0]?.request?.rmaCaseNumber ?? '';
       const latestReceiveDate = items[0]?.receivedDate ?? null;
@@ -281,6 +365,8 @@ export class ProductsService {
         unit: p.unit, unitCost: p.unitCost, minStock: p.minStock,
         serialControlled: p.serialControlled, batchControlled: p.batchControlled,
         productStatus: p.productStatus,
+        partType: p.partType, defaultPrice: p.defaultPrice,
+        lengthCm: p.lengthCm, widthCm: p.widthCm, heightCm: p.heightCm,
         brandId: p.brandId ?? '',
         brandName: p.brand?.name ?? '',
         totalQty,
@@ -295,8 +381,17 @@ export class ProductsService {
         invoiceNumber: latestRcv?.invoiceNumber ?? '',
         gswNumber: latestRcv?.gswNumber ?? '',
         rmaRef: latestRmaRef,
+        poNumber: latestRcv?.poNumber ?? '',
+        receivingRmaRef: latestRcv?.sourceRef ?? '',
+        receivedBy: latestRcv?.receivedBy?.fullName ?? '',
+        // New / Refurbish chosen at receipt; older receipts only have the QC condition.
+        itemCondition: latestRcvItem?.itemCondition ?? null,
+        qcCondition: latestRcvItem?.condition ?? null,
         latestReceiveDate,
         createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        createdByName: names?.createdBy ?? null,
+        updatedByName: names?.updatedBy ?? null,
         isLowStock: p.minStock > 0 && p._count.stockItems < p.minStock,
         hasQuarantine: !!statusCounts['QUARANTINE'],
         hasDoa: !!statusCounts['DOA'],
@@ -347,7 +442,7 @@ export class ProductsService {
     ]);
 
     if (!product) throw new NotFoundException('Product not found');
-    return { ...product, auditLogs };
+    return { ...(await this.withAuditNames(product)), auditLogs };
   }
 
   // ─── Stock Register ────────────────────────────────────────────────────────
@@ -410,6 +505,11 @@ export class ProductsService {
         qty: item.quantity,
         status: item.status,
         receivingRef: rcv?.refNumber ?? '',
+        partType: item.product?.partType ?? '',
+        defaultPrice: item.product?.defaultPrice ?? '',
+        lengthCm: item.product?.lengthCm ?? '',
+        widthCm: item.product?.widthCm ?? '',
+        heightCm: item.product?.heightCm ?? '',
         productId: item.product?.id ?? '',
         warehouseId: item.warehouseId ?? '',
       };
@@ -485,7 +585,7 @@ export class ProductsService {
     ws.getRow(1).height = 20;
 
     // Example row
-    ws.addRow(['2026-06-01', 'Zebra', 'DHL-TH-001', 'INV-2026-001', 'GSW-001', 'SPARE_PART', 'TC52 Battery Pack', 'TC52', 'ZB-BATT-VND', 'ZB-BATT-TC52', 'SN-00001', 'Standard battery 4000mAh', 'Tower B1FL', 1]);
+    ws.addRow(['2026-06-01', 'Zebra', 'DHL-TH-001', 'INV-2026-001', 'GSW-001', 'SPARE_PART', 'TC52 Battery Pack', 'TC52', 'ZB-BATT-VND', 'ZB-BATT-TC52', 'SN-00001', 'Standard battery 4000mAh', 'Tower B1FL', 1, 'Battery', 1500, 12, 8, 3]);
 
     const exRow = ws.getRow(2);
     exRow.eachCell((cell) => {
@@ -494,7 +594,7 @@ export class ProductsService {
     });
 
     // Notes row
-    ws.addRow(['← Date YYYY-MM-DD', 'Brand name', 'Air Waybill No.', 'Invoice number', 'GSW number', 'SPARE_PART or FINISHED_GOODS', 'Product name', 'Model name', 'Vendor P/N', 'Internal Part No.', 'Serial or batch', 'Product description', 'WH code', 'Quantity']);
+    ws.addRow(['← Date YYYY-MM-DD', 'Brand name', 'Air Waybill No.', 'Invoice number', 'GSW number', 'SPARE_PART or FINISHED_GOODS', 'Product name', 'Model name', 'Vendor P/N', 'Internal Part No.', 'Serial or batch', 'Product description', 'WH code', 'Quantity', 'Part type (optional)', 'Default price (optional)', 'Box length cm (optional)', 'Box width cm (optional)', 'Box height cm (optional)']);
 
     return Buffer.from(await wb.xlsx.writeBuffer() as ArrayBuffer);
   }
@@ -517,6 +617,14 @@ export class ProductsService {
         const serialNumber = String(row['Serial Number'] ?? row['serialNumber'] ?? '').trim() || null;
         const description = String(row['Description'] ?? row['description'] ?? '').trim() || null;
         const qty = Number(row['Qty'] ?? row['qty'] ?? 1);
+        // Migration 31 columns — optional, absent in old files.
+        const extra: Record<string, any> = {};
+        const pt = optText(row['Part Type'] ?? row['partType']);
+        if (pt !== undefined && pt !== null) extra.partType = pt;
+        for (const [hdr, key] of [['Default Price', 'defaultPrice'], ['Length (cm)', 'lengthCm'], ['Width (cm)', 'widthCm'], ['Height (cm)', 'heightCm']] as const) {
+          const n = optNum(row[hdr] ?? row[key]);
+          if (n !== undefined && n !== null) extra[key] = n;
+        }
 
         if (!productName) { errors.push(`Row ${rowNum}: Product name is required`); continue; }
 
@@ -539,7 +647,7 @@ export class ProductsService {
         if (existing) {
           product = await this.prisma.product.update({
             where: { id: existing.id },
-            data: { name: productName, model: model || null, vendorPartNumber, description, brandId, productType: (productType as any) ?? 'SPARE_PART' },
+            data: { name: productName, model: model || null, vendorPartNumber, description, brandId, productType: (productType as any) ?? 'SPARE_PART', ...extra, updatedById: userId ?? undefined },
           });
           updated++;
         } else {
@@ -548,6 +656,7 @@ export class ProductsService {
               code, name: productName, model: model || null, partNumber: partNumber || null,
               vendorPartNumber, description, brandId,
               productType: (productType as any) ?? 'SPARE_PART', unit: 'unit',
+              ...extra, createdById: userId ?? null, updatedById: userId ?? null,
             },
           });
           created++;

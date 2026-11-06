@@ -7,10 +7,11 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Truck, RefreshCw, AlertTriangle, Package, PackageCheck, Clock,
   Zap, ChevronUp, ChevronDown, Printer, Search, User,
-  CheckCircle2, Layers, BoxSelect, ShipWheel, LayoutGrid,
+  CheckCircle2, Layers, BoxSelect, ShipWheel, LayoutGrid, Inbox, Hash,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { fulfillmentApi, documentsApi } from '@/lib/api';
+import { RequestQrButton } from '@/components/documents/request-qr-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,6 +24,7 @@ import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { cn, hasUnsavedChanges } from '@/lib/utils';
 import Link from 'next/link';
 import { INTL_LOCALE, getT, labelOf, useT, type Locale, type Messages } from '@/i18n';
+import { DeliveryMethodBadge } from '@/components/requests/delivery-method-badge';
 
 type FMsgs = Messages['fulfillment'];
 
@@ -66,7 +68,9 @@ function normalizeBoard(raw: FulfillmentBoardResponse | null | undefined): Board
   };
 }
 
-type LaneKey = 'all' | keyof BoardData;
+// 'awaiting' (P4 4.5) is not a task lane: it lists approved requests that have
+// no fulfillment task yet (GET /fulfillment/allocatable-requests).
+type LaneKey = 'all' | 'awaiting' | keyof BoardData;
 type SubFilter = 'all' | 'open' | 'assigned' | 'mine';
 type SortField = 'time' | 'sla';
 
@@ -88,14 +92,21 @@ function formatRequestTime(dateStr: string | undefined, locale: Locale): string 
 }
 
 // ─── KPI / Filter Cards ───────────────────────────────────────────────────────
+// P4 4.6: equal-width cards (CSS grid) in flow order — Awaiting Allocation →
+// Pending Inventory → Picking → Packing/Label → Ready/Shipped → Exception →
+// SLA Risk, with All Active last (a summary/reset, not a step in the flow).
+// Calm style: one accent (green) for the selected card; red only for the two
+// warning counts (Exception, SLA Risk) and only when they are non-zero.
 
 function KpiFilterBar({
   board,
+  awaitingCount,
   loading,
   selected,
   onSelect,
 }: {
   board: BoardData;
+  awaitingCount: number;
   loading: boolean;
   selected: LaneKey;
   onSelect: (lane: LaneKey) => void;
@@ -107,56 +118,167 @@ function KpiFilterBar({
   const exceptions = asArray(board.exceptions);
   const allTasks   = [...allocated, ...picking, ...packing, ...shipping, ...exceptions];
   const slaRisk    = allTasks.filter((t) => hoursAgo(t.createdAt ?? t.updatedAt) >= 4).length;
-  const { m } = useT();
-  const L = m.fulfillment.lanes;
+  const { m, t } = useT();
+  const F = m.fulfillment;
+  const L = F.lanes;
 
-  const cards: {
-    key: LaneKey; label: string; icon: any; count: number;
-    numCls: string; activeCls: string;
-  }[] = [
-    { key: 'all',        label: L.all,        icon: LayoutGrid,    count: allTasks.length,   numCls: 'text-slate-700',  activeCls: 'border-slate-400 bg-slate-50 ring-1 ring-slate-200' },
-    { key: 'allocated',  label: L.allocated, icon: Layers,        count: allocated.length,  numCls: 'text-amber-700',  activeCls: 'border-amber-400 bg-amber-50 ring-1 ring-amber-200' },
-    { key: 'picking',    label: L.picking,            icon: BoxSelect,     count: picking.length,    numCls: 'text-cyan-700',   activeCls: 'border-cyan-400 bg-cyan-50 ring-1 ring-cyan-200' },
-    { key: 'packing',    label: L.packing,   icon: Package,       count: packing.length,    numCls: 'text-teal-700',   activeCls: 'border-teal-400 bg-teal-50 ring-1 ring-teal-200' },
-    { key: 'shipping',   label: L.shipping,   icon: Truck,         count: shipping.length,   numCls: 'text-green-700',  activeCls: 'border-green-400 bg-green-50 ring-1 ring-green-200' },
-    { key: 'exceptions', label: L.exceptions,          icon: AlertTriangle, count: exceptions.length, numCls: 'text-red-700',    activeCls: 'border-red-400 bg-red-50 ring-1 ring-red-200' },
+  const cards: { key: LaneKey | 'sla'; label: string; icon: any; count: number; warn?: boolean }[] = [
+    { key: 'awaiting',   label: L.awaiting,   icon: Inbox,         count: awaitingCount },
+    { key: 'allocated',  label: L.allocated,  icon: Layers,        count: allocated.length },
+    { key: 'picking',    label: L.picking,    icon: BoxSelect,     count: picking.length },
+    { key: 'packing',    label: L.packing,    icon: Package,       count: packing.length },
+    { key: 'shipping',   label: L.shipping,   icon: Truck,         count: shipping.length },
+    { key: 'exceptions', label: L.exceptions, icon: AlertTriangle, count: exceptions.length, warn: true },
+    { key: 'sla',        label: F.slaRisk,    icon: Clock,         count: slaRisk, warn: true },
+    { key: 'all',        label: L.all,        icon: LayoutGrid,    count: allTasks.length },
   ];
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      {cards.map(({ key, label, icon: Icon, count, numCls, activeCls }) => (
-        <button
-          key={key}
-          onClick={() => onSelect(key)}
-          className={cn(
-            'flex items-center gap-2.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white shadow-sm transition-all cursor-pointer hover:border-slate-300',
-            selected === key && activeCls,
-          )}
-        >
-          <Icon className={cn('w-4 h-4 flex-shrink-0', numCls)} />
-          <div className="text-left">
+    <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-2">
+      {cards.map(({ key, label, icon: Icon, count, warn }) => {
+        const isInfo = key === 'sla';
+        const active = !isInfo && selected === key;
+        const alert = warn && count > 0;
+        const body = (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <Icon className={cn('w-4 h-4 flex-shrink-0', active ? 'text-green-600' : alert ? 'text-red-500' : 'text-slate-400')} />
+              {key === 'awaiting' && count > 0 && !loading && (
+                <span className="rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
+                  {t(F.awaiting.newBadge, { count })}
+                </span>
+              )}
+            </div>
             {loading
-              ? <Skeleton className="h-5 w-8" />
-              : <p className="text-xl font-bold tabular-nums leading-none text-slate-900">{count}</p>
-            }
-            <p className="text-[11px] text-slate-500 mt-1 whitespace-nowrap">{label}</p>
-          </div>
-        </button>
-      ))}
-      {/* SLA Risk — info only */}
-      <div className={cn(
-        'flex items-center gap-2.5 px-3.5 py-2 rounded-lg border shadow-sm',
-        slaRisk > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200',
-      )}>
-        <Clock className={cn('w-4 h-4 flex-shrink-0', slaRisk > 0 ? 'text-red-600' : 'text-slate-400')} />
-        <div>
-          {loading ? <Skeleton className="h-5 w-8" /> : (
-            <p className={cn('text-xl font-bold tabular-nums leading-none', slaRisk > 0 ? 'text-red-700' : 'text-slate-500')}>{slaRisk}</p>
-          )}
-          <p className="text-[11px] text-slate-500 mt-1 whitespace-nowrap">{m.fulfillment.slaRisk}</p>
-        </div>
-      </div>
+              ? <Skeleton className="h-6 w-10 mt-2" />
+              : <p className={cn('mt-2 text-2xl font-bold tabular-nums leading-none', alert ? 'text-red-700' : 'text-slate-900')}>{count}</p>}
+            <p className="mt-1 text-xs text-slate-500 leading-snug">{label}</p>
+          </>
+        );
+        const base = 'min-w-0 rounded-lg border bg-white px-3 py-2.5 text-left shadow-sm';
+        if (isInfo) {
+          return <div key={key} className={cn(base, alert ? 'border-red-200' : 'border-slate-200')}>{body}</div>;
+        }
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onSelect(key as LaneKey)}
+            className={cn(
+              base, 'transition-colors cursor-pointer',
+              active ? 'border-green-500 bg-green-50 ring-1 ring-green-500/30' : 'border-slate-200 hover:border-slate-300',
+            )}
+          >
+            {body}
+          </button>
+        );
+      })}
     </div>
+  );
+}
+
+// ─── Awaiting Allocation (P4 4.5) ─────────────────────────────────────────────
+// Approved requests with no active fulfillment task — the same data the old
+// "+ Allocate" dialog loaded — shown as cards with an Allocate button.
+
+function AwaitingAllocationPanel({
+  requests, loading, allocatingId, onAllocate, reservationSummary, compact, onViewAll,
+}: {
+  requests: any[]; loading: boolean; allocatingId: string | null;
+  onAllocate: (r: any) => void; reservationSummary: string | null;
+  /** On the All Active view: show the first few only, with a link to the lane. */
+  compact?: boolean; onViewAll?: () => void;
+}) {
+  const { m, t, fmt } = useT();
+  const F = m.fulfillment;
+  const [search, setSearch] = useState('');
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? requests.filter((r) =>
+        r.refNumber?.toLowerCase().includes(q)
+        || r.rmaCaseNumber?.toLowerCase().includes(q)
+        || r.requester?.fullName?.toLowerCase().includes(q)
+        || r.department?.toLowerCase().includes(q))
+    : requests;
+  const LIMIT = 6;
+  const shown = compact ? filtered.slice(0, LIMIT) : filtered;
+  const hidden = filtered.length - shown.length;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Inbox className="w-4 h-4 text-green-600" />
+            <h2 className="text-sm font-semibold text-slate-800">{F.awaiting.title}</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 tabular-nums">{requests.length}</span>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            {F.awaiting.hint}
+            {reservationSummary && <> {reservationSummary}</>}
+          </p>
+        </div>
+        {!compact && (
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={F.alloc.search} className="pl-8 h-9 text-sm bg-white" />
+          </div>
+        )}
+      </div>
+
+      {loading && requests.length === 0 ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-28 rounded-lg" />)}
+        </div>
+      ) : shown.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white py-10 text-center text-sm text-slate-400">
+          <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-20" />
+          {requests.length === 0 ? F.alloc.none : F.alloc.noMatch}
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {shown.map((r) => (
+            <div key={r.id} className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-mono text-sm font-semibold text-green-700 truncate">{r.refNumber}</p>
+                  {r.rmaCaseNumber && (
+                    <p className="flex items-center gap-1 text-xs text-slate-500 truncate"><Hash className="w-3 h-3" />RMA {r.rmaCaseNumber}</p>
+                  )}
+                </div>
+                <DeliveryMethodBadge value={r.deliveryMethod} />
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-600 min-w-0">
+                <User className="w-3 h-3 flex-shrink-0 text-slate-400" />
+                <span className="truncate">{r.requester?.fullName ?? F.alloc.unknown}</span>
+                {r.department && <><span className="text-slate-300">·</span><span className="truncate">{r.department}</span></>}
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-auto pt-1">
+                <div className="text-xs text-slate-500">
+                  <span className="whitespace-nowrap">{t(F.alloc.itemCount, { count: r.items?.length ?? 0 })}</span>
+                  {r.approvedAt && <span className="block whitespace-nowrap">{t(F.awaiting.approvedAt, { time: fmt.dateTime(r.approvedAt) })}</span>}
+                </div>
+                <Button
+                  size="sm"
+                  className="h-8 bg-green-600 hover:bg-green-700 text-white text-xs flex-shrink-0"
+                  disabled={!!allocatingId}
+                  onClick={() => onAllocate(r)}
+                >
+                  {allocatingId === r.id ? F.allocating : F.allocate}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {compact && hidden > 0 && onViewAll && (
+        <button type="button" onClick={onViewAll} className="self-start text-xs font-medium text-green-700 hover:underline underline-offset-2">
+          {t(F.awaiting.more, { count: hidden })} · {F.awaiting.viewAll}
+        </button>
+      )}
+    </section>
   );
 }
 
@@ -296,6 +418,7 @@ function ActionCell({
       >
         <Printer className="w-3.5 h-3.5" />
       </button>
+      {task.requestRef && <RequestQrButton refNumber={task.requestRef} className="h-7 text-xs px-2" />}
       {!isExc && (
         <button
           className="h-7 w-7 flex items-center justify-center border border-slate-200 rounded-md text-slate-400 hover:text-red-600 hover:border-red-300 transition-colors"
@@ -432,6 +555,7 @@ function ActionQueueTable({
                           {task.requestRef && task.requestRef !== task.refNumber && (
                             <span className="font-mono text-[11px] text-slate-400">{task.requestRef}</span>
                           )}
+                          <DeliveryMethodBadge value={task.deliveryMethod} className="mt-1 self-start" />
                         </div>
                       </td>
                       <td className="px-3 py-3"><StatusBadge status={task.status} /></td>
@@ -536,10 +660,8 @@ export default function FulfillmentBoardPage() {
   const [packForm, setPackForm]     = useState(BLANK_PACK_FORM);
   const [shipTask, setShipTask]     = useState<any>(null);
   const [shipForm, setShipForm]     = useState(BLANK_SHIP_FORM);
-  const [allocOpen, setAllocOpen]   = useState(false);
   const [allocatable, setAllocatable] = useState<any[]>([]);
   const [allocLoading, setAllocLoading] = useState(false);
-  const [allocSearch, setAllocSearch] = useState('');
   const [allocatingId, setAllocatingId] = useState<string | null>(null);
   // Reservation wording comes from the server's real mode, never a hard-coded guess.
   const [reservationSummary, setReservationSummary] = useState<string | null>(null);
@@ -551,7 +673,16 @@ export default function FulfillmentBoardPage() {
   const [sortField, setSortField]       = useState<SortField>('time');
   const [sortAsc, setSortAsc]           = useState(true);
 
-  const load = useCallback(async () => {
+  // P4 4.5: the Awaiting Allocation lane loads with the board (same source the
+  // old Allocate dialog used), so its count is always current.
+  const loadAllocatable = useCallback(async () => {
+    setAllocLoading(true);
+    try { setAllocatable(await fulfillmentApi.allocatableRequests()); }
+    catch { toast.error(getT().m.fulfillment.toast.allocLoadFailed); setAllocatable([]); }
+    finally { setAllocLoading(false); }
+  }, []);
+
+  const loadBoard = useCallback(async () => {
     setLoading(true);
     try {
       const raw = await fulfillmentApi.board();
@@ -564,7 +695,16 @@ export default function FulfillmentBoardPage() {
     }
   }, []);
 
+  const load = useCallback(async () => {
+    await Promise.all([loadBoard(), loadAllocatable()]);
+  }, [loadBoard, loadAllocatable]);
+
   useEffect(() => { load(); }, [load]);
+
+  // Reservation wording comes from the server's real mode, never a hard-coded guess.
+  useEffect(() => {
+    fulfillmentApi.reservationMode().then((r) => setReservationSummary(r.summary)).catch(() => setReservationSummary(null));
+  }, []);
 
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
@@ -607,36 +747,14 @@ export default function FulfillmentBoardPage() {
     } catch (e: any) { toast.error(e.message); }
   }
 
-  const loadAllocatable = useCallback(async () => {
-    setAllocLoading(true);
-    fulfillmentApi.reservationMode().then((m) => setReservationSummary(m.summary)).catch(() => setReservationSummary(null));
-    try { setAllocatable(await fulfillmentApi.allocatableRequests()); }
-    catch { toast.error(getT().m.fulfillment.toast.allocLoadFailed); setAllocatable([]); }
-    finally { setAllocLoading(false); }
-  }, []);
-
-  function openAllocate() {
-    setAllocOpen(true);
-    setAllocSearch('');
-    loadAllocatable();
-  }
-
   async function allocateRequest(req: any) {
     setAllocatingId(req.id);
     try {
       await fulfillmentApi.allocate(req.id);
-      toast.success(t(F.toast.allocated, { ref: req.refNumber })); setAllocOpen(false); load();
-    } catch (e: any) { toast.error(e.message); }
+      toast.success(t(F.toast.allocated, { ref: req.refNumber })); load();
+    } catch (e: any) { toast.error(e.message); load(); }
     finally { setAllocatingId(null); }
   }
-
-  const filteredAllocatable = allocatable.filter((r) => {
-    if (!allocSearch.trim()) return true;
-    const q = allocSearch.toLowerCase();
-    return r.refNumber?.toLowerCase().includes(q)
-      || r.requester?.fullName?.toLowerCase().includes(q)
-      || r.department?.toLowerCase().includes(q);
-  });
 
   function handleSort(field: SortField) {
     if (sortField === field) setSortAsc((v) => !v);
@@ -660,16 +778,7 @@ export default function FulfillmentBoardPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-x-auto">
-          <KpiFilterBar
-            board={board}
-            loading={loading}
-            selected={selectedLane}
-            onSelect={setSelectedLane}
-          />
-        </div>
-
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
           <button
             onClick={() => setAutoRefresh((v) => !v)}
             className={cn(
@@ -682,14 +791,39 @@ export default function FulfillmentBoardPage() {
           <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={load} disabled={loading} aria-label={m.common.actions.refresh} title={m.common.actions.refresh}>
             <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
           </Button>
-          <Button size="sm" className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs" onClick={openAllocate}>
+          {/* Secondary path to the Awaiting Allocation lane (the old Allocate dialog lives there now). */}
+          <Button size="sm" className="h-8 bg-green-600 hover:bg-green-700 text-white gap-1.5 text-xs" onClick={() => setSelectedLane('awaiting')}>
             {F.allocateNew}
+            {allocatable.length > 0 && (
+              <span className="rounded-full bg-white/20 px-1.5 text-xs tabular-nums">{allocatable.length}</span>
+            )}
           </Button>
         </div>
       </div>
 
-      {/* Action Queue */}
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* KPI cards + Action Queue */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <KpiFilterBar
+          board={board}
+          awaitingCount={allocatable.length}
+          loading={loading || allocLoading}
+          selected={selectedLane}
+          onSelect={setSelectedLane}
+        />
+
+        {(selectedLane === 'awaiting' || (selectedLane === 'all' && allocatable.length > 0)) && (
+          <AwaitingAllocationPanel
+            requests={allocatable}
+            loading={allocLoading}
+            allocatingId={allocatingId}
+            onAllocate={allocateRequest}
+            reservationSummary={reservationSummary}
+            compact={selectedLane === 'all'}
+            onViewAll={() => setSelectedLane('awaiting')}
+          />
+        )}
+
+        {selectedLane !== 'awaiting' && (
         <ActionQueueTable
           board={board}
           loading={loading}
@@ -704,6 +838,7 @@ export default function FulfillmentBoardPage() {
           onShip={setShipTask}
           onException={(id) => setExceptionTaskId(id)}
         />
+        )}
       </div>
 
       {/* Legend */}
@@ -719,68 +854,6 @@ export default function FulfillmentBoardPage() {
       {exceptionTaskId && (
         <ExceptionModal taskId={exceptionTaskId} onClose={() => setExceptionTaskId(null)} onConfirm={handleException} />
       )}
-
-      <Dialog open={allocOpen} onOpenChange={setAllocOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader><DialogTitle>{F.alloc.title}</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <p className="text-xs text-slate-400">
-              {F.alloc.hint}
-              {reservationSummary && <> {reservationSummary}</>}
-            </p>
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-              <Input
-                value={allocSearch}
-                onChange={(e) => setAllocSearch(e.target.value)}
-                placeholder={F.alloc.search}
-                className="pl-8 h-9 text-sm"
-              />
-            </div>
-
-            <div className="max-h-80 overflow-y-auto -mx-1 px-1 space-y-2">
-              {allocLoading ? (
-                [...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-lg" />)
-              ) : filteredAllocatable.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 text-sm">
-                  <CheckCircle2 className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                  {allocatable.length === 0 ? F.alloc.none : F.alloc.noMatch}
-                </div>
-              ) : (
-                filteredAllocatable.map((r) => (
-                  <div key={r.id} className="flex items-center justify-between gap-3 border border-slate-200 rounded-lg p-3 hover:border-green-300 hover:bg-green-50/30 transition-colors">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-semibold text-green-700">{r.refNumber}</span>
-                        {r.rmaCaseNumber && <span className="text-[10px] text-slate-400">RMA {r.rmaCaseNumber}</span>}
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                        <User className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{r.requester?.fullName ?? F.alloc.unknown}</span>
-                        {r.department && <span className="text-slate-300">·</span>}
-                        {r.department && <span className="truncate">{r.department}</span>}
-                        <span className="text-slate-300">·</span>
-                        <span className="whitespace-nowrap">{t(F.alloc.itemCount, { count: r.items?.length ?? 0 })}</span>
-                      </div>
-                    </div>
-                    <Button
-                      size="sm"
-                      className="h-8 bg-green-700 hover:bg-green-800 text-white gap-1.5 text-xs flex-shrink-0"
-                      disabled={!!allocatingId}
-                      onClick={() => allocateRequest(r)}
-                    >
-                      {allocatingId === r.id ? F.allocating : F.allocate}
-                    </Button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAllocOpen(false)}>{m.common.actions.close}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!packTask} onOpenChange={(o) => { if (!o) packGuard.requestClose(); }}>
         <DialogContent>

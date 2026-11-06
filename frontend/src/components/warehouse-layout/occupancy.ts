@@ -17,11 +17,18 @@ export interface SlotData {
 export interface RackData {
   id: string; code: string; name?: string; zone?: string; rackType: string;
   levels: number; columns: number; isActive: boolean; updatedAt?: string;
+  /** Real size in cm (migration 29). Null = not measured; the 3D view uses defaults. */
+  lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null;
+  rackTypeId?: string | null;
+  /** Only present when the API includes the template relation. */
+  rackTypeMaster?: { category?: string | null } | null;
   slots: SlotData[];
   _count?: { slots: number; stockItems: number };
 }
 export interface WarehouseData {
   id: string; code: string; name: string; location?: string;
+  /** Real floor size in cm (migration 29). Null = not measured. */
+  lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null;
   racks: RackData[];
   _count?: { racks: number; stockItems: number };
 }

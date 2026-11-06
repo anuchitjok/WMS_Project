@@ -4,6 +4,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StockStatus, RequestStatus, RTVStatus, Prisma } from '@prisma/client';
 import { getLowStockProducts } from '../common/inventory-metrics';
 import { SystemSettingsService } from '../settings/system-settings.service';
+import { resolveAuditNames } from '../products/product-audit-names';
+import { sourceTypeLabel } from '../receiving/receiving-display';
+import { RECEIVE_COLUMNS, buildReceiveRow, ReceiveLine, iso, bin, sku } from './receive-report';
 
 // Statuses that mean the unit has physically left the warehouse — excluded from
 // the on-hand Balance Report.
@@ -25,6 +28,7 @@ export interface ReportFilters {
 }
 
 export type ReportType = 'master-data' | 'balance' | 'receive';
+export interface ReportColumn { header: string; key: string; width: number }
 
 function parseDate(d?: string): Date | undefined {
   if (!d) return undefined;
@@ -44,19 +48,6 @@ function dateRange(from?: string, to?: string): Prisma.DateTimeFilter | undefine
     f.lte = lte;
   }
   return f;
-}
-
-function iso(d?: Date | null): string {
-  return d ? d.toISOString() : '';
-}
-
-function bin(item: { rack?: { code: string } | null; slot?: { code: string } | null }): string {
-  const parts = [item.rack?.code, item.slot?.code].filter(Boolean);
-  return parts.join(' / ');
-}
-
-function sku(p: { partNumber?: string | null; code: string }): string {
-  return p.partNumber || p.code;
 }
 
 @Injectable()
@@ -151,7 +142,9 @@ export class ReportsService {
         receiveBy: gr?.receivedBy?.fullName ?? i.createdBy?.fullName ?? '',
         serialNumber: i.serialNumber ?? '',
         qty: i.quantity,
-        sourceType: gr?.sourceType ?? i.ownershipType,
+        sourceType: gr?.sourceType ? sourceTypeLabel(gr.sourceType) : i.ownershipType,
+        // Not an export column: the stored value, so a search for the old name still matches.
+        sourceTypeValue: gr?.sourceType ?? '',
         condition: i.goodsReceivingItems[0]?.condition ?? i.status,
         warehouse: i.warehouse?.name ?? '',
         binNumber: bin(i),
@@ -216,6 +209,8 @@ export class ReportsService {
   }
 
   // ── 3. Receive Report — one row per goods-receiving line ─────────────────────
+  // Goods Receiving + Item Master fields (plan 2.1 / 3.4). Product Created / Modified
+  // By come from the product's stored ids, else the audit trail (batched, no N+1).
   async receive(filters: ReportFilters = {}) {
     const where: Prisma.GoodsReceivingItemWhereInput = {};
     const rd = dateRange(filters.from, filters.to);
@@ -232,33 +227,14 @@ export class ReportsService {
       orderBy: { receiving: { receivedDate: 'desc' } },
     });
 
-    const rows = items.map((it) => {
-      const gr = it.receiving;
-      return {
-        createBy: gr.receivedBy?.fullName ?? '',
-        brand: it.product.brand?.name ?? '',
-        model: it.product.model ?? '',
-        sku: sku(it.product),
-        productType: it.product.productType,
-        description: it.product.description ?? '',
-        receiveDate: iso(gr.receivedDate),
-        receiveBy: gr.receivedBy?.fullName ?? '',
-        serialNumber: it.serialNumber ?? '',
-        qty: it.quantity,
-        sourceType: gr.sourceType ?? '',
-        condition: it.condition,
-        warehouse: it.stockItem?.warehouse?.name ?? '',
-        binNumber: it.stockItem ? bin(it.stockItem) : '',
-        awb: gr.awbNumber ?? '',
-        invoiceNo: gr.invoiceNumber ?? '',
-        rmaRef: gr.sourceRef ?? '',
-      };
-    });
+    const products = [...new Map(items.map((it) => [it.product.id, it.product])).values()];
+    const names = await resolveAuditNames(this.prisma as any, products);
+    const rows = items.map((it) => buildReceiveRow(it as ReceiveLine, names.get(it.product.id)));
     return this.applyQuery(rows, filters.q);
   }
 
   // ── Column definitions (shared by web table + export) ────────────────────────
-  private columns(report: ReportType): { header: string; key: string; width: number }[] {
+  private columns(report: ReportType): ReportColumn[] {
     switch (report) {
       case 'master-data':
         return [
@@ -299,25 +275,7 @@ export class ReportsService {
           { header: 'Last Transaction Out Date', key: 'lastOutDate', width: 24 },
         ];
       case 'receive':
-        return [
-          { header: 'CreateBy', key: 'createBy', width: 18 },
-          { header: 'Brand', key: 'brand', width: 16 },
-          { header: 'Model', key: 'model', width: 16 },
-          { header: 'PartNumber / SKU', key: 'sku', width: 20 },
-          { header: 'ProductType', key: 'productType', width: 16 },
-          { header: 'Description', key: 'description', width: 30 },
-          { header: 'ReceiveDate', key: 'receiveDate', width: 22 },
-          { header: 'ReceiveBy', key: 'receiveBy', width: 18 },
-          { header: 'S/N', key: 'serialNumber', width: 20 },
-          { header: 'QTY', key: 'qty', width: 8 },
-          { header: 'Source Type', key: 'sourceType', width: 16 },
-          { header: 'Condition', key: 'condition', width: 16 },
-          { header: 'Warehouse', key: 'warehouse', width: 18 },
-          { header: 'Bin Number', key: 'binNumber', width: 16 },
-          { header: 'AWB', key: 'awb', width: 18 },
-          { header: 'Invoice No', key: 'invoiceNo', width: 18 },
-          { header: 'RMA Reference No', key: 'rmaRef', width: 20 },
-        ];
+        return RECEIVE_COLUMNS;
     }
   }
 

@@ -29,6 +29,7 @@ export class WarehouseService {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
+            rackTypeMaster: { select: { category: true } },
             _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
@@ -48,6 +49,7 @@ export class WarehouseService {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
+            rackTypeMaster: { select: { category: true } },
             _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },

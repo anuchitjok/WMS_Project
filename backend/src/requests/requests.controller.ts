@@ -8,6 +8,7 @@ import { ACCESS } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateRequestDto } from './dto/create-request.dto';
 import { ApproveRequestDto } from './dto/approve-request.dto';
+import { BulkApproveDto } from './dto/bulk-approve.dto';
 import { UserRole, RequestStatus } from '@prisma/client';
 
 @ApiTags('Requests')
@@ -35,6 +36,7 @@ export class RequestsController {
     @Query('limit') limit?: number,
     @CurrentUser('id') requesterId?: string,
     @CurrentUser('role') role?: UserRole,
+    @Query('q') q?: string,
   ) {
     const isRequester = role === UserRole.REQUESTER;
     return this.requestsService.findAll({
@@ -42,8 +44,18 @@ export class RequestsController {
       stage,
       page,
       limit,
+      q,
       requesterId: isRequester ? requesterId : undefined,
     });
+  }
+
+  // P4 4.4: same permission as the single approve; each id runs the single-approve
+  // logic in its own transaction, results are reported per id.
+  @Post('bulk-approve')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.requestApprove)
+  bulkApprove(@Body() body: BulkApproveDto, @CurrentUser('id') userId: string) {
+    return this.requestsService.bulkApprove(body.ids, userId, body.approve, body.reason);
   }
 
   @Get(':id')

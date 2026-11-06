@@ -4,6 +4,7 @@ export const fulfillment: Messages['fulfillment'] = {
   title: '履约执行',
   subtitle: '拣货 / 打包 / 发货',
   lanes: {
+    awaiting: '待分配',
     all: '全部进行中',
     allocated: '待库存',
     picking: '拣货中',
@@ -86,6 +87,14 @@ export const fulfillment: Messages['fulfillment'] = {
     notes: '备注',
     warning: '确认出库将触发发货过账（Goods Issue）— 库存将被扣减。',
     dispatch: '出库并扣减库存',
+  },
+  awaiting: {
+    title: '待分配',
+    hint: '已批准但尚未生成履约任务的申请。分配后将预留库存并开始拣货。',
+    newBadge: '新 {count}',
+    approvedAt: '批准于 {time}',
+    viewAll: '查看全部',
+    more: '还有 {count} 个等待中',
   },
   toast: {
     loadFailed: '加载看板失败',

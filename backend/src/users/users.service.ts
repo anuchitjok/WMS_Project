@@ -1,11 +1,15 @@
-import { Injectable, NotFoundException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 import { MasterDataService } from '../master-data/master-data.service';
 import {
   GrantActor, isPrivilegedActor, assertCanGrantLegacyRole, assertCanGrantDbRole, assertCanManageTarget,
 } from '../auth/role-grant';
+import {
+  USER_EXPORT_COLUMNS, USER_EXPORT_SELECT, UsersActor, assertWarehouseAssignmentScope, toUserExportRow,
+} from './user-access';
 
 const USER_SELECT = {
   id: true, username: true, fullName: true, email: true, role: true, roleId: true,
@@ -31,6 +35,24 @@ export class UsersService {
       select: USER_SELECT,
       orderBy: { fullName: 'asc' },
     });
+  }
+
+  /** P7 7.2: every non-deleted user, allow-listed columns only (see USER_EXPORT_COLUMNS). */
+  async exportUsers(format: 'xlsx' | 'csv'): Promise<Buffer> {
+    const users = await this.prisma.user.findMany({
+      where: { deletedAt: null },
+      select: USER_EXPORT_SELECT,
+      orderBy: { username: 'asc' },
+    });
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Users');
+    ws.columns = USER_EXPORT_COLUMNS.map((c) => ({ ...c }));
+    const now = new Date();
+    users.forEach((u) => ws.addRow(toUserExportRow(u, now)));
+    ws.getRow(1).font = { bold: true };
+    return format === 'csv'
+      ? Buffer.from(await wb.csv.writeBuffer())
+      : Buffer.from(await wb.xlsx.writeBuffer());
   }
 
   async findOne(id: string) {
@@ -164,9 +186,15 @@ export class UsersService {
     });
   }
 
-  async setWarehouses(id: string, warehouseIds: string[], actor: GrantActor) {
+  async setWarehouses(id: string, warehouseIds: string[], actor: UsersActor) {
     const actorId = actor.id;
-    assertCanManageTarget(actor, await this.findOne(id));
+    const target = await this.findOne(id);
+    assertCanManageTarget(actor, target);
+    if (warehouseIds != null && (!Array.isArray(warehouseIds) || warehouseIds.some((w) => typeof w !== 'string'))) {
+      throw new BadRequestException('warehouseIds must be a list of warehouse ids');
+    }
+    const before = (target.warehouses ?? []).map((w) => w.warehouse.id);
+    assertWarehouseAssignmentScope(actor, before, [...new Set(warehouseIds ?? [])]);
     await this.prisma.$transaction([
       this.prisma.userWarehouse.deleteMany({ where: { userId: id } }),
       this.prisma.userWarehouse.createMany({

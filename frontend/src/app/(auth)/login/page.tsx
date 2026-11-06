@@ -33,7 +33,13 @@ export default function LoginPage() {
       applyForUser(res.user.id);
       const after = getT();
       toast.success(after.t(after.m.auth.welcomeToast, { name: res.user.fullName }));
-      router.push('/dashboard');
+      // P5: a QR scanned while logged out brings the user back to that page.
+      let returnTo: string | null = null;
+      try {
+        returnTo = sessionStorage.getItem('wms_return_to');
+        sessionStorage.removeItem('wms_return_to');
+      } catch { /* storage blocked */ }
+      router.push(returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/dashboard');
     } catch (err: unknown) {
       toast.error(err instanceof Error ? localizeError(err) : m.auth.loginFailed);
     } finally {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { toast } from 'sonner';
 import { inventoryApi, scanApi } from '@/lib/api';
@@ -13,6 +14,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { STOCK_STATUS_COLORS, formatDate } from '@/lib/utils';
 import { Search, QrCode } from 'lucide-react';
 import { RetiredNotice } from '@/components/layout/retired-notice';
+import { refFromScan, refPagePath } from '@/lib/api-documents';
+import { getT, labelOf, useT } from '@/i18n';
 
 // Dynamically import scanner to avoid SSR issues (camera API is browser-only)
 const BarcodeScanner = dynamic(
@@ -25,6 +28,9 @@ export default function ScannerPage() {
   const [loading, setLoading] = useState(false);
   const [manualCode, setManualCode] = useState('');
   const [history, setHistory] = useState<any[]>([]);
+  const router = useRouter();
+  const { m } = useT();
+  const S = m.documents.scanner;
 
   const loadHistory = useCallback(async () => {
     try { setHistory(await scanApi.history({ workflow: 'LOOKUP', limit: 10 })); } catch { /* ignore */ }
@@ -33,14 +39,22 @@ export default function ScannerPage() {
 
   async function lookup(code: string) {
     if (!code.trim()) return;
+    // Request QR (picking slip / handover screen) opens the request page (plan P5 5.3).
+    const ref = refFromScan(code);
+    if (ref) {
+      const { m: mm, t } = getT();
+      toast.success(t(mm.documents.scanner.openingRequest, { ref }));
+      router.push(refPagePath(ref));
+      return;
+    }
     setLoading(true);
     setResult(null);
     try {
       const item = await inventoryApi.barcode(code.trim());
       setResult(item);
-      toast.success(`Found: ${item.product.name}`);
+      toast.success(getT().t(getT().m.documents.scanner.found, { name: item.product.name }));
     } catch {
-      toast.error(`No item found for: ${code}`);
+      toast.error(getT().t(getT().m.documents.scanner.notFound, { code }));
     } finally {
       setLoading(false);
       // log the scan into the immutable ledger (fire-and-forget) + refresh history
@@ -49,20 +63,20 @@ export default function ScannerPage() {
   }
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 max-w-2xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
           <QrCode className="h-6 w-6 text-green-600" />
-          Barcode Scanner
+          {S.title}
         </h1>
-        <p className="text-slate-500 text-sm mt-1">Scan a barcode or enter a code manually to look up stock</p>
+        <p className="text-slate-500 text-sm mt-1">{S.subtitle}</p>
       </div>
       {/* Phase 2: the scanner's transfer / count / adjust workflows answer RETIRED; lookup is read-only and stays. */}
-      <RetiredNotice feature="Scanning to transfer, count or adjust stock" scope="Lookup below is read-only and still works." />
+      <RetiredNotice feature={S.retiredFeature} scope={S.retiredScope} />
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Camera Scanner</CardTitle>
+          <CardTitle className="text-base">{S.camera}</CardTitle>
         </CardHeader>
         <CardContent>
           <BarcodeScanner onScan={lookup} />
@@ -71,17 +85,17 @@ export default function ScannerPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Manual Lookup</CardTitle>
+          <CardTitle className="text-base">{S.manual}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex gap-2">
             <Input
-              placeholder="Enter serial number, batch, or product code…"
+              placeholder={S.placeholder}
               value={manualCode}
               onChange={(e) => setManualCode(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && lookup(manualCode)}
             />
-            <Button onClick={() => lookup(manualCode)} disabled={!manualCode.trim() || loading}>
+            <Button onClick={() => lookup(manualCode)} disabled={!manualCode.trim() || loading} aria-label={S.search}>
               <Search className="h-4 w-4" />
             </Button>
           </div>
@@ -93,35 +107,35 @@ export default function ScannerPage() {
       {result && (
         <Card className="border-green-200 bg-green-50/50">
           <CardHeader>
-            <CardTitle className="text-base text-green-900">Stock Item Found</CardTitle>
+            <CardTitle className="text-base text-green-900">{S.resultTitle}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
-                <p className="text-slate-500 text-xs">Product</p>
+                <p className="text-slate-500 text-xs">{S.product}</p>
                 <p className="font-semibold text-slate-900">{result.product.name}</p>
                 <p className="text-xs text-slate-400">{result.product.code}</p>
               </div>
               <div>
-                <p className="text-slate-500 text-xs">Status</p>
+                <p className="text-slate-500 text-xs">{S.status}</p>
                 <Badge className={STOCK_STATUS_COLORS[result.status]} variant="outline">
-                  {result.status.replace(/_/g, ' ')}
+                  {labelOf(m.status.stock as Record<string, string>, result.status)}
                 </Badge>
               </div>
               <div>
-                <p className="text-slate-500 text-xs">Serial / Batch</p>
+                <p className="text-slate-500 text-xs">{S.serial}</p>
                 <p className="font-mono text-sm">{result.serialNumber ?? result.batchNumber ?? '—'}</p>
               </div>
               <div>
-                <p className="text-slate-500 text-xs">Location</p>
+                <p className="text-slate-500 text-xs">{S.location}</p>
                 <p className="text-sm">{[result.warehouse?.name, result.rack?.code, result.slot?.code].filter(Boolean).join(' › ') || '—'}</p>
               </div>
               <div>
-                <p className="text-slate-500 text-xs">Quantity</p>
+                <p className="text-slate-500 text-xs">{S.quantity}</p>
                 <p className="font-semibold">{result.quantity} {result.product.unit}</p>
               </div>
               <div>
-                <p className="text-slate-500 text-xs">Last Updated</p>
+                <p className="text-slate-500 text-xs">{S.updated}</p>
                 <p className="text-xs text-slate-600">{formatDate(result.updatedAt)}</p>
               </div>
             </div>
@@ -131,10 +145,10 @@ export default function ScannerPage() {
 
       {/* Recent scan history (immutable ledger) */}
       <Card>
-        <CardHeader><CardTitle className="text-base">Recent Scans</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">{S.recent}</CardTitle></CardHeader>
         <CardContent>
           {history.length === 0 ? (
-            <p className="text-sm text-slate-400">No scans yet</p>
+            <p className="text-sm text-slate-400">{S.noScans}</p>
           ) : (
             <div className="divide-y divide-slate-100">
               {history.map((h) => (

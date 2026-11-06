@@ -19,6 +19,14 @@ import { fulfillment } from './fulfillment';
 import { requests } from './requests';
 import { putaway } from './putaway';
 import { receiving } from './receiving';
+import { warehouseMaster } from './warehouseMaster';
+import { space } from './space';
+import { products } from './products';
+import { partners } from './partners';
+import { users } from './users';
+import { roles } from './roles';
+import { layout3d } from './layout3d';
+import { documents } from './documents';
 
 export const en = {
   common,
@@ -41,6 +49,14 @@ export const en = {
   setup,
   dataio,
   inbox,
+  warehouseMaster,
+  space,
+  products,
+  partners,
+  users,
+  roles,
+  layout3d,
+  documents,
 };
 
 export type Messages = typeof en;
