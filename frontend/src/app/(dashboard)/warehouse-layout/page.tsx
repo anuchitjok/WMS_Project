@@ -9,7 +9,8 @@
 // Occupancy is derived from actual stock placement.
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box } from 'lucide-react';
+import Link from 'next/link';
+import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box, Boxes } from 'lucide-react';
 import { warehouseApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -138,9 +139,16 @@ export default function WarehouseOperationsPage() {
             <p className="text-slate-500 text-sm">{P.subtitle}</p>
           </div>
         </div>
-        <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
-          <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /> {P.refresh}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Interactive 3D demo (sample data) — its own full-height page. */}
+          <Link href="/warehouse-layout/smart-3d" title={m.layout3d.smart.openTitle}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <Boxes className="h-4 w-4 text-green-600" /> {m.layout3d.smart.open}
+          </Link>
+          <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
+            <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /> {P.refresh}
+          </Button>
+        </div>
       </div>
 
       {error && !loading ? (
