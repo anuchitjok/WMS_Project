@@ -18,6 +18,8 @@ import { REQUEST_STAGE_COLORS, REQUEST_STAGE_LABELS, REQUEST_STATUS_COLORS } fro
 import { labelOf, useT } from '@/i18n';
 import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckCircle2, Eye, Send, X, Truck } from 'lucide-react';
 import { toast } from 'sonner';
+import { requestsApiP4, DELIVERY_METHODS, type DeliveryMethod } from '@/lib/api-requests';
+import { DeliveryMethodBadge } from '@/components/requests/delivery-method-badge';
 
 // ── Lifecycle timeline row ──────────────────────────────────────────────────────
 function TimelineRow({ label, who, at, done, tone = 'slate' }: {
@@ -393,6 +395,15 @@ export default function RequestsPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<string>('ALL');
   const [page, setPage] = useState(1);
+  // P4 4.1: server-side search, debounced so typing does not fire a request per key.
+  const [searchInput, setSearchInput] = useState('');
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const next = searchInput.trim();
+    if (next === q) return;
+    const h = setTimeout(() => { setQ(next); setPage(1); }, 350);
+    return () => clearTimeout(h);
+  }, [searchInput, q]);
 
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -408,6 +419,7 @@ export default function RequestsPage() {
 
   const [rmaCaseNumber, setRmaCaseNumber] = useState('');
   const [remark, setRemark] = useState('');
+  const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('COLLECT');
   const [items, setItems] = useState<ItemRow[]>([{ ...EMPTY_ITEM }]);
 
   const load = useCallback(async () => {
@@ -415,6 +427,7 @@ export default function RequestsPage() {
     try {
       const res = await requestsApi.list({
         stage: status !== 'ALL' ? status : undefined,
+        q: q || undefined,
         page,
         limit: 20,
       });
@@ -422,7 +435,7 @@ export default function RequestsPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, page]);
+  }, [status, page, q]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -442,6 +455,7 @@ export default function RequestsPage() {
   function resetForm() {
     setRmaCaseNumber('');
     setRemark('');
+    setDeliveryMethod('COLLECT');
     setItems([{ ...EMPTY_ITEM }]);
   }
 
@@ -537,9 +551,10 @@ export default function RequestsPage() {
 
     setSubmitting(true);
     try {
-      await requestsApi.create({
+      await requestsApiP4.create({
         rmaCaseNumber: rmaCaseNumber.trim(),
         remark: remark.trim() || undefined,
+        deliveryMethod,
         items: items.map((i) => ({ productId: i.productId, quantity: Number(i.quantity) })),
       });
       toast.success(R.toast.created);
@@ -605,6 +620,34 @@ export default function RequestsPage() {
                     value={rmaCaseNumber}
                     onChange={(e) => setRmaCaseNumber(e.target.value)}
                   />
+                </div>
+                {/* P4 4.7: Delivery method — Collect (default) / Ship. No address fields yet (on hold). */}
+                <div className="col-span-2 space-y-1.5">
+                  <Label className="text-sm font-medium">{R.deliveryMethod}</Label>
+                  <div role="radiogroup" aria-label={R.deliveryMethod} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {DELIVERY_METHODS.map((dm) => {
+                      const on = deliveryMethod === dm;
+                      const Icon = dm === 'SHIP' ? Truck : Package;
+                      return (
+                        <button
+                          key={dm}
+                          type="button"
+                          role="radio"
+                          aria-checked={on}
+                          onClick={() => setDeliveryMethod(dm)}
+                          className={`flex items-center gap-3 rounded-md border px-3 py-2 text-left text-sm transition-colors ${
+                            on ? 'border-green-500 bg-green-50 ring-1 ring-green-500/30' : 'border-input bg-background hover:bg-slate-50'
+                          }`}
+                        >
+                          <Icon className={`h-4 w-4 shrink-0 ${on ? 'text-green-600' : 'text-slate-400'}`} />
+                          <span className="min-w-0">
+                            <span className={`block font-medium ${on ? 'text-green-800' : 'text-slate-800'}`}>{R.delivery[dm]}</span>
+                            <span className="block text-xs text-slate-500">{R.deliveryHint[dm]}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
@@ -685,7 +728,27 @@ export default function RequestsPage() {
       </div>
 
       {/* Filter bar */}
-      <div className="flex gap-3">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative w-full sm:max-w-sm">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder={R.searchPlaceholder}
+            aria-label={R.searchPlaceholder}
+            className="pl-8"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => setSearchInput('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+              aria-label={m.common.actions.clear}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
         <Select value={status} onValueChange={(v) => { setStatus(v ?? 'ALL'); setPage(1); }}>
           <SelectTrigger className="w-52">
             <SelectValue>{status === 'ALL' ? R.allStatuses : labelOf(m.status.stage, status)}</SelectValue>
@@ -720,6 +783,10 @@ export default function RequestsPage() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">{R.rmaCase}</p>
                   <p className="font-mono font-semibold text-blue-700">{detailReq.rmaCaseNumber ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">{R.deliveryMethod}</p>
+                  <DeliveryMethodBadge value={(detailReq as any).deliveryMethod} />
                 </div>
                 {detailReq.notes && (
                   <div className="col-span-2">
@@ -847,12 +914,14 @@ export default function RequestsPage() {
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.ref}</th>
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.createdBy}</th>
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.rmaCase}</th>
+              <th className="text-left px-4 py-3 font-medium text-slate-600">{R.deliveryCol}</th>
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.status}</th>
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.items}</th>
               <th className="text-left px-4 py-3 font-medium text-slate-600">{R.table.created}</th>
@@ -863,14 +932,14 @@ export default function RequestsPage() {
             {loading ? (
               [...Array(6)].map((_, i) => (
                 <tr key={i}>
-                  {[...Array(7)].map((_, j) => (
+                  {[...Array(8)].map((_, j) => (
                     <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>
                   ))}
                 </tr>
               ))
             ) : data?.data.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-slate-400">{R.empty}</td>
+                <td colSpan={8} className="px-4 py-12 text-center text-slate-400">{R.empty}</td>
               </tr>
             ) : (
               data?.data.map((req) => (
@@ -883,6 +952,9 @@ export default function RequestsPage() {
                         {req.rmaCaseNumber}
                       </span>
                     ) : '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <DeliveryMethodBadge value={(req as any).deliveryMethod} />
                   </td>
                   <td className="px-4 py-3">
                     <RequestStageBadge req={req} />
@@ -917,6 +989,7 @@ export default function RequestsPage() {
             )}
           </tbody>
         </table>
+        </div>
         {data && data.totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 bg-slate-50">
             <p className="text-sm text-slate-500">{t(m.common.pagination.pageOf, { page: data.page, pages: data.totalPages })}</p>

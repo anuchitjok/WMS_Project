@@ -49,6 +49,15 @@ export class FulfillmentService {
       orderBy: { updatedAt: 'asc' },
     });
 
+    // P4 4.7: show Collect / Ship on each card. FulfillmentTask has no FK to the
+    // request, so the method is looked up by requestId (null = COLLECT).
+    const reqIds = [...new Set(tasks.map((t) => t.requestId))];
+    const methods = reqIds.length
+      ? await this.prisma.withdrawalRequest.findMany({ where: { id: { in: reqIds } }, select: { id: true, deliveryMethod: true } })
+      : [];
+    const methodById = new Map(methods.map((r) => [r.id, r.deliveryMethod === 'SHIP' ? 'SHIP' : 'COLLECT']));
+    for (const t of tasks as any[]) t.deliveryMethod = methodById.get(t.requestId) ?? 'COLLECT';
+
     const inSet = (arr: FulfillmentStatus[], s: FulfillmentStatus) => arr.includes(s);
     return {
       allocated: tasks.filter((t) => t.status === FulfillmentStatus.ALLOCATED),

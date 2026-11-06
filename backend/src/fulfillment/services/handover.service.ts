@@ -16,8 +16,8 @@ export class HandoverService {
   ) {}
 
   // Handover queue: tasks ready for physical handover to requester / RMA
-  getHandoverQueue(warehouseId?: string) {
-    return this.prisma.fulfillmentTask.findMany({
+  async getHandoverQueue(warehouseId?: string) {
+    const tasks = await this.prisma.fulfillmentTask.findMany({
       where: {
         status: { in: [FulfillmentStatus.READY_TO_SHIP, FulfillmentStatus.SHIPPED] },
         ...(warehouseId ? { warehouseId } : {}),
@@ -27,6 +27,20 @@ export class HandoverService {
         shipment: true,
       },
       orderBy: { createdAt: 'asc' },
+    });
+    // The Handover screen shows the receiver and the request QR (plan P5 5.3).
+    // FulfillmentTask has no FK to the request, so requester / delivery method are looked up.
+    const reqIds = [...new Set(tasks.map((t) => t.requestId))];
+    const reqs = reqIds.length
+      ? await this.prisma.withdrawalRequest.findMany({
+          where: { id: { in: reqIds } },
+          select: { id: true, deliveryMethod: true, requester: { select: { id: true, fullName: true } } },
+        })
+      : [];
+    const byId = new Map(reqs.map((r) => [r.id, r]));
+    return tasks.map((t) => {
+      const r = byId.get(t.requestId);
+      return { ...t, requester: r?.requester ?? null, deliveryMethod: r?.deliveryMethod === 'SHIP' ? 'SHIP' : 'COLLECT' };
     });
   }
 

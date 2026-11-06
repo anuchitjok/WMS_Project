@@ -5,7 +5,7 @@ import { getAvailableUnitsByProduct } from '../common/inventory-metrics';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
-import { RequestStatus, UserRole, StockStatus } from '@prisma/client';
+import { RequestStatus, UserRole, StockStatus, Prisma } from '@prisma/client';
 import { assertNotSelfApproval } from '../common/separation-of-duties';
 import { MasterDataService } from '../master-data/master-data.service';
 import { nanoid } from 'nanoid';
@@ -15,6 +15,44 @@ import { InventoryOrchestrationService } from '../inventory/inventory-orchestrat
 import { HandoverService } from '../fulfillment/services/handover.service';
 import { ISSUED_TASK_STATUSES } from '../fulfillment/services/task-state';
 import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
+import { DELIVERY_METHODS, DeliveryMethod } from './dto/create-request.dto';
+import { BULK_APPROVE_MAX, BulkApproveResult } from './dto/bulk-approve.dto';
+
+/**
+ * P4 4.1 — free-text search on the request list. Case-insensitive "contains" on
+ * ref #, RMA case, creator (full name / username) and any line's product
+ * (SKU code / part number / name). Returns null for a blank query so the caller
+ * adds nothing. The caller combines it with AND, so it never widens the
+ * status / stage / own-requests filters.
+ */
+export function buildRequestSearchWhere(q?: string | null): Prisma.WithdrawalRequestWhereInput | null {
+  const term = (q ?? '').trim().slice(0, 100);
+  if (!term) return null;
+  const c = { contains: term, mode: 'insensitive' as const };
+  return {
+    OR: [
+      { refNumber: c },
+      { rmaCaseNumber: c },
+      { requester: { is: { fullName: c } } },
+      { requester: { is: { username: c } } },
+      { items: { some: { product: { is: { OR: [{ code: c }, { partNumber: c }, { name: c }] } } } } },
+    ],
+  };
+}
+
+/** P4 4.7 — write-side: value to store; absent or null means COLLECT, anything else is rejected. */
+export function normalizeDeliveryMethod(v?: string | null): DeliveryMethod {
+  if (v == null || v === '') return 'COLLECT';
+  if (!(DELIVERY_METHODS as readonly string[]).includes(v)) {
+    throw new BadRequestException('deliveryMethod must be COLLECT or SHIP');
+  }
+  return v as DeliveryMethod;
+}
+
+/** Read-side: never throws — anything other than SHIP (incl. older null rows) shows as COLLECT. */
+export function displayDeliveryMethod(v?: string | null): DeliveryMethod {
+  return v === 'SHIP' ? 'SHIP' : 'COLLECT';
+}
 
 // Phase 5: coarse, business-facing request lifecycle derived from the
 // FulfillmentTask (the execution SSOT). The granular RequestStatus values
@@ -75,21 +113,23 @@ export class RequestsService {
     return `WR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
   }
 
-  async findAll(filter: { status?: RequestStatus; stage?: string; requesterId?: string; page?: number; limit?: number }) {
-    const { status, stage, requesterId, page = 1, limit = 20 } = filter;
+  async findAll(filter: { status?: RequestStatus; stage?: string; requesterId?: string; page?: number; limit?: number; q?: string }) {
+    const { status, stage, requesterId, page = 1, limit = 20, q } = filter;
     const skip = (page - 1) * limit;
     const where: any = {};
     if (status) where.status = status;
     if (requesterId) where.requesterId = requesterId;
     if (stage) where.id = { in: await this.requestIdsInStage(stage, requesterId) };
+    const search = buildRequestSearchWhere(q);
+    if (search) where.AND = [search];
 
     const [data, total] = await Promise.all([
       this.prisma.withdrawalRequest.findMany({
         where,
         include: {
-          requester: { select: { id: true, fullName: true, department: true } },
+          requester: { select: { id: true, fullName: true, username: true, department: true } },
           approver: { select: { id: true, fullName: true } },
-          items: { include: { product: true } },
+          items: { include: { product: { include: { brand: { select: { id: true, name: true } } } } } },
         },
         skip,
         take: limit,
@@ -127,6 +167,7 @@ export class RequestsService {
         .filter((s) => s.available < s.requested);
       return {
         ...r,
+        deliveryMethod: displayDeliveryMethod(r.deliveryMethod),
         fulfillmentStatus,
         stage: deriveRequestStage(r.status, fulfillmentStatus),
         stockOk: shortages.length === 0,
@@ -177,11 +218,19 @@ export class RequestsService {
       orderBy: { createdAt: 'desc' },
     });
     const fulfillmentStatus = task?.status ?? null;
-    return { ...req, fulfillmentStatus, stage: deriveRequestStage(req.status, fulfillmentStatus) };
+    // P4 4.3: live AVAILABLE units per line so the approver sees what is short.
+    const avail = await getAvailableUnitsByProduct(this.prisma, [...new Set(req.items.map((i) => i.productId))]);
+    return {
+      ...req,
+      deliveryMethod: displayDeliveryMethod(req.deliveryMethod),
+      items: req.items.map((i) => ({ ...i, availableQty: avail.get(i.productId) ?? 0 })),
+      fulfillmentStatus,
+      stage: deriveRequestStage(req.status, fulfillmentStatus),
+    };
   }
 
   async create(
-    data: { department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string; remark?: string; items: { productId: string; quantity: number }[] },
+    data: { department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string; remark?: string; deliveryMethod?: string | null; items: { productId: string; quantity: number }[] },
     requesterId: string,
   ) {
     // Auto-fill department from the requester's profile when not supplied.
@@ -201,6 +250,7 @@ export class RequestsService {
         requiredDate: data.requiredDate ? new Date(data.requiredDate) : undefined,
         rmaCaseNumber: data.rmaCaseNumber,
         notes: data.remark,
+        deliveryMethod: normalizeDeliveryMethod(data.deliveryMethod),
         status: RequestStatus.DRAFT,
         items: {
           create: data.items.map((i) => ({
@@ -439,6 +489,54 @@ export class RequestsService {
     this.notifications.notifyRequestDecision(id, req.requesterId, true).catch(() => {});
     this.notifications.notifyPickingTask(id, req.refNumber).catch(() => {});
     return updated;
+  }
+
+  /**
+   * P4 4.4 — approve or reject many requests in one call. Each id goes through
+   * approve() unchanged (its own claim + transaction, version bump, approval-engine
+   * step and, in legacy mode, FIFO reservation), one after another. A failure on
+   * one request (already decided, short stock, self-approval, …) is reported for
+   * that id and the rest still run. Sequential on purpose: FIFO reservation order
+   * stays deterministic and requests in the batch never compete for stock rows.
+   */
+  async bulkApprove(
+    ids: string[],
+    approverId: string,
+    approve: boolean,
+    reason?: string,
+  ): Promise<{ results: BulkApproveResult[]; approved: number; rejected: number; failed: number }> {
+    if (!Array.isArray(ids)) throw new BadRequestException('at least one request is required');
+    const unique = [...new Set(ids.filter((x) => typeof x === 'string' && x.trim()))];
+    if (unique.length === 0) throw new BadRequestException('at least one request is required');
+    if (unique.length > BULK_APPROVE_MAX) {
+      throw new BadRequestException(`at most ${BULK_APPROVE_MAX} requests per bulk decision`);
+    }
+    const why = reason?.trim() || undefined;
+    if (!approve && !why) throw new BadRequestException('A reason is required to reject requests');
+
+    const refs = await this.prisma.withdrawalRequest.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, refNumber: true },
+    });
+    const refById = new Map(refs.map((r) => [r.id, r.refNumber]));
+
+    const results: BulkApproveResult[] = [];
+    for (const id of unique) {
+      try {
+        const r: any = await this.approve(id, approverId, approve, approve ? undefined : why);
+        results.push({ id, refNumber: r?.refNumber ?? refById.get(id) ?? null, ok: true, status: r?.status });
+      } catch (e: any) {
+        const msg = e?.response?.message ?? e?.message ?? 'Failed';
+        results.push({ id, refNumber: refById.get(id) ?? null, ok: false, error: Array.isArray(msg) ? msg.join(', ') : String(msg) });
+      }
+    }
+    const done = results.filter((r) => r.ok).length;
+    return {
+      results,
+      approved: approve ? done : 0,
+      rejected: approve ? 0 : done,
+      failed: results.length - done,
+    };
   }
 
   /**

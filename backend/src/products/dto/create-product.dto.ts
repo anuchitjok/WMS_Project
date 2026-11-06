@@ -1,17 +1,17 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsEnum, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsBoolean, IsEnum, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProductType, ProductStatus } from '@prisma/client';
 
 export class CreateProductDto {
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Internal code. When omitted it is generated from the SKU (partNumber).' })
   @IsString()
-  @IsNotEmpty({ message: 'code is required' })
-  code: string;
+  @IsOptional()
+  code?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Product name. When omitted the Description is used (Acumatica: Description is the name).' })
   @IsString()
-  @IsNotEmpty({ message: 'name is required' })
-  name: string;
+  @IsOptional()
+  name?: string;
 
   @ApiPropertyOptional()
   @IsString()
@@ -84,6 +84,35 @@ export class CreateProductDto {
   @IsEnum(ProductStatus)
   @IsOptional()
   productStatus?: ProductStatus;
+
+  @ApiPropertyOptional({ description: 'Part Type, free text (e.g. Panel, Mainboard)' })
+  @IsString()
+  @IsOptional()
+  partType?: string;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Default selling price' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  defaultPrice?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box length (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  lengthCm?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box width (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  widthCm?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box height (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  heightCm?: number | null;
 }
 
 export class UpdateProductDto {
@@ -163,6 +192,35 @@ export class UpdateProductDto {
   @IsEnum(ProductStatus)
   @IsOptional()
   productStatus?: ProductStatus;
+
+  @ApiPropertyOptional({ description: 'Part Type, free text (e.g. Panel, Mainboard)' })
+  @IsString()
+  @IsOptional()
+  partType?: string;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Default selling price' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  defaultPrice?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box length (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  lengthCm?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box width (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  widthCm?: number | null;
+
+  @ApiPropertyOptional({ minimum: 0, description: 'Box height (cm)' })
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  heightCm?: number | null;
 }
 
 export class ChangeProductStatusDto {

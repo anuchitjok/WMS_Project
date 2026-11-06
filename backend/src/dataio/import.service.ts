@@ -7,10 +7,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { IMPORT_SCHEMAS, ImportType } from './import-schemas';
 import { assertNotRetired } from '../common/retired';
 import { parseSpreadsheet } from '../common/spreadsheet';
-import { UserRole, StockStatus, OwnershipType } from '@prisma/client';
+import { UserRole, StockStatus, OwnershipType, ProductType } from '@prisma/client';
 import { GrantActor, isPrivilegedActor } from '../auth/role-grant';
 import { MasterDataService } from '../master-data/master-data.service';
 import { passwordPolicyErrors } from '../common/password-policy';
+import { detectProductDuplicates, norm, DuplicateHit } from './product-dedupe';
+import { resolveProductName } from '../products/product-audit-names';
 
 export interface ValidatedRow {
   rowNumber: number;
@@ -19,16 +21,33 @@ export interface ValidatedRow {
   /** Phase 6: what the row will change on existing data (shown in preview, kept in the audit). */
   notes?: string[];
   valid: boolean;
+  /** Products: Brand + SKU duplicate — 'db' rows are skipped, 'file' rows are errors. */
+  duplicate?: DuplicateHit | null;
+}
+export interface ImportOptions {
+  /** Products: create brands whose brandCode does not exist yet (default off). */
+  createMissingBrands?: boolean;
 }
 export interface PriorImport { batch: string | null; at: Date; by: string | null }
 export interface PreviewResult {
   type: ImportType;
   columns: string[];
   rows: ValidatedRow[];
-  summary: { total: number; valid: number; invalid: number };
+  summary: { total: number; valid: number; invalid: number; duplicatesDb?: number; duplicatesFile?: number; newBrands?: string[] };
   /** Phase 6: the same file (same content) was already imported. */
   alreadyImported: PriorImport | null;
   fileHash: string;
+}
+
+/** Brand codes that valid product rows reference but that do not exist yet (first spelling wins). */
+export function missingBrandCodes(rows: Record<string, any>[], existing: { code: string }[]): string[] {
+  const have = new Set(existing.map((b) => norm(b.code)));
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    const c = String(r.brandCode ?? '').trim();
+    if (c && !have.has(norm(c)) && !out.has(norm(c))) out.set(norm(c), c);
+  }
+  return [...out.values()];
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -75,7 +94,7 @@ export class ImportService {
   }
 
   // ── Validate parsed rows for a given type (with duplicate detection) ──────
-  async validate(type: ImportType, rows: Record<string, any>[], actor?: GrantActor): Promise<ValidatedRow[]> {
+  async validate(type: ImportType, rows: Record<string, any>[], actor?: GrantActor, opts: ImportOptions = {}): Promise<ValidatedRow[]> {
     const schema = IMPORT_SCHEMAS[type];
     const required = schema.columns.filter((c) => c.required).map((c) => c.key);
 
@@ -101,6 +120,15 @@ export class ImportService {
     const existingUsernames = new Set(existingUsers.map((u) => u.username));
     const existingEmails = new Set(existingUsers.map((u) => u.email?.toLowerCase()).filter(Boolean) as string[]);
     // Phase 6: imports follow the same rules as the screens.
+    // Brand + SKU duplicates (products): against the database and within the file.
+    const dupes: (DuplicateHit | null)[] = type === 'products'
+      ? detectProductDuplicates(rows, await this.prisma.product.findMany({ select: { code: true, partNumber: true, brand: { select: { code: true } } } }))
+      : [];
+    const existingPartNumbers = type === 'products'
+      ? new Set((await this.prisma.product.findMany({ where: { partNumber: { not: null } }, select: { partNumber: true } })).map((p) => p.partNumber as string))
+      : new Set<string>();
+    const brandByNorm = new Map(brands.map((b) => [norm(b.code), b.code]));
+    const seenPartNumber = new Set<string>();
     const uoms = type === 'products' ? (await this.prisma.unitOfMeasure.findMany({ where: { isActive: true }, select: { code: true } })).map((u) => u.code) : [];
     const departments = new Map<string, string | Error>();
     if (type === 'users') {
@@ -116,8 +144,9 @@ export class ImportService {
     const seenUsername = new Set<string>();
     const seenEmail = new Set<string>();
 
-    return rows.map((data) => {
+    return rows.map((data, idx) => {
       const errors: string[] = [];
+      let duplicate: DuplicateHit | null = null;
       const notes: string[] = [];
       const rowNumber = data.__row as number;
 
@@ -129,14 +158,42 @@ export class ImportService {
 
       if (type === 'products') {
         const code = String(data.code ?? '').trim();
-        if (code && existingProductCodes.has(code)) errors.push(`Duplicate SKU already exists: ${code}`);
-        if (code && seenSku.has(code)) errors.push(`Duplicate SKU within file: ${code}`);
+        const partNumber = String(data.partNumber ?? '').trim();
+        duplicate = dupes[idx] ?? null;
+        if (duplicate?.kind === 'db') {
+          // Same Brand + SKU already in the Product Master: reported and skipped, never overwritten.
+          errors.push(`Skipped — Brand + SKU already exists (${duplicate.brandCode || 'no brand'} / ${duplicate.sku}) as product ${duplicate.existingCode}`);
+        } else {
+          if (duplicate?.kind === 'file') {
+            const first = rows[duplicate.firstRowIndex]?.__row ?? duplicate.firstRowIndex + 2;
+            errors.push(`Duplicate Brand + SKU within file (${duplicate.brandCode || 'no brand'} / ${duplicate.sku}) — same as row ${first}`);
+          }
+          // Existing uniqueness rules: product code and part number are unique.
+          if (code && existingProductCodes.has(code)) errors.push(`Duplicate SKU already exists: ${code}`);
+          if (code && seenSku.has(code) && duplicate?.kind !== 'file') errors.push(`Duplicate SKU within file: ${code}`);
+          if (partNumber && existingPartNumbers.has(partNumber)) errors.push(`Part number already exists: ${partNumber}`);
+          if (partNumber && seenPartNumber.has(partNumber) && duplicate?.kind !== 'file') errors.push(`Duplicate part number within file: ${partNumber}`);
+        }
         if (code) seenSku.add(code);
+        if (partNumber) seenPartNumber.add(partNumber);
+        if (!resolveProductName(data.name, data.description)) errors.push('Missing required field: name (or description)');
+        for (const k of ['defaultPrice', 'lengthCm', 'widthCm', 'heightCm']) {
+          if (data[k] === undefined || data[k] === null || data[k] === '') continue;
+          const n = this.num(data[k]);
+          if (n === null) errors.push(`${k} must be a number`);
+          else if (n < 0) errors.push(`${k} must be 0 or more`);
+        }
+        const pType = String(data.productType ?? '').trim().toUpperCase();
+        if (pType && !(pType in ProductType)) errors.push(`Invalid productType: ${data.productType} — use SPARE_PART or FINISHED_GOODS`);
         if (data.unitCost !== undefined && data.unitCost !== '' && this.num(data.unitCost) === null) errors.push('unitCost must be a number');
         else if ((this.num(data.unitCost) ?? 0) < 0) errors.push('unitCost must be 0 or more');
         if (data.minStock !== undefined && data.minStock !== '' && this.num(data.minStock) === null) errors.push('minStock must be a number');
         else if ((this.num(data.minStock) ?? 0) < 0) errors.push('minStock must be 0 or more');
-        if (data.brandCode && !brandCodes.has(String(data.brandCode).trim())) errors.push(`Unknown brandCode: ${data.brandCode}`);
+        const brandCode = String(data.brandCode ?? '').trim();
+        if (brandCode && !brandByNorm.has(norm(brandCode))) {
+          if (opts.createMissingBrands) notes.push(`New brand ${brandCode} will be created`);
+          else errors.push(`Unknown brandCode: ${data.brandCode}`);
+        }
         if (!BOOL.includes(String(data.serialControlled ?? '').trim().toLowerCase())) errors.push('serialControlled must be true or false');
         // Same rule as the Product form: the unit must be one of the managed Units of Measure.
         if (uoms.length) {
@@ -201,32 +258,41 @@ export class ImportService {
         if (prev && (prev.location ?? null) !== loc) notes.push(`Updates warehouse ${code} location: ${prev.location ?? '—'} → ${loc ?? '—'}`);
       }
 
-      return { rowNumber, data, errors, notes, valid: errors.length === 0 };
+      return { rowNumber, data, errors, notes, valid: errors.length === 0, ...(type === 'products' ? { duplicate } : {}) };
     });
   }
 
-  async preview(type: ImportType, file: Express.Multer.File, actor?: GrantActor): Promise<PreviewResult> {
+  async preview(type: ImportType, file: Express.Multer.File, actor?: GrantActor, opts: ImportOptions = {}): Promise<PreviewResult> {
     this.assertImportable(type);
     const rows = await this.parseFile(file);
-    const validated = await this.validate(type, rows, actor);
+    const validated = await this.validate(type, rows, actor, opts);
     const valid = validated.filter((r) => r.valid).length;
     const fileHash = this.fingerprint(file);
+    const productExtras = type === 'products'
+      ? {
+          duplicatesDb: validated.filter((r) => r.duplicate?.kind === 'db').length,
+          duplicatesFile: validated.filter((r) => r.duplicate?.kind === 'file').length,
+          newBrands: opts.createMissingBrands
+            ? missingBrandCodes(validated.filter((r) => r.valid).map((r) => r.data), await this.prisma.brand.findMany({ select: { code: true } }))
+            : [],
+        }
+      : {};
     return {
       type,
       columns: IMPORT_SCHEMAS[type].columns.map((c) => c.header),
       rows: validated,
-      summary: { total: validated.length, valid, invalid: validated.length - valid },
+      summary: { total: validated.length, valid, invalid: validated.length - valid, ...productExtras },
       alreadyImported: await this.priorImport(this.prisma, type, fileHash),
       fileHash,
     };
   }
 
   // ── Commit: insert valid rows (partial import), rollback on critical error ─
-  async commit(type: ImportType, file: Express.Multer.File, actor: GrantActor, opts: { allowReimport?: boolean } = {}) {
+  async commit(type: ImportType, file: Express.Multer.File, actor: GrantActor, opts: { allowReimport?: boolean } & ImportOptions = {}) {
     const userId = actor.id;
     this.assertImportable(type);
     const rows = await this.parseFile(file);
-    const validated = await this.validate(type, rows, actor);
+    const validated = await this.validate(type, rows, actor, opts);
     const validRows = validated.filter((r) => r.valid).map((r) => r.data);
     const skipped = validated.filter((r) => !r.valid);
     const notes = validated.filter((r) => r.valid && r.notes?.length).flatMap((r) => r.notes!.map((n) => `row ${r.rowNumber}: ${n}`));
@@ -245,6 +311,7 @@ export class ImportService {
     }
     const batch = `IMP-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
     let inserted = 0;
+    const brandsCreated: string[] = [];
     await this.prisma.$transaction(async (tx) => {
       // Phase 6: the same file is imported once. The lock makes two simultaneous
       // uploads of one file wait for each other, so the second sees the first.
@@ -260,22 +327,46 @@ export class ImportService {
         await assertSerialsFree(tx, validRows.map((d) => (d.serialNumber ? String(d.serialNumber).trim() : null)));
       }
       if (type === 'products') {
-        const brands = await tx.brand.findMany({ select: { id: true, code: true } });
-        const brandMap = new Map(brands.map((b) => [b.code, b.id]));
-        await tx.product.createMany({
-          data: validRows.map((d) => ({
-            code: String(d.code).trim(),
-            name: String(d.name).trim(),
-            category: d.category ? String(d.category).trim() : null,
-            unit: d.unit ? String(d.unit).trim() : 'unit',
-            unitCost: this.num(d.unitCost) ?? 0,
-            minStock: Math.trunc(this.num(d.minStock) ?? 0),
-            serialControlled: String(d.serialControlled).toLowerCase() === 'true',
-            brandId: d.brandCode ? brandMap.get(String(d.brandCode).trim()) ?? null : null,
-          })),
+        let brands = await tx.brand.findMany({ select: { id: true, code: true } });
+        if (opts.createMissingBrands) {
+          // Opt-in: brands named in the file but missing are created (code = name = the file's brandCode).
+          for (const code of missingBrandCodes(validRows, brands)) {
+            const b = await tx.brand.create({ data: { code, name: code } });
+            await tx.auditLog.create({ data: { userId, action: 'BRAND_CREATED', entityType: 'Brand', entityId: b.id, detail: `${b.code} · ${b.name} (product import ${batch})` } });
+            brandsCreated.push(code);
+          }
+          if (brandsCreated.length) brands = await tx.brand.findMany({ select: { id: true, code: true } });
+        }
+        const brandMap = new Map(brands.map((b) => [norm(b.code), b.id]));
+        const text = (v: unknown) => (v === null || v === undefined || String(v).trim() === '' ? null : String(v).trim());
+        const res = await tx.product.createMany({
+          data: validRows.map((d) => {
+            const pType = String(d.productType ?? '').trim().toUpperCase();
+            return {
+              code: String(d.code).trim(),
+              name: resolveProductName(d.name, d.description),
+              description: text(d.description),
+              model: text(d.model),
+              partNumber: text(d.partNumber),
+              productType: (pType in ProductType ? pType : ProductType.SPARE_PART) as ProductType,
+              category: d.category ? String(d.category).trim() : null,
+              unit: d.unit ? String(d.unit).trim() : 'unit',
+              unitCost: this.num(d.unitCost) ?? 0,
+              minStock: Math.trunc(this.num(d.minStock) ?? 0),
+              serialControlled: String(d.serialControlled).toLowerCase() === 'true',
+              brandId: d.brandCode ? brandMap.get(norm(d.brandCode)) ?? null : null,
+              partType: text(d.partType),
+              defaultPrice: this.num(d.defaultPrice),
+              lengthCm: this.num(d.lengthCm),
+              widthCm: this.num(d.widthCm),
+              heightCm: this.num(d.heightCm),
+              createdById: userId ?? null,
+              updatedById: userId ?? null,
+            };
+          }),
           skipDuplicates: true,
         });
-        inserted = validRows.length;
+        inserted = res.count;
       } else if (type === 'users') {
         const hash = await bcrypt.hash('Welcome@123', 12);
         for (const d of validRows) {
@@ -348,6 +439,7 @@ export class ImportService {
           detail: `${batch}: imported ${inserted} ${type} rows (${skipped.length} skipped) from ${file?.originalname ?? 'upload'}${prior ? ' — re-import confirmed' : ''}`,
           changes: {
             batch, fileHash, fileName: file?.originalname ?? null, inserted, skipped: skipped.length,
+            ...(brandsCreated.length ? { brandsCreated } : {}),
             ...(notes.length ? { updates: notes.slice(0, 200) } : {}),
             ...(prior ? { reimportOf: prior.batch } : {}),
           },
@@ -360,8 +452,9 @@ export class ImportService {
       batch,
       inserted,
       skipped: skipped.length,
-      skippedRows: skipped.map((s) => ({ rowNumber: s.rowNumber, errors: s.errors })),
+      skippedRows: skipped.map((s) => ({ rowNumber: s.rowNumber, errors: s.errors, ...(s.duplicate ? { duplicate: s.duplicate.kind } : {}) })),
       updates: notes,
+      ...(type === 'products' ? { brandsCreated } : {}),
     };
   }
 }

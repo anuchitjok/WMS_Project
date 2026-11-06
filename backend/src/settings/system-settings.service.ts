@@ -1,8 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  HIDDEN_MODULES_KEY,
+  MODULE_KEYS,
+  ModuleKey,
   SETTING_BY_KEY,
   SettingValue,
+  hiddenModulesFrom,
   parseSetting,
 } from './setting-definitions';
 
@@ -59,5 +63,26 @@ export class SystemSettingsService {
     return v.state === 'configured'
       ? (v.value as 'weekly' | 'monthly' | 'quarterly')
       : null;
+  }
+
+  /**
+   * Optional modules hidden from the web app (P7 7.1). Falls back to the
+   * built-in default (all hidden) while the setting is missing or invalid.
+   */
+  async moduleVisibility(): Promise<{
+    hidden: ModuleKey[];
+    visible: Record<ModuleKey, boolean>;
+    source: 'configured' | 'default';
+  }> {
+    const parsed = await this.get(HIDDEN_MODULES_KEY);
+    const hidden = hiddenModulesFrom(parsed);
+    const visible = Object.fromEntries(
+      MODULE_KEYS.map((k) => [k, !hidden.includes(k)]),
+    ) as Record<ModuleKey, boolean>;
+    return {
+      hidden,
+      visible,
+      source: parsed.state === 'configured' ? 'configured' : 'default',
+    };
   }
 }

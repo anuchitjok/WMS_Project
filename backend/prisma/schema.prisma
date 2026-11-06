@@ -325,6 +325,11 @@ model Warehouse {
   code       String      @unique
   name       String
   location   String?
+  // Migration 29 — physical size (cm) + % of floor usable after aisles; null = not measured yet
+  lengthCm      Float?
+  widthCm       Float?
+  heightCm      Float?
+  usableAreaPct Float?
   isActive   Boolean     @default(true)
   isDeleted  Boolean     @default(false)
   deletedAt  DateTime?
@@ -343,6 +348,12 @@ model Rack {
   name        String?
   zone        String?
   rackType    RackType    @default(STANDARD)
+  // Migration 29 — template + real size (cm). New racks only use STANDARD / PALLET in rackType.
+  rackTypeId  String?
+  lengthCm    Float?
+  widthCm     Float?
+  heightCm    Float?
+  rackTypeMaster RackTypeMaster? @relation(fields: [rackTypeId], references: [id])
   capacity    Int         @default(0)
   levels      Int         @default(1)
   columns     Int         @default(1)
@@ -361,6 +372,28 @@ model Rack {
   @@unique([warehouseId, code])
   @@index([warehouseId])
   @@index([zone])
+}
+
+// Migration 29 — size templates for racks. category: STANDARD_RACK | PALLET_ON_FLOOR
+model RackTypeMaster {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  category         String   @default("STANDARD_RACK")
+  lengthCm         Float
+  widthCm          Float
+  heightCm         Float
+  levels           Int      @default(1)
+  columns          Int      @default(1)
+  slotCapacity     Int      @default(1)
+  maxStackHeightCm Float?
+  description      String?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+  racks            Rack[]
+
+  @@index([category])
 }
 
 model Slot {
@@ -422,6 +455,14 @@ model Product {
   minStock         Int           @default(0)
   productStatus    ProductStatus @default(ACTIVE)
   isActive         Boolean       @default(true) // kept in sync with productStatus for backward compat
+  // Migration 31 — Acumatica Stock Item fields + box size for the space simulator
+  partType         String?
+  defaultPrice     Float?
+  createdById      String?       // user id, no FK (additive)
+  updatedById      String?       // user id, no FK (additive)
+  lengthCm         Float?
+  widthCm          Float?
+  heightCm         Float?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -513,6 +554,7 @@ model GoodsReceivingItem {
   manufactureDate   DateTime? // Phase 1
   quantity          Float     @default(1)
   condition         String    @default("good")
+  itemCondition     String?   // Migration 31 — NEW | REFURBISH, chosen at receipt (separate from QC condition)
   stockItemId       String?
   // Phase 2 — inspection outcome fields
   inspectedQty      Float?    // quantity confirmed by inspector (may differ from received qty)
@@ -549,6 +591,7 @@ model WithdrawalRequest {
   department    String
   rmaCaseNumber String?
   purpose       String?
+  deliveryMethod String?      // Migration 32 — COLLECT | SHIP; null = COLLECT (older requests)
   requiredDate  DateTime?
   status        RequestStatus @default(DRAFT)
   priority      Priority      @default(NORMAL)

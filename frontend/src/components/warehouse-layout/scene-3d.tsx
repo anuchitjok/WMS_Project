@@ -3,20 +3,29 @@
 // The WebGL part of the 3D view. Loaded only on the client, and only when the
 // 3D tab opens (next/dynamic with ssr: false in warehouse-3d.tsx).
 //
-// Performance: every slot is drawn with a handful of instanced meshes (pallet,
-// carton, tape, invisible hit box) — a few draw calls whatever the slot count.
-// Colour changes (view modes, filters) only rewrite instance colours. Clicks
-// resolve through instanceId on the hit boxes. The canvas renders on demand.
+// Looks like a selective pallet-rack warehouse: blue upright frames with
+// diagonal bracing, orange load beams, light decks, wooden pallets and brown
+// cartons (count follows real slot fill; an empty slot is an empty shelf),
+// pallet-on-floor areas marked in yellow, grey concrete floor with yellow aisle
+// lines and an overhead sign per rack. Colours and simple materials only — no
+// photo textures.
+//
+// Performance: every repeated part (uprights, braces, beams, decks, pallets,
+// cartons, tape, floor lines, invisible hit boxes) is one InstancedMesh — a
+// fixed number of draw calls whatever the slot count. Clicks resolve through
+// instanceId on the hit boxes. The canvas renders on demand.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from 'react';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { ContactShadows, Line, OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
+import { useT } from '@/i18n';
 import {
   type Scene3D, type PlacedRack, type PlacedSlot,
-  SLOT_W, SLOT_H, RACK_D, BASE_Y, GHOST_COLOR, PALLET_COLOR, boundsOf, rackToWorld,
+  BASE_Y, PALLET_H, COLORS, NO_ZONE, boundsOf, rackToWorld, frameColumns, bracingPanels,
+  cartonGrid, cartonCount, cartonLayout,
 } from './scene-geometry';
-import { isOccupied, isBlocked, slotUtil } from './occupancy';
+import { isOccupied, isBlocked } from './occupancy';
 
 export interface SceneApi {
   zoom: (factor: number) => void;
@@ -33,14 +42,23 @@ type Controls = ComponentRef<typeof OrbitControls>;
 
 const MAX_POLAR = Math.PI / 2 - 0.08; // never look from below the floor
 const DRAG_PX = 5;                     // moved further than this = a drag, not a click
-const CARTON_W = SLOT_W * 0.8, CARTON_D = RACK_D * 0.8;
+const DECK_TOP = 0.06;                 // deck surface above the beam's base line
+const SIGN_W = 1.1, SIGN_H = 0.42;     // overhead rack sign board
 
 // ─── Instanced boxes ───────────────────────────────────────────────────────────
 
-interface BoxItem { pos: [number, number, number]; scale: [number, number, number]; rotY: number; color?: string }
+interface BoxItem {
+  pos: [number, number, number];
+  scale: [number, number, number];
+  rotY: number;
+  /** Tilt around the rack's own X axis (diagonal braces). */
+  rotX?: number;
+  color?: string;
+  /** Brightness multiplier, so cartons in a stack don't look identical. */
+  shade?: number;
+}
 
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
-const ZERO: [number, number, number] = [0, 0, 0];
 
 function BoxInstances({ items, color, onClick, onHover, roughness = 0.85, metalness = 0, opacity, hit }: {
   items: BoxItem[]; color: string;
@@ -52,21 +70,22 @@ function BoxInstances({ items, color, onClick, onHover, roughness = 0.85, metaln
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
   const invalidate = useThree((s) => s.invalidate);
-  const perInstanceColor = !hit && items.some((it) => it.color);
+  const perInstanceColor = !hit && items.some((it) => it.color || it.shade != null);
 
   useLayoutEffect(() => {
     const m = ref.current;
     if (!m) return;
     const o = new THREE.Object3D();
+    o.rotation.order = 'YXZ'; // rack heading first, then the brace tilt in rack space
     const c = new THREE.Color();
     items.forEach((it, i) => {
       o.position.set(...it.pos);
-      o.rotation.set(0, it.rotY, 0);
+      o.rotation.set(it.rotX ?? 0, it.rotY, 0);
       // A zero scale makes the matrix non-invertible for raycasting; use a tiny one.
       o.scale.set(Math.max(it.scale[0], 1e-4), Math.max(it.scale[1], 1e-4), Math.max(it.scale[2], 1e-4));
       o.updateMatrix();
       m.setMatrixAt(i, o.matrix);
-      if (perInstanceColor) { c.set(it.color ?? color); m.setColorAt(i, c); }
+      if (perInstanceColor) { c.set(it.color ?? color); if (it.shade != null) c.multiplyScalar(it.shade); m.setColorAt(i, c); }
     });
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
@@ -93,61 +112,157 @@ function BoxInstances({ items, color, onClick, onHover, roughness = 0.85, metaln
   );
 }
 
-// ─── Rack frames ───────────────────────────────────────────────────────────────
+// ─── Rack structure: uprights, braces, beams, decks, floor markings, signs ─────
 
-function useRackFrames(racks: PlacedRack[], active: Set<string> | null) {
+/** Point on a rack at (lx, y, lz) in world space. */
+const at = (p: PlacedRack, lx: number, y: number, lz: number): [number, number, number] => {
+  const [x, z] = rackToWorld(p, lx, lz);
+  return [x, y, z];
+};
+
+/** Flat floor strip from local (x0,z0) to (x1,z1) — axis-aligned in rack space. */
+function strip(p: PlacedRack, x0: number, z0: number, x1: number, z1: number, w: number, color?: string): BoxItem {
+  return {
+    pos: at(p, (x0 + x1) / 2, 0.006, (z0 + z1) / 2),
+    scale: [Math.max(Math.abs(x1 - x0), w), 0.004, Math.max(Math.abs(z1 - z0), w)],
+    rotY: p.rotY, color,
+  };
+}
+
+/** Sign board centre (rack-local x, y) — over the rack's left end, facing the aisle. */
+export function signSpot(p: PlacedRack) {
+  const w = Math.min(SIGN_W, p.length);
+  return { lx: -p.length / 2 + w / 2, y: Math.max(p.height + 0.6, p.kind === 'floor' ? 2.6 : 0), w };
+}
+
+function useRackStructure(racks: PlacedRack[], active: Set<string> | null) {
   return useMemo(() => {
-    const posts: BoxItem[] = [], beams: BoxItem[] = [], decks: BoxItem[] = [];
+    const uprights: BoxItem[] = [], braces: BoxItem[] = [], beams: BoxItem[] = [], decks: BoxItem[] = [];
+    const lines: BoxItem[] = [], signs: BoxItem[] = [], hangers: BoxItem[] = [];
     for (const p of racks) {
       const on = !active || active.has(p.rack.id);
-      const top = p.height + 0.1;
-      for (let c = 0; c <= p.columns; c++) {
-        const lx = c * SLOT_W - p.length / 2;
-        for (const lz of [-RACK_D / 2, RACK_D / 2]) {
-          const [x, z] = rackToWorld(p, lx, lz);
-          posts.push({ pos: [x, top / 2, z], scale: [0.08, top, 0.08], rotY: p.rotY, color: on ? '#1e3a5f' : '#cbd5e1' });
+      const hz = p.depth / 2, hx = p.length / 2;
+
+      // Overhead sign with two hanger rods.
+      const sg = signSpot(p);
+      signs.push({ pos: at(p, sg.lx, sg.y, 0), scale: [sg.w, SIGN_H, 0.04], rotY: p.rotY, color: on ? COLORS.sign : COLORS.ghost });
+      for (const dx of [-sg.w * 0.4, sg.w * 0.4]) {
+        hangers.push({ pos: at(p, sg.lx + dx, sg.y + SIGN_H / 2 + 0.5, 0), scale: [0.015, 1, 0.015], rotY: p.rotY });
+      }
+
+      if (p.kind === 'floor') {
+        // Yellow outline round the area, thinner lines between pallet positions.
+        const line = on ? COLORS.line : COLORS.ghost;
+        lines.push(strip(p, -hx, -hz, hx, -hz, 0.1, line), strip(p, -hx, hz, hx, hz, 0.1, line),
+          strip(p, -hx, -hz, -hx, hz, 0.1, line), strip(p, hx, -hz, hx, hz, 0.1, line));
+        for (let c = 1; c < p.columns; c++) {
+          const lx = c * p.slotW - hx;
+          lines.push(strip(p, lx, -hz, lx, hz, 0.04, line));
+        }
+        for (let r = 1; r < p.levels; r++) {
+          const lz = r * p.rowD - hz;
+          lines.push(strip(p, -hx, lz, hx, lz, 0.04, line));
+        }
+        continue;
+      }
+
+      const top = p.height + 0.05;
+      const blue = on ? COLORS.upright : COLORS.ghost;
+      const orange = on ? COLORS.beam : COLORS.ghost;
+      const deck = on ? COLORS.deck : '#eef0f2';
+      const frames = frameColumns(p.columns, p.slotW);
+
+      // Upright frames: two posts, zig-zag diagonal bracing, horizontals top and bottom.
+      for (const c of frames) {
+        const lx = c * p.slotW - hx;
+        for (const lz of [-hz, hz]) uprights.push({ pos: at(p, lx, top / 2, lz), scale: [0.08, top, 0.07], rotY: p.rotY, color: blue });
+        bracingPanels(top).forEach(([y0, y1], i) => {
+          const dy = y1 - y0;
+          const len = Math.hypot(p.depth, dy);
+          const tilt = Math.atan2(dy, p.depth);
+          braces.push({ pos: at(p, lx, (y0 + y1) / 2, 0), scale: [0.035, 0.035, len], rotY: p.rotY, rotX: i % 2 ? tilt : -tilt, color: blue });
+        });
+        for (const y of [0.1, top - 0.05]) braces.push({ pos: at(p, lx, y, 0), scale: [0.035, 0.035, p.depth], rotY: p.rotY, color: blue });
+      }
+
+      // Load beams (front and back) and a deck per level, one per bay.
+      for (let b = 0; b < frames.length - 1; b++) {
+        const x0 = frames[b] * p.slotW - hx, x1 = frames[b + 1] * p.slotW - hx;
+        const span = x1 - x0, mid = (x0 + x1) / 2;
+        for (let l = 0; l < p.levels; l++) {
+          const y = BASE_Y + l * p.levelH;
+          for (const lz of [-hz, hz]) beams.push({ pos: at(p, mid, y, lz), scale: [span - 0.08, 0.1, 0.05], rotY: p.rotY, color: orange });
+          decks.push({ pos: at(p, mid, y + DECK_TOP - 0.01, 0), scale: [span - 0.1, 0.02, p.depth - 0.04], rotY: p.rotY, color: deck });
         }
       }
-      for (let l = 0; l <= p.levels; l++) {
-        const y = BASE_Y + l * SLOT_H;
-        for (const lz of [-RACK_D / 2, RACK_D / 2]) {
-          const [x, z] = rackToWorld(p, 0, lz);
-          beams.push({ pos: [x, y, z], scale: [p.length, 0.09, 0.07], rotY: p.rotY, color: on ? '#15803d' : '#d1d5db' });
-        }
-        if (l < p.levels) {
-          const [x, z] = rackToWorld(p, 0, 0);
-          decks.push({ pos: [x, y - 0.015, z], scale: [p.length, 0.025, RACK_D], rotY: p.rotY, color: on ? '#d6dbe1' : '#eef1f4' });
-        }
-      }
+
+      // Yellow aisle lines along both long sides.
+      const off = hz + 0.35;
+      lines.push(strip(p, -hx - 0.3, -off, hx + 0.3, -off, 0.08, on ? COLORS.line : COLORS.ghost),
+        strip(p, -hx - 0.3, off, hx + 0.3, off, 0.08, on ? COLORS.line : COLORS.ghost));
     }
-    return { posts, beams, decks };
+    return { uprights, braces, beams, decks, lines, signs, hangers };
   }, [racks, active]);
 }
 
-// ─── Slot visuals: pallet, carton (height = fill), tape, hit box ────────────────
+// ─── Slot contents: pallet, cartons (count = fill), tape, hit box ─────────────
+
+/** Small stable brightness variation per carton (0.9 … 1.06). */
+const shadeOf = (i: number, j: number) => 0.9 + (((i * 73 + j * 151) % 17) / 16) * 0.16;
 
 function useSlotVisuals(scene: Scene3D, rackById: Map<string, PlacedRack>, colors: (string | null)[], active: Set<string> | null) {
   return useMemo(() => {
-    const pallets: BoxItem[] = [], cartons: BoxItem[] = [], tapes: BoxItem[] = [], hits: BoxItem[] = [];
+    const boards: BoxItem[] = [], runners: BoxItem[] = [], cartons: BoxItem[] = [], tapes: BoxItem[] = [], marks: BoxItem[] = [], hits: BoxItem[] = [];
     scene.slots.forEach((s, i) => {
       const p = rackById.get(s.rack.id)!;
       const on = !active || active.has(s.rack.id);
-      const floorY = s.pos[1] - SLOT_H * 0.38; // deck surface of this level
-      const [x, , z] = s.pos;
-      const blockedEmpty = isBlocked(s.slot) && !isOccupied(s.slot);
-      pallets.push({ pos: [x, floorY + 0.03, z], scale: [CARTON_W + 0.06, 0.06, CARTON_D + 0.06], rotY: p.rotY,
-        color: !on ? '#eef1f4' : blockedEmpty ? '#f87171' : PALLET_COLOR });
+      const [w, h, d] = s.size;
+      const surface = s.kind === 'floor' ? 0 : s.baseY + DECK_TOP;
+      const place = (lx: number, y: number, lz: number): [number, number, number] => {
+        const c = Math.cos(p.rotY), sn = Math.sin(p.rotY);
+        return [s.pos[0] + lx * c + lz * sn, y, s.pos[2] - lx * sn + lz * c];
+      };
+      hits.push({ pos: s.pos, scale: [w * 0.96, h * 0.94, d * 0.96], rotY: p.rotY });
+
       const occ = isOccupied(s.slot);
-      // Carton height follows fill: a lightly used slot is a short carton, a full one fills the level.
-      const h = occ ? SLOT_H * (0.3 + 0.42 * Math.min(1, slotUtil(s.slot) / 100)) : 0;
-      const cy = floorY + 0.06 + h / 2;
-      cartons.push({ pos: [x, cy, z], scale: occ ? [CARTON_W, h, CARTON_D] : ZERO, rotY: p.rotY,
-        color: on ? (colors[i] ?? PALLET_COLOR) : GHOST_COLOR });
-      tapes.push({ pos: [x, cy + h / 2 + 0.004, z], scale: occ && on ? [0.12, 0.008, CARTON_D * 1.01] : ZERO, rotY: p.rotY });
-      hits.push({ pos: [x, s.pos[1], z], scale: [SLOT_W * 0.96, SLOT_H * 0.9, RACK_D * 0.96], rotY: p.rotY });
+      if (!occ) {
+        // Empty shelf. A blocked one gets a red plate so it's never missed.
+        if (isBlocked(s.slot)) marks.push({ pos: [s.pos[0], surface + 0.012, s.pos[2]], scale: [w * 0.8, 0.02, d * 0.8], rotY: p.rotY, color: on ? '#ef4444' : COLORS.ghost });
+        return;
+      }
+
+      // Wooden pallet: deck boards on three runners.
+      const pw = Math.min(w * 0.86, 1.2), pd = Math.min(d * 0.86, 1.0);
+      const palletColor = on ? COLORS.pallet : COLORS.ghost;
+      boards.push({ pos: [s.pos[0], surface + PALLET_H - 0.015, s.pos[2]], scale: [pw, 0.03, pd], rotY: p.rotY, color: palletColor });
+      for (const lz of [-pd / 2 + 0.05, 0, pd / 2 - 0.05]) {
+        runners.push({ pos: place(0, surface + (PALLET_H - 0.03) / 2, lz), scale: [pw, PALLET_H - 0.03, 0.1], rotY: p.rotY, color: palletColor });
+      }
+
+      // Cartons, as many as the slot's fill — up to what fits.
+      const room = s.kind === 'floor' ? h - PALLET_H : h - DECK_TOP - PALLET_H - 0.08;
+      const layers = s.kind === 'floor' ? 4 : 3;
+      const grid = cartonGrid(pw, pd, Math.max(room, 0.15), layers);
+      const boxes = cartonLayout(cartonCount(s.slot, grid.cap), pw, pd, Math.max(room, 0.15), layers);
+      const color = on ? (colors[i] ?? COLORS.carton) : COLORS.ghost;
+      const y0 = surface + PALLET_H;
+      boxes.forEach((b, j) => {
+        cartons.push({ pos: place(b.x, y0 + b.y, b.z), scale: [b.sx, b.sy, b.sz], rotY: p.rotY, color, shade: on ? shadeOf(i, j) : 1 });
+        if (on) tapes.push({ pos: place(b.x, y0 + b.y + b.sy / 2 + 0.003, b.z), scale: [Math.min(0.07, b.sx * 0.2), 0.006, b.sz * 1.01], rotY: p.rotY });
+      });
     });
-    return { pallets, cartons, tapes, hits };
+    return { boards, runners, cartons, tapes, marks, hits };
   }, [scene, rackById, colors, active]);
+}
+
+/** Thin concrete-slab joints every 4 m, inside the floor rectangle. */
+function floorJoints(f: Scene3D['floor']): BoxItem[] {
+  const out: BoxItem[] = [];
+  const STEP = 4;
+  const x0 = f.cx - f.w / 2, z0 = f.cz - f.d / 2;
+  for (let x = STEP; x < f.w - 0.5; x += STEP) out.push({ pos: [x0 + x, 0.002, f.cz], scale: [0.03, 0.002, f.d], rotY: 0 });
+  for (let z = STEP; z < f.d - 0.5; z += STEP) out.push({ pos: [f.cx, 0.002, z0 + z], scale: [f.w, 0.002, 0.03], rotY: 0 });
+  return out;
 }
 
 // ─── Camera rig ────────────────────────────────────────────────────────────────
@@ -270,11 +385,11 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, slotPos, onCamera }:
 
 // ─── Outline + DOM label projector ───────────────────────────────────────────
 
-const OUTLINE_GEOM = new THREE.EdgesGeometry(new THREE.BoxGeometry(SLOT_W * 0.94, SLOT_H * 0.86, RACK_D * 0.94));
+const OUTLINE_GEOM = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
 
-function Outline({ s, rotY, color }: { s: PlacedSlot; rotY: number; color: string }) {
+function Outline({ s, color }: { s: PlacedSlot; color: string }) {
   return (
-    <group position={s.pos} rotation={[0, rotY, 0]}>
+    <group position={s.pos} rotation={[0, s.rotY, 0]} scale={[s.size[0] * 0.94, s.size[1] * 0.9, s.size[2] * 0.94]}>
       <lineSegments geometry={OUTLINE_GEOM}>
         <lineBasicMaterial color={color} />
       </lineSegments>
@@ -314,7 +429,8 @@ function SceneContent({ scene, active, colors, selectedSlotId, onSelectSlot, api
   const isOn = (rackId: string) => !active || active.has(rackId);
 
   const vis = useSlotVisuals(scene, rackById, colors, active);
-  const frames = useRackFrames(scene.racks, active);
+  const rs = useRackStructure(scene.racks, active);
+  const joints = useMemo(() => floorJoints(scene.floor), [scene]);
 
   const homeBounds = useMemo(() => boundsOf(scene.racks), [scene]);
   const activeRacks = useMemo(() => (active ? scene.racks.filter((p) => active.has(p.rack.id)) : scene.racks), [scene, active]);
@@ -326,19 +442,10 @@ function SceneContent({ scene, active, colors, selectedSlotId, onSelectSlot, api
     return i == null ? null : scene.slots[i].pos;
   }, [slotIdx, scene]);
 
-  const b = scene.bounds;
-  const M = 5; // floor margin around the racks
-  const fx0 = b.minX - M, fx1 = b.maxX + M, fz0 = b.minZ - M, fz1 = b.maxZ + M;
-  const floorW = fx1 - fx0, floorD = fz1 - fz0;
-  const cx = (fx0 + fx1) / 2, cz = (fz0 + fz1) / 2;
-  const maxDist = Math.max(floorW, floorD) * 2.2 + 20;
-
-  // Aisle guide lines: one dashed line along the open side of every rack.
-  const aisles = useMemo(() => scene.racks.map((p) => {
-    const a = rackToWorld(p, -p.length / 2 - 0.6, RACK_D / 2 + 1.35);
-    const c = rackToWorld(p, p.length / 2 + 0.6, RACK_D / 2 + 1.35);
-    return [[a[0], 0.012, a[1]], [c[0], 0.012, c[1]]] as [number, number, number][];
-  }), [scene]);
+  const f = scene.floor;
+  const fx1 = f.cx + f.w / 2, fz0 = f.cz - f.d / 2;
+  const wallH = Math.max(4, scene.bounds.maxY + 2);
+  const maxDist = Math.max(f.w, f.d) * 2.2 + 20;
 
   const selIdx = selectedSlotId ? slotIdx.get(selectedSlotId) : undefined;
   const selected = selIdx != null ? scene.slots[selIdx] : undefined;
@@ -358,68 +465,63 @@ function SceneContent({ scene, active, colors, selectedSlotId, onSelectSlot, api
 
   return (
     <>
-      <color attach="background" args={['#f4f6f7']} />
-      <hemisphereLight args={['#ffffff', '#c9d2cf', 1.05]} />
-      <directionalLight position={[cx - 30, 45, cz + 35]} intensity={1.5} />
-      <directionalLight position={[cx + 30, 25, cz - 25]} intensity={0.4} />
+      <color attach="background" args={['#eef1f3']} />
+      <hemisphereLight args={['#ffffff', '#c7ccd1', 1.05]} />
+      <directionalLight position={[f.cx - 30, 45, f.cz + 35]} intensity={1.5} />
+      <directionalLight position={[f.cx + 30, 25, f.cz - 25]} intensity={0.45} />
 
-      {/* Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, -0.005, cz]}>
-        <planeGeometry args={[floorW, floorD]} />
-        <meshStandardMaterial color="#e6eaec" roughness={1} />
+      {/* Concrete floor with slab joints */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.005, f.cz]}>
+        <planeGeometry args={[f.w, f.d]} />
+        <meshStandardMaterial color={COLORS.floor} roughness={0.95} />
       </mesh>
-      <gridHelper args={[Math.ceil(Math.max(floorW, floorD) / 2) * 2, Math.ceil(Math.max(floorW, floorD) / 2), '#d9dfe1', '#dfe4e6']} position={[cx, 0.001, cz]} />
+      <BoxInstances items={joints} color={COLORS.floorJoint} roughness={1} />
 
-      {/* Back walls (the two far from the default camera) with a green base band */}
-      <mesh position={[cx, 1.4, fz0]}><boxGeometry args={[floorW, 2.8, 0.2]} /><meshStandardMaterial color="#f8fafc" roughness={0.9} /></mesh>
-      <mesh position={[fx1, 1.4, cz]}><boxGeometry args={[0.2, 2.8, floorD]} /><meshStandardMaterial color="#f1f5f9" roughness={0.9} /></mesh>
-      <mesh position={[cx, 0.2, fz0 + 0.11]}><boxGeometry args={[floorW, 0.4, 0.02]} /><meshStandardMaterial color="#15803d" /></mesh>
-      <mesh position={[fx1 - 0.11, 0.2, cz]}><boxGeometry args={[0.02, 0.4, floorD]} /><meshStandardMaterial color="#15803d" /></mesh>
+      {/* Back walls (the two far from the default camera) */}
+      <mesh position={[f.cx, wallH / 2, fz0]}><boxGeometry args={[f.w, wallH, 0.2]} /><meshStandardMaterial color="#f1f5f9" roughness={0.9} /></mesh>
+      <mesh position={[fx1, wallH / 2, f.cz]}><boxGeometry args={[0.2, wallH, f.d]} /><meshStandardMaterial color="#e9eef3" roughness={0.9} /></mesh>
+      <mesh position={[f.cx, 0.5, fz0 + 0.11]}><boxGeometry args={[f.w, 1, 0.02]} /><meshStandardMaterial color="#94a3b8" roughness={0.9} /></mesh>
+      <mesh position={[fx1 - 0.11, 0.5, f.cz]}><boxGeometry args={[0.02, 1, f.d]} /><meshStandardMaterial color="#94a3b8" roughness={0.9} /></mesh>
 
-      {/* Zones: tinted floor with a dashed green boundary */}
+      {/* Zones: a quiet dashed boundary */}
       {scene.zones.map((z) => (
-        <group key={z.zone}>
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[(z.minX + z.maxX) / 2, 0.004, (z.minZ + z.maxZ) / 2]}>
-            <planeGeometry args={[z.maxX - z.minX, z.maxZ - z.minZ]} />
-            <meshBasicMaterial color="#e3f1e8" transparent opacity={0.7} />
-          </mesh>
-          <Line
-            points={[[z.minX, 0.015, z.minZ], [z.maxX, 0.015, z.minZ], [z.maxX, 0.015, z.maxZ], [z.minX, 0.015, z.maxZ], [z.minX, 0.015, z.minZ]]}
-            color="#16a34a" lineWidth={1.4} dashed dashSize={0.5} gapSize={0.35}
-          />
-        </group>
-      ))}
-      {aisles.map((pts, i) => (
-        <Line key={i} points={pts} color="#e2c25a" lineWidth={1.2} dashed dashSize={0.7} gapSize={0.5} />
+        <Line key={z.zone}
+          points={[[z.minX, 0.012, z.minZ], [z.maxX, 0.012, z.minZ], [z.maxX, 0.012, z.maxZ], [z.minX, 0.012, z.maxZ], [z.minX, 0.012, z.minZ]]}
+          color="#94a3b8" lineWidth={1.2} dashed dashSize={0.5} gapSize={0.35}
+        />
       ))}
 
-      {/* Soft shadows under racks and cartons (rendered once per data change) */}
+      {/* Yellow floor markings: aisle lines and pallet-on-floor areas */}
+      <BoxInstances items={rs.lines} color={COLORS.line} roughness={0.7} />
+
+      {/* Soft shadows under racks and stock (rendered once per data change) */}
       <ContactShadows key={`${scene.slots.length}:${scene.racks.length}`}
-        position={[cx, 0.003, cz]} scale={[floorW, floorD]} width={floorW} height={floorD}
-        opacity={0.38} blur={2.2} far={5} resolution={1024} frames={1} color="#1f2937" />
+        position={[f.cx, 0.003, f.cz]} scale={[f.w, f.d]} width={f.w} height={f.d}
+        opacity={0.35} blur={2.2} far={5} resolution={1024} frames={1} color="#1f2937" />
 
       {/* Racks */}
-      <BoxInstances items={frames.decks} color="#d6dbe1" />
-      <BoxInstances items={frames.posts} color="#1e3a5f" metalness={0.25} roughness={0.55} />
-      <BoxInstances items={frames.beams} color="#15803d" roughness={0.55} />
+      <BoxInstances items={rs.decks} color={COLORS.deck} metalness={0.3} roughness={0.6} />
+      <BoxInstances items={rs.uprights} color={COLORS.upright} metalness={0.3} roughness={0.5} />
+      <BoxInstances items={rs.braces} color={COLORS.upright} metalness={0.3} roughness={0.5} />
+      <BoxInstances items={rs.beams} color={COLORS.beam} metalness={0.2} roughness={0.5} />
+      <BoxInstances items={rs.signs} color={COLORS.sign} roughness={0.6} />
+      <BoxInstances items={rs.hangers} color="#64748b" metalness={0.4} roughness={0.5} />
 
-      {/* Slots */}
-      <BoxInstances items={vis.pallets} color={PALLET_COLOR} roughness={0.95} />
-      <BoxInstances items={vis.cartons} color="#ffffff" roughness={0.78} />
-      <BoxInstances items={vis.tapes} color="#ffffff" opacity={0.55} />
+      {/* Slot contents */}
+      <BoxInstances items={vis.runners} color={COLORS.pallet} roughness={0.95} />
+      <BoxInstances items={vis.boards} color={COLORS.pallet} roughness={0.95} />
+      <BoxInstances items={vis.cartons} color={COLORS.carton} roughness={0.9} />
+      <BoxInstances items={vis.tapes} color="#ffffff" opacity={0.4} />
+      <BoxInstances items={vis.marks} color="#ef4444" opacity={0.85} />
       <BoxInstances items={vis.hits} color="#000000" hit onClick={pickSlot} onHover={hoverSlot} />
 
       <LabelProjector labels={labels} els={labelEls} />
 
-      {hovered && hovered.slot.id !== selectedSlotId && (
-        <Outline s={hovered} rotY={rackById.get(hovered.rack.id)?.rotY ?? 0} color="#334155" />
-      )}
-      {selected && (
-        <Outline s={selected} rotY={rackById.get(selected.rack.id)?.rotY ?? 0} color="#14532d" />
-      )}
+      {hovered && hovered.slot.id !== selectedSlotId && <Outline s={hovered} color="#334155" />}
+      {selected && <Outline s={selected} color="#16a34a" />}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
-        maxPolarAngle={MAX_POLAR} minDistance={3} maxDistance={maxDist} />
+        maxPolarAngle={MAX_POLAR} minDistance={2} maxDistance={maxDist} />
       <CameraRig apiRef={apiRef} homeBounds={homeBounds} fitBounds={fitBounds} fitKey={fitKey} slotPos={slotPos} onCamera={onCamera} />
     </>
   );
@@ -442,6 +544,8 @@ export interface Scene3DProps {
 
 export default function WarehouseScene3D(props: Scene3DProps) {
   const { scene, active, selectedSlotId, onSelectRack, tooltip } = props;
+  const { m, t } = useT();
+  const L = m.layout3d.view;
   const labelEls = useRef(new Map<string, HTMLElement>());
   const selected = selectedSlotId ? scene.slots.find((s) => s.slot.id === selectedSlotId) : undefined;
 
@@ -449,10 +553,11 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     const out: Label3D[] = [];
     for (const z of scene.zones) out.push({ key: `z:${z.zone}`, pos: [z.minX + 0.3, 0.02, z.maxZ - 0.35] });
     for (const p of scene.racks) {
-      const [x, z] = rackToWorld(p, -p.length / 2, RACK_D / 2);
-      out.push({ key: `r:${p.rack.id}`, pos: [x, p.height + 0.35, z] });
+      const sg = signSpot(p);
+      const [x, z] = rackToWorld(p, sg.lx, 0);
+      out.push({ key: `r:${p.rack.id}`, pos: [x, sg.y, z] });
     }
-    if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + SLOT_H * 0.55, selected.pos[2]] });
+    if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
     return out;
   }, [scene, selected]);
 
@@ -471,17 +576,18 @@ export default function WarehouseScene3D(props: Scene3DProps) {
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         {scene.zones.map((z) => (
           <span key={z.zone} ref={reg(`z:${z.zone}`)} style={{ ['--ax' as string]: '0%', ['--ay' as string]: '-100%' }}
-            className={`${place} whitespace-nowrap text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/75`}>
-            {z.zone === '—' ? 'No zone' : `Zone ${z.zone}`}
+            className={`${place} whitespace-nowrap text-xs font-semibold uppercase tracking-[0.18em] text-slate-500`}>
+            {z.zone === NO_ZONE ? L.noZone : t(L.zoneN, { zone: z.zone })}
           </span>
         ))}
+        {/* Overhead rack signs: the 3D board carries the code as readable DOM text. */}
         {scene.racks.map((p) => {
           const on = !active || active.has(p.rack.id);
           return (
             <button key={p.rack.id} ref={reg(`r:${p.rack.id}`)} type="button" onClick={() => onSelectRack(p.rack.id)}
-              title={`Rack ${p.rack.code}${p.rack.zone ? ` · Zone ${p.rack.zone}` : ''} — click to filter`}
-              className={`${place} pointer-events-auto whitespace-nowrap rounded-[5px] px-2 py-0.5 text-xs font-bold tracking-wide shadow-sm ring-1 ${
-                on ? 'bg-emerald-800 text-white ring-emerald-950/30 hover:bg-emerald-700' : 'bg-white/85 text-slate-400 ring-slate-200'
+              title={t(p.rack.zone ? L.rackSignTitleZone : L.rackSignTitle, { rack: p.rack.code, zone: p.rack.zone ?? '' })}
+              className={`${place} pointer-events-auto whitespace-nowrap rounded-[4px] border-2 px-2.5 py-0.5 text-sm font-bold tracking-wider shadow-sm ${
+                on ? 'border-white bg-blue-900 text-white hover:bg-blue-800' : 'border-slate-200 bg-white/85 text-slate-400'
               }`}>
               {p.rack.code}
             </button>

@@ -77,7 +77,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (res.status === 401 && path !== '/auth/login') {
       localStorage.removeItem('wms_token');
       localStorage.removeItem('wms_user');
-      if (typeof window !== 'undefined') window.location.href = '/login';
+      if (typeof window !== 'undefined') {
+        try { if (window.location.pathname !== '/login') sessionStorage.setItem('wms_return_to', window.location.pathname + window.location.search); } catch { /* storage blocked */ }
+        window.location.href = '/login';
+      }
       throw apiError('Unauthorized', 401);
     }
 

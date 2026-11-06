@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDate } from '@/lib/utils';
+import { ModuleSettingsCard, HIDDEN_MODULES_KEY } from '@/components/layout/module-settings-card';
 
 // What is actually in force, so nobody mistakes a stored value for an active rule.
 const STATE_LABEL: Record<string, { text: string; cls: string }> = {
@@ -69,7 +70,7 @@ export default function SettingsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{[...Array(6)].map((_, i) => <Skeleton key={i} className="h-40 rounded-xl" />)}</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rows.map((s) => {
+          {rows.filter((s) => s.key !== HIDDEN_MODULES_KEY).map((s) => {
             const st = STATE_LABEL[s.state] ?? STATE_LABEL.missing;
             const draft = edits[s.key];
             const current = s.state === 'disabled' ? 'disabled' : s.value;
@@ -130,6 +131,8 @@ export default function SettingsPage() {
           })}
         </div>
       )}
+
+      {!loading && <ModuleSettingsCard row={rows.find((s) => s.key === HIDDEN_MODULES_KEY)} onSaved={load} />}
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
         <div className="flex items-start justify-between gap-4 flex-wrap">

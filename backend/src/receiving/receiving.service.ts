@@ -8,6 +8,7 @@ import { nanoid } from 'nanoid';
 import { InspectReceivingDto } from './dto/inspect-receiving.dto';
 import { transitionStock } from '../common/stock-state';
 import { assertNotSelfApproval } from '../common/separation-of-duties';
+import { parseItemCondition } from './receiving-display';
 
 /** Units of a receipt that have not moved on yet (still at the dock / in QC). */
 const REVERSIBLE: StockStatus[] = [StockStatus.PENDING_RECEIVING, StockStatus.PENDING_INSPECTION, StockStatus.QUARANTINE, StockStatus.RTV_PENDING];
@@ -29,6 +30,8 @@ interface CreateReceivingDto {
     manufactureDate?: string;
     quantity: number;
     condition?: string;
+    /** New / Refurbish chosen at receipt; absent from older clients and the RTV flow (null). */
+    itemCondition?: string | null;
     ownershipType?: OwnershipType;
     warehouseId?: string;
     rackId?: string;
@@ -195,6 +198,9 @@ export class ReceivingService {
       if (!product.isActive) throw new BadRequestException(`Product ${product.code} is ${String(product.productStatus).toLowerCase()} and cannot be received`);
       if (product.serialControlled && !item.serialNumber) throw new BadRequestException(`Product ${product.code} is serial-controlled — serial number is required`);
       if (product.batchControlled && !item.batchNumber) throw new BadRequestException(`Product ${product.code} is batch-controlled — batch/lot number is required`);
+      if (item.itemCondition != null && item.itemCondition !== '' && parseItemCondition(item.itemCondition) === undefined) {
+        throw new BadRequestException(`Invalid condition "${item.itemCondition}" — use NEW or REFURBISH`);
+      }
       if (item.serialNumber && item.serialNumber !== 'N/A' && item.quantity !== 1) {
         throw new BadRequestException(`Serial ${item.serialNumber} identifies one unit — quantity must be 1 (add one line per serial)`);
       }
@@ -256,6 +262,7 @@ export class ReceivingService {
             manufactureDate: parseDate(item.manufactureDate),
             quantity: item.quantity,
             condition: item.condition ?? 'good',
+            itemCondition: parseItemCondition(item.itemCondition) ?? null,
             stockItemId: stock.id,
           },
         });

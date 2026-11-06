@@ -15,12 +15,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { formatDate, cn } from '@/lib/utils';
 import { StockDetailDrawer } from '@/components/inventory/stock-detail-drawer';
-import { getT, useT } from '@/i18n';
+import { getT, labelOf, useT } from '@/i18n';
 
 const REPORTS: ReportType[] = ['master-data', 'balance', 'receive'];
 
-const DATE_KEYS = new Set(['createDate', 'receiveDate', 'lastInDate', 'lastOutDate']);
-const NUMBER_KEYS = new Set(['qty']);
+const DATE_KEYS = new Set(['createDate', 'receiveDate', 'lastInDate', 'lastOutDate', 'createdOn', 'lastModifiedOn']);
+const NUMBER_KEYS = new Set(['qty', 'currentCost', 'defaultPrice']);
 
 function fmtCell(key: string, value: any, number: (n: number) => string) {
   if (value == null || value === '') return '—';
@@ -69,7 +69,23 @@ function ReportViewer({ report, warehouses, initialStockId, initialWarehouseId, 
   const [q, setQ] = useState(initialQ ?? '');
   const { m, t, fmt } = useT();
   const RP = m.reports;
-  const colHeader = (key: string, fallback: string) => (RP.columns as Record<string, string>)[key] ?? fallback;
+  const colHeader = (key: string, fallback: string) =>
+    (report === 'receive' ? (RP.receiveColumns as Record<string, string>)[key] : undefined)
+    ?? (RP.columns as Record<string, string>)[key] ?? fallback;
+  // Screen-only labels from the stored values the API sends next to the English export text
+  // (e.g. 'RTV Replacement' → "RTV Return" in the user's language). Exports keep the English text.
+  const cell = (key: string, r: Record<string, any>) => {
+    if (key === 'sourceType' && r.sourceTypeValue) return labelOf(m.receiving.sourceType, r.sourceTypeValue);
+    if (report === 'receive') {
+      if (key === 'condition') {
+        if (r.itemCondition) return labelOf(m.receiving.form.itemCondition, r.itemCondition);
+        if (r.qcCondition) return t(RP.qcCondition, { value: labelOf(m.receiving.condition, String(r.qcCondition).toLowerCase()) });
+      }
+      if (key === 'itemStatus' && r.itemStatusValue) return labelOf(m.products.status, r.itemStatusValue);
+      if (key === 'itemType' && r.itemTypeValue) return labelOf(m.products.type, r.itemTypeValue);
+    }
+    return fmtCell(key, r[key], fmt.number);
+  };
 
   const filters = useCallback(
     () => ({ warehouseId: warehouseId || undefined, from: from || undefined, to: to || undefined, q: q || undefined }),
@@ -174,7 +190,7 @@ function ReportViewer({ report, warehouses, initialStockId, initialWarehouseId, 
                     onClick={r.stockId ? () => setDetailId(r.stockId) : undefined}
                     title={r.stockId ? RP.openDetail : undefined}>
                     {columns.map((c) => (
-                      <TableCell key={c.key} className="text-slate-700">{fmtCell(c.key, r[c.key], fmt.number)}</TableCell>
+                      <TableCell key={c.key} className="text-slate-700">{cell(c.key, r)}</TableCell>
                     ))}
                   </TableRow>
                 ))}

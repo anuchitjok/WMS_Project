@@ -8,6 +8,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus, OwnershipType, ReceivingStatus } from '@prisma/client';
 import { nanoid } from 'nanoid';
 import { parseSpreadsheet } from '../common/spreadsheet';
+import { parseItemCondition } from './receiving-display';
 
 // One file = one Goods Receiving. Header info (source/AWB/invoice/RMA/default
 // warehouse) is supplied by the UI; the file carries only the item lines.
@@ -39,6 +40,8 @@ export const RECEIVING_IMPORT_COLUMNS: ColumnSpec[] = [
   { key: 'condition', header: 'condition', example: 'good', hint: 'good / damaged / doa' },
   { key: 'ownershipType', header: 'ownershipType', example: 'OWN', hint: 'OWN / CONSIGNMENT / RMA / CUSTOMER' },
   { key: 'warehouseCode', header: 'warehouseCode', example: 'WH-MAIN', hint: 'Existing warehouse code (optional — overrides default)' },
+  // Added after the original columns so older files (without it) still import unchanged.
+  { key: 'itemCondition', header: 'itemCondition', example: 'NEW', hint: 'NEW / REFURBISH (optional — blank leaves it empty)' },
 ];
 
 const VALID_CONDITIONS = new Set(['good', 'damaged', 'doa']);
@@ -144,6 +147,9 @@ export class ReceivingImportService {
 
       if (data.condition && !VALID_CONDITIONS.has(String(data.condition).trim().toLowerCase())) {
         errors.push(`Invalid condition: ${data.condition} (good / damaged / doa)`);
+      }
+      if (parseItemCondition(data.itemCondition) === undefined) {
+        errors.push(`Invalid itemCondition: ${data.itemCondition} (NEW / REFURBISH)`);
       }
       if (data.ownershipType && !(String(data.ownershipType).trim() in OwnershipType)) {
         errors.push(`Invalid ownershipType: ${data.ownershipType}`);
@@ -273,6 +279,7 @@ export class ReceivingImportService {
             batchNumber,
             quantity,
             condition,
+            itemCondition: parseItemCondition(d.itemCondition) ?? null,
             stockItemId: stock.id,
           },
         });

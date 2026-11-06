@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { refFromQrUrl } from '../documents/picking-slip-data';
 
 export type EntityType = 'product' | 'stockItem' | 'location' | 'request' | 'shipment' | 'asset' | 'serial' | 'unknown';
 
@@ -22,6 +23,7 @@ const PREFIX_MAP: Record<string, EntityType> = {
 /**
  * Decodes any supported symbology into a typed token.
  * - Internal canonical:  TYPE|value          (SKU|..., LOC|wh|rack|slot, ...)
+ * - Request QR URL:      https://<app>/r?ref=REQ-...  → request
  * - GS1:                 (01)..(21)..(10)..   Application Identifiers
  * - Fallback:            raw string → resolver tries product/serial/batch
  */
@@ -44,6 +46,10 @@ export class BarcodeParserService {
         gs1,
       };
     }
+
+    // Request QR on the picking slip / handover screen: <web app>/r?ref=<refNumber>
+    const qrRef = refFromQrUrl(value);
+    if (qrRef) return { symbology: 'QR', type: 'request', value: qrRef };
 
     // Internal canonical prefix
     if (value.includes('|')) {

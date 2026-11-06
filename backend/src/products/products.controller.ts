@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
-import { ACCESS } from '../auth/access';
+import { PRODUCT_WRITE_ACCESS, PRODUCT_WRITE_ROLES } from './product-access';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateProductDto, UpdateProductDto, ChangeProductStatusDto } from './dto/create-product.dto';
@@ -32,7 +32,7 @@ export class ProductsController {
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @Roles(...PRODUCT_WRITE_ROLES)
   create(@Body() dto: CreateProductDto, @CurrentUser('id') userId: string) {
     return this.service.create(dto, userId);
   }
@@ -115,7 +115,7 @@ export class ProductsController {
 
   @Post('stock-register/import')
   @UseGuards(AccessGuard)
-  @Access(ACCESS.productImport)
+  @Access(PRODUCT_WRITE_ACCESS)
   @ApiOperation({ summary: 'Batch import products from xlsx or csv' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file'))
@@ -131,19 +131,19 @@ export class ProductsController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.service.findOne(id);
+    return this.service.findOneWithNames(id);
   }
 
   @Patch(':id')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @Roles(...PRODUCT_WRITE_ROLES)
   update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser('id') userId: string) {
     return this.service.update(id, dto, userId);
   }
 
   @Patch(':id/status')
   @UseGuards(RolesGuard)
-  @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR)
+  @Roles(...PRODUCT_WRITE_ROLES)
   @ApiOperation({ summary: 'Change product lifecycle status (Active/Inactive/Discontinued)' })
   changeStatus(@Param('id') id: string, @Body() dto: ChangeProductStatusDto, @CurrentUser('id') userId: string) {
     return this.service.changeStatus(id, dto.productStatus, userId);

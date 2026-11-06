@@ -34,7 +34,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => { setHydrated(true); }, []);
 
   useEffect(() => {
-    if (hydrated && !isAuthenticated) router.replace('/login');
+    if (hydrated && !isAuthenticated) {
+      try { sessionStorage.setItem('wms_return_to', window.location.pathname + window.location.search); } catch { /* storage blocked */ }
+      router.replace('/login');
+    }
   }, [hydrated, isAuthenticated, router]);
 
   // Close the mobile drawer whenever the route changes

@@ -269,7 +269,7 @@ function InventoryRow({ item, isSelected, onSelect, visibleColumns, colSpan }: {
       { l: E.awb, v: rcv?.awbNumber || '—' },
       { l: E.invoice, v: rcv?.invoiceNumber || '—' },
       { l: E.customerCase, v: rcv?.gswNumber || '—' },
-      { l: E.source, v: rcv?.sourceType || '—' },
+      { l: E.source, v: rcv?.sourceType ? labelOf(m.receiving.sourceType, rcv.sourceType) : '—' },
     ] },
     { title: E.timeline, icon: Clock, mono: false, rows: [
       { l: E.received, v: fmt.date(item.receivedDate) },

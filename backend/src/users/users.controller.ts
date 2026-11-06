@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Param, Patch, Delete, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Param, Patch, Delete, Body, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -7,6 +8,9 @@ import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import { UserRole } from '@prisma/client';
+import { UserWarehouseAccessGuard } from './user-access.guard';
+import { usersCapabilities } from './user-access';
+import { ACCESS, hasAccess } from '../auth/access';
 
 @ApiTags('Users')
 @ApiBearerAuth()
@@ -16,7 +20,36 @@ import { UserRole } from '@prisma/client';
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
-  @Get() findAll(@Query('role') role?: UserRole) { return this.usersService.findAll(role); }
+  // P1 1.7: list, export and warehouse assignment are also open to Warehouse Managers.
+  // `@RequirePermissions()` (no codes) lifts the class-level user.manage requirement
+  // for that one route; UserWarehouseAccessGuard then applies the narrower rule.
+  @Get()
+  @RequirePermissions()
+  @UseGuards(UserWarehouseAccessGuard)
+  findAll(@Query('role') role?: UserRole) { return this.usersService.findAll(role); }
+
+  /** What the caller may do on the Users screen (any signed-in user; their own flags only). */
+  @Get('capabilities')
+  @RequirePermissions()
+  capabilities(@CurrentUser() actor: any) {
+    return usersCapabilities(actor, hasAccess(actor, ACCESS.dataImport));
+  }
+
+  /** P7 7.2: users as .xlsx/.csv — never passwords, hashes or tokens. */
+  @Get('export')
+  @RequirePermissions()
+  @UseGuards(UserWarehouseAccessGuard)
+  @ApiOperation({ summary: 'Export users (.xlsx or .csv) — no passwords' })
+  async export(@Query('format') format: string, @Res() res: Response) {
+    const fmt = format === 'csv' ? 'csv' : 'xlsx';
+    const buf = await this.usersService.exportUsers(fmt);
+    res.set({
+      'Content-Type': fmt === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="users-${new Date().toISOString().slice(0, 10)}.${fmt}"`,
+    });
+    res.send(buf);
+  }
+
   @Get(':id') findOne(@Param('id') id: string) { return this.usersService.findOne(id); }
   @Get(':id/login-history') loginHistory(@Param('id') id: string) { return this.usersService.loginHistory(id); }
 
@@ -39,6 +72,8 @@ export class UsersController {
   @Patch(':id/force-change') forceChange(@Param('id') id: string, @CurrentUser() actor: any) { return this.usersService.forceChange(id, actor); }
 
   @Patch(':id/warehouses')
+  @RequirePermissions()
+  @UseGuards(UserWarehouseAccessGuard)
   @ApiOperation({ summary: 'Set assigned warehouses' })
   setWarehouses(@Param('id') id: string, @Body('warehouseIds') ids: string[], @CurrentUser() actor: any) {
     return this.usersService.setWarehouses(id, ids, actor);

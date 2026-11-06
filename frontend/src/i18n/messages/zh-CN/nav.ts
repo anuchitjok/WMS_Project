@@ -91,4 +91,24 @@ export const nav: Messages['nav'] = {
   },
   redirecting: '正在跳转到{page}…',
   inventoryMoved: '库存页面已移至 报表 → 库存余额。正在跳转…',
+  // P7 7.1 — 管理员可关闭的可选模块（数据与代码均保留）
+  modules: {
+    names: {
+      warranty: '保修',
+      mrp: '物料计划 (MRP)',
+      floorPlan2d: '2D 平面图编辑器',
+    },
+    offTitle: '{module} 未启用',
+    offBody: '此模块暂时关闭。其数据已保留，没有删除任何内容。',
+    offAdmin: '系统管理员可在系统设置中启用。',
+    openSettings: '打开系统设置',
+    checking: '正在检查模块状态…',
+    settingsTitle: '模块',
+    settingsBody: '选择在菜单中显示哪些可选模块。关闭的模块会从菜单中移除，其页面将显示提示。数据和代码均保留，可随时重新开启。',
+    on: '显示',
+    off: '隐藏',
+    save: '保存模块设置',
+    saved: '模块设置已保存',
+    defaultNote: '尚未保存 — 使用系统默认值（全部隐藏）。',
+  },
 };

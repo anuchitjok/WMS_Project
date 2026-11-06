@@ -66,7 +66,8 @@ export const ACCESS = {
   requestApprove:   { permissions: ['request.approve'], legacyRoles: APPROVERS },
   /** Cancelling someone else's request (the requester may always cancel their own). */
   requestCancelAny: { permissions: ['request.approve'], legacyRoles: APPROVERS },
-  productImport:    { permissions: ['product.manage'], legacyRoles: SUPERVISORS },
+  // P1 1.7: Product Master writes are SYSTEM_ADMIN + WAREHOUSE_MANAGER only.
+  productImport:    { permissions: ['product.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
   dataImport:       { permissions: ['dataio.manage'], legacyRoles: SUPERVISORS },
   auditExport:      { permissions: ['audit.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, AUDITOR] },
   approvalRules:    { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },

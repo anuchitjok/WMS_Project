@@ -1,12 +1,18 @@
 'use client';
 
+// Dashboard with two views (plan P6 6.3), chosen by ?view= so it can be linked:
+//  - Operations Control Tower (default; numbers and behaviour unchanged)
+//  - Warehouse Space (?view=space) — components/dashboard/space
+//
 // WMS Operations Control Tower (dashboard).
 // Data: GET /dashboard/overview (KPIs, inventory, trend, warehouse comparison,
 // low stock, control counts — warehouse-scoped on the server) and
 // GET /dashboard/activity (latest operational events). Read-only: every action
 // links to the existing module where the work is done.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarRange, LayoutDashboard, RefreshCw, TriangleAlert, Warehouse } from 'lucide-react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { CalendarRange, LandPlot, LayoutDashboard, RefreshCw, TriangleAlert, Warehouse, type LucideIcon } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useT } from '@/i18n';
@@ -21,6 +27,7 @@ import { ControlCenter } from '@/components/dashboard/control-tower/control-cent
 import { WarehousePerformance } from '@/components/dashboard/control-tower/warehouse-performance';
 import { LowStockItems } from '@/components/dashboard/control-tower/low-stock-items';
 import { ActivityTable } from '@/components/dashboard/control-tower/activity-table';
+import { WarehouseSpaceView } from '@/components/dashboard/space/warehouse-space-view';
 
 const RANGES: DashboardRange[] = ['7d', '30d', '90d', '12m'];
 const PREFS_KEY = 'wms_dashboard_prefs';
@@ -44,7 +51,66 @@ const browserZone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return undefined; }
 };
 
+type View = 'operations' | 'space';
+
 export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div className="min-h-full bg-slate-50 p-3 sm:p-5"><Skeleton className="h-[600px] rounded-xl" /></div>}>
+      <DashboardShell />
+    </Suspense>
+  );
+}
+
+function DashboardShell() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const { m } = useT();
+  const T = m.dashboard.tabs;
+  const view: View = params.get('view') === 'space' ? 'space' : 'operations';
+  const setView = (v: View) => router.replace(v === 'space' ? '/dashboard?view=space' : '/dashboard', { scroll: false });
+
+  const tabs: { value: View; label: string; desc: string; icon: LucideIcon }[] = [
+    { value: 'operations', label: T.operations, desc: T.operationsDesc, icon: LayoutDashboard },
+    { value: 'space', label: T.space, desc: T.spaceDesc, icon: LandPlot },
+  ];
+
+  return (
+    <div className="min-h-full space-y-4 bg-slate-50 p-3 sm:p-5">
+      <div role="tablist" aria-label={T.ariaLabel} className="grid grid-cols-2 gap-2 sm:max-w-3xl">
+        {tabs.map((tab) => {
+          const active = view === tab.value;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              role="tab"
+              id={`dashboard-tab-${tab.value}`}
+              aria-selected={active}
+              aria-controls="dashboard-tabpanel"
+              onClick={() => setView(tab.value)}
+              className={cn(
+                'flex min-w-0 items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors',
+                active ? 'border-green-600 bg-white shadow-sm ring-1 ring-green-600' : 'border-slate-200 bg-white/60 hover:bg-white',
+              )}
+            >
+              <tab.icon className={cn('mt-0.5 h-4 w-4 shrink-0', active ? 'text-green-600' : 'text-slate-400')} aria-hidden />
+              <span className="min-w-0">
+                <span className={cn('block text-sm font-semibold leading-tight', active ? 'text-slate-900' : 'text-slate-600')}>{tab.label}</span>
+                <span className="mt-0.5 block text-xs leading-snug text-slate-500">{tab.desc}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div role="tabpanel" id="dashboard-tabpanel" aria-labelledby={`dashboard-tab-${view}`}>
+        {view === 'space' ? <WarehouseSpaceView /> : <OperationsControlTower />}
+      </div>
+    </div>
+  );
+}
+
+function OperationsControlTower() {
   const { m, t, fmt } = useT();
   const C = m.dashboard.ct;
   const [prefs, setPrefs] = useState<Prefs | null>(null);
@@ -89,7 +155,7 @@ export default function DashboardPage() {
   const busy = loading || !prefs;
 
   return (
-    <div className="min-h-full space-y-4 bg-slate-50 p-3 sm:p-5">
+    <div className="space-y-4">
       {/* Header + filters */}
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-center gap-3">

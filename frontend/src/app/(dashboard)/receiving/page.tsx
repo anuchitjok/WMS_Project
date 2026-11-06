@@ -17,6 +17,8 @@ import { InspectionWorkspace } from '@/components/receiving/inspection-workspace
 import { EmptyState } from '@/components/layout/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { SearchableSelect } from '@/components/shared/searchable-select';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -38,6 +40,12 @@ const canBeReversed = (gr: any) =>
   gr.statusEnum !== 'CANCELLED' && gr.status !== 'cancelled' &&
   (gr.items ?? []).every((it: any) => !it.stockItem || REVERSIBLE_UNIT.includes(it.stockItem.status));
 
+/** Receiving source types — stored values. 'RTV Replacement' is shown as "RTV Return" (label only). */
+const SOURCE_TYPES = ['Brand Owner', 'Vendor', 'Customer Return', 'RTV Replacement'];
+/** New / Refurbish chosen at receipt (GoodsReceivingItem.itemCondition). */
+const ITEM_CONDITIONS = ['NEW', 'REFURBISH'] as const;
+type ItemCondition = (typeof ITEM_CONDITIONS)[number];
+
 const BLANK_FORM = {
   sourceType: 'Brand Owner',
   brandId: '',
@@ -45,6 +53,7 @@ const BLANK_FORM = {
   productId: '',
   quantity: 1,
   condition: 'good',
+  itemCondition: 'NEW' as ItemCondition,
   warehouseId: '',
   serialNumber: '',
   batchNumber: '',
@@ -65,9 +74,11 @@ const isFinished = (gr: any) =>
 
 const isToday = (d: any) => { try { return new Date(d).toDateString() === new Date().toDateString(); } catch { return false; } };
 
-const matchesQuery = (gr: any, q: string) =>
+// Source type matches by its stored value and by the label shown (old and new names both find it).
+const matchesQuery = (gr: any, q: string, sourceLabel: (v: string) => string) =>
   !q || (gr.refNumber ?? '').toLowerCase().includes(q) ||
   (gr.sourceType ?? '').toLowerCase().includes(q) ||
+  (gr.sourceType ? sourceLabel(gr.sourceType).toLowerCase().includes(q) : false) ||
   (gr.poNumber ?? '').toLowerCase().includes(q);
 
 // ─── Process flow indicator ───────────────────────────────────────────────────
@@ -284,7 +295,7 @@ function OutcomeChip({ outcome, count }: { outcome: string; count?: number }) {
 // ─── Import from file dialog (one file = one goods receipt) ───────────────────
 
 const BLANK_IMPORT_HEADER = {
-  sourceType: 'Brand Owner', sourceRef: '', awbNumber: '', invoiceNumber: '', warehouseId: '', notes: '',
+  sourceType: 'Brand Owner', sourceRef: '', poNumber: '', awbNumber: '', invoiceNumber: '', warehouseId: '', notes: '',
 };
 
 function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; onCreated: () => void }) {
@@ -348,7 +359,7 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
           <DialogTitle>{I.title}</DialogTitle>
         </DialogHeader>
         <div className="space-y-5">
-          {/* Receipt header — applies to the whole file */}
+          {/* Receipt header — applies to the whole file. Order: Source → Reference → Warehouse → Notes */}
           <FormSection icon={Truck} title={I.headerSection}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 min-w-0">
@@ -358,27 +369,23 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
                     <span className="flex flex-1 text-left truncate text-sm">{header.sourceType ? labelOf(m.receiving.sourceType, header.sourceType) : F.select}</span>
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
-                    {['Brand Owner', 'Vendor', 'Customer Return', 'RTV Replacement'].map((s) => (
+                    {SOURCE_TYPES.map((s) => (
                       <SelectItem key={s} value={s}>{labelOf(m.receiving.sourceType, s)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+          </FormSection>
+
+          <FormSection icon={ClipboardList} title={F.sections.references}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1 min-w-0">
-                <Label>{I.defaultWarehouse} <span className="text-slate-400 font-normal">{I.defaultWarehouseHint}</span></Label>
-                <Select value={header.warehouseId} onValueChange={(v) => setHeader((h) => ({ ...h, warehouseId: v ?? '' }))}>
-                  <SelectTrigger className="w-full min-w-0">
-                    <span className={cn('flex flex-1 text-left truncate text-sm', !selectedWarehouse && 'text-muted-foreground')}>
-                      {selectedWarehouse ? selectedWarehouse.name : m.receiving.form.selectWarehouse}
-                    </span>
-                  </SelectTrigger>
-                  <SelectContent className="max-h-64">
-                    {warehouses.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Label>{F.poRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={header.poNumber} onChange={(e) => setHeader((h) => ({ ...h, poNumber: e.target.value }))} placeholder="PO-2026-001" />
               </div>
               <div className="space-y-1 min-w-0">
-                <Label>AWB <span className="text-slate-400 font-normal">(optional)</span></Label>
+                <Label>{F.awb} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
                 <Input value={header.awbNumber} onChange={(e) => setHeader((h) => ({ ...h, awbNumber: e.target.value }))} placeholder="AWB-123456789" />
               </div>
               <div className="space-y-1 min-w-0">
@@ -389,10 +396,29 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
                 <Label>{F.rmaRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
                 <Input value={header.sourceRef} onChange={(e) => setHeader((h) => ({ ...h, sourceRef: e.target.value }))} placeholder={F.rmaPlaceholder} />
               </div>
-              <div className="space-y-1 min-w-0">
-                <Label>{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-                <Input value={header.notes} onChange={(e) => setHeader((h) => ({ ...h, notes: e.target.value }))} placeholder={F.notes} />
-              </div>
+            </div>
+          </FormSection>
+
+          <FormSection icon={MapPin} title={F.sections.warehouse}>
+            <div className="space-y-1 min-w-0">
+              <Label>{I.defaultWarehouse} <span className="text-slate-400 font-normal">{I.defaultWarehouseHint}</span></Label>
+              <Select value={header.warehouseId} onValueChange={(v) => setHeader((h) => ({ ...h, warehouseId: v ?? '' }))}>
+                <SelectTrigger className="w-full min-w-0">
+                  <span className={cn('flex flex-1 text-left truncate text-sm', !selectedWarehouse && 'text-muted-foreground')}>
+                    {selectedWarehouse ? selectedWarehouse.name : m.receiving.form.selectWarehouse}
+                  </span>
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {warehouses.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </FormSection>
+
+          <FormSection icon={Info} title={F.sections.notes}>
+            <div className="space-y-1 min-w-0">
+              <Label htmlFor="import-notes">{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+              <Textarea id="import-notes" rows={5} value={header.notes} onChange={(e) => setHeader((h) => ({ ...h, notes: e.target.value }))} placeholder={F.notesPlaceholder} className="field-sizing-fixed resize-y" />
             </div>
           </FormSection>
 
@@ -561,6 +587,16 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
       : products,
     [products, form.sourceType, form.brandId],
   );
+  // Type-to-search: SKU, description/name, part number and model (same brand + Active list as before).
+  const productOptions = useMemo(
+    () => filteredProducts.map((p) => ({
+      value: p.id,
+      label: `${p.partNumber || p.code} — ${p.description || p.name}`,
+      sublabel: [p.model, p.partNumber && p.partNumber !== p.code ? p.code : null, p.brand?.name].filter(Boolean).join(' · ') || undefined,
+      keywords: [p.code, p.name, p.partNumber, p.vendorPartNumber, p.model, p.description].filter(Boolean).join(' '),
+    })),
+    [filteredProducts],
+  );
   const selectedProduct = useMemo(
     () => filteredProducts.find((p) => p.id === form.productId) ?? null,
     [filteredProducts, form.productId],
@@ -597,6 +633,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
     !form.productId && F.need.product,
     form.sourceType === 'Vendor' && !form.vendorId && F.need.vendor,
     !(Number(form.quantity) >= 1) && F.need.quantity,
+    !ITEM_CONDITIONS.includes(form.itemCondition) && F.need.condition,
     !!selectedProduct?.serialControlled && !serialEntered && F.need.serial,
     !!selectedProduct?.batchControlled && !form.batchNumber.trim() && F.need.batch,
     serialEntered && Number(form.quantity) !== 1 && F.need.serialQtyOne,
@@ -627,6 +664,7 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
           productId: form.productId,
           quantity: Number(form.quantity),
           condition: form.condition,
+          itemCondition: form.itemCondition,
           warehouseId: form.warehouseId || undefined,
           serialNumber: form.serialNumber.trim() || undefined,
           batchNumber: form.batchNumber.trim() || undefined,
@@ -664,17 +702,12 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                     </span>
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
-                    {['Brand Owner', 'Vendor', 'Customer Return', 'RTV Replacement'].map((s) => (
+                    {SOURCE_TYPES.map((s) => (
                       <SelectItem key={s} value={s}>{labelOf(m.receiving.sourceType, s)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1 min-w-0">
-                <Label>{F.poRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-                <Input value={form.poNumber} onChange={(e) => setForm((f) => ({ ...f, poNumber: e.target.value }))} placeholder="PO-2026-001" />
-              </div>
-
               {form.sourceType === 'Brand Owner' && (
                 <div className="space-y-1 min-w-0">
                   <Label>{F.brand} <span className="text-red-500">*</span>
@@ -719,20 +752,14 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
               <Label>{F.product} <span className="text-red-500">*</span>
                 <span className="ml-2 text-xs font-normal text-slate-400">{F.productHint}</span>
               </Label>
-              <Select value={form.productId} onValueChange={handleProductChange} disabled={form.sourceType === 'Brand Owner' && !form.brandId}>
-                <SelectTrigger className="w-full min-w-0">
-                  <span className={cn('flex flex-1 text-left truncate text-sm', !selectedProduct && 'text-muted-foreground')}>
-                    {selectedProduct ? `${selectedProduct.code} — ${selectedProduct.name}`
-                      : form.sourceType === 'Brand Owner' && !form.brandId ? F.selectBrandFirst
-                      : F.searchProduct}
-                  </span>
-                </SelectTrigger>
-                <SelectContent className="max-h-64">
-                  {filteredProducts.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.code} — {p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                value={form.productId}
+                options={productOptions}
+                onSelect={(v) => handleProductChange(v)}
+                disabled={form.sourceType === 'Brand Owner' && !form.brandId}
+                placeholder={form.sourceType === 'Brand Owner' && !form.brandId ? F.selectBrandFirst : F.searchProduct}
+                searchPlaceholder={F.searchProductInput}
+              />
               {form.sourceType === 'Brand Owner' && form.brandId && filteredProducts.length === 0 && (
                 <p className="text-xs text-amber-600 mt-1">{F.noBrandProducts}</p>
               )}
@@ -803,6 +830,27 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                 />
               </div>
               <div className="space-y-1 min-w-0">
+                <Label>{F.condition} <span className="text-red-500">*</span></Label>
+                <Select value={form.itemCondition} onValueChange={(v) => setForm((f) => ({ ...f, itemCondition: (v as ItemCondition) ?? 'NEW' }))}>
+                  <SelectTrigger className="w-full min-w-0">
+                    <span className="flex flex-1 text-left truncate text-sm">{F.itemCondition[form.itemCondition]}</span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ITEM_CONDITIONS.map((c) => <SelectItem key={c} value={c}>{F.itemCondition[c]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </FormSection>
+
+          {/* Reference */}
+          <FormSection icon={ClipboardList} title={F.sections.references}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1 min-w-0">
+                <Label>{F.poRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.poNumber} onChange={(e) => setForm((f) => ({ ...f, poNumber: e.target.value }))} placeholder="PO-2026-001" />
+              </div>
+              <div className="space-y-1 min-w-0">
                 <Label>{F.batchNumber}
                   {selectedProduct?.batchControlled ? <span className="text-red-500 ml-0.5">*</span> : <span className="text-slate-400 font-normal ml-1">{F.optional}</span>}
                 </Label>
@@ -813,11 +861,23 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                   className={cn(selectedProduct?.batchControlled && !form.batchNumber && 'border-amber-400')}
                 />
               </div>
+              <div className="space-y-1 min-w-0">
+                <Label>{F.awb} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.awbNumber} onChange={(e) => setForm((f) => ({ ...f, awbNumber: e.target.value }))} placeholder="AWB-123456789" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <Label>{F.invoiceNo} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.invoiceNumber} onChange={(e) => setForm((f) => ({ ...f, invoiceNumber: e.target.value }))} placeholder="INV-2026-0001" />
+              </div>
+              <div className="space-y-1 min-w-0 md:col-span-2">
+                <Label>{F.rmaRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+                <Input value={form.rmaReference} onChange={(e) => setForm((f) => ({ ...f, rmaReference: e.target.value }))} placeholder={F.rmaPlaceholder} />
+              </div>
             </div>
           </FormSection>
 
-          {/* Destination */}
-          <FormSection icon={MapPin} title={F.sections.destination}>
+          {/* Warehouse */}
+          <FormSection icon={MapPin} title={F.sections.warehouse}>
             <div className="space-y-1 min-w-0">
               <Label>{F.warehouse} <span className="text-slate-400 font-normal">{F.warehouseHint}</span></Label>
               <Select value={form.warehouseId} onValueChange={(v) => setForm((f) => ({ ...f, warehouseId: v ?? '' }))}>
@@ -831,27 +891,13 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1 min-w-0">
-              <Label>{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-              <Input value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder={F.notesPlaceholder} />
-            </div>
           </FormSection>
 
-          {/* Reference Documents */}
-          <FormSection icon={ClipboardList} title={F.sections.references}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-1 min-w-0">
-                <Label>{F.awb} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-                <Input value={form.awbNumber} onChange={(e) => setForm((f) => ({ ...f, awbNumber: e.target.value }))} placeholder="AWB-123456789" />
-              </div>
-              <div className="space-y-1 min-w-0">
-                <Label>{F.invoiceNo} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-                <Input value={form.invoiceNumber} onChange={(e) => setForm((f) => ({ ...f, invoiceNumber: e.target.value }))} placeholder="INV-2026-0001" />
-              </div>
-              <div className="space-y-1 min-w-0">
-                <Label>{F.rmaRef} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
-                <Input value={form.rmaReference} onChange={(e) => setForm((f) => ({ ...f, rmaReference: e.target.value }))} placeholder={F.rmaPlaceholder} />
-              </div>
+          {/* Notes — last */}
+          <FormSection icon={Info} title={F.sections.notes}>
+            <div className="space-y-1 min-w-0">
+              <Label htmlFor="receive-notes">{F.notes} <span className="text-slate-400 font-normal">{F.optional}</span></Label>
+              <Textarea id="receive-notes" rows={5} value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} placeholder={F.notesPlaceholder} className="field-sizing-fixed resize-y" />
             </div>
           </FormSection>
         </div>
@@ -882,6 +928,7 @@ export default function ReceivingPage() {
   const { m, fmt } = useT();
   const RV = m.receiving;
   const canReverse = !!user && REVERSE_ROLES.includes(user.role);
+  const sourceLabel = useCallback((v: string) => labelOf(m.receiving.sourceType, v), [m]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -937,13 +984,13 @@ export default function ReceivingPage() {
 
   const queueRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((gr) => needsInspection(gr) && matchesQuery(gr, q));
-  }, [rows, query]);
+    return rows.filter((gr) => needsInspection(gr) && matchesQuery(gr, q, sourceLabel));
+  }, [rows, query, sourceLabel]);
 
   const allRows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((gr) => matchesQuery(gr, q));
-  }, [rows, query]);
+    return rows.filter((gr) => matchesQuery(gr, q, sourceLabel));
+  }, [rows, query, sourceLabel]);
 
   const tabs: { key: Tab; label: string; count: number; dot?: string }[] = [
     { key: 'queue', label: RV.tabs.queue, count: stats.awaitingInspection, dot: stats.awaitingInspection > 0 ? 'bg-amber-400' : undefined },

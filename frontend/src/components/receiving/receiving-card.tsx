@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, CheckCircle2, Package } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ConditionChip } from '@/components/receiving/receiving-status-badge';
 import { formatDate, cn } from '@/lib/utils';
+import { labelOf, useT } from '@/i18n';
 
 const CONDITION_ORDER = ['good', 'damaged', 'doa'];
 
@@ -30,6 +31,7 @@ interface ReceivingCardProps {
  */
 export function ReceivingCard({ gr, warehouseName, onVerify, defaultExpanded = false }: ReceivingCardProps) {
   const [open, setOpen] = useState(defaultExpanded);
+  const { m } = useT();
   const items: any[] = gr.items ?? [];
   const lines = items.length;
   const units = items.reduce((s, it) => s + Number(it.quantity ?? 0), 0);
@@ -43,7 +45,7 @@ export function ReceivingCard({ gr, warehouseName, onVerify, defaultExpanded = f
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-mono text-sm font-semibold text-green-700">{gr.refNumber}</span>
-            <span className="text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">{gr.sourceType}</span>
+            <span className="text-xs px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">{labelOf(m.receiving.sourceType, gr.sourceType)}</span>
             <span className="text-xs text-slate-400">
               {formatDate(gr.receivedDate)}{warehouseName ? ` · ${warehouseName}` : ''}
             </span>

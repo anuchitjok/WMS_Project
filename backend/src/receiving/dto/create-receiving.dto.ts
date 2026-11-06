@@ -1,10 +1,11 @@
 import { Type } from 'class-transformer';
 import {
   IsArray, IsOptional, IsString, IsNotEmpty, IsNumber, Min,
-  ValidateNested, ArrayMinSize, IsEnum,
+  ValidateNested, ArrayMinSize, IsEnum, IsIn,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { OwnershipType } from '@prisma/client';
+import { ITEM_CONDITIONS } from '../receiving-display';
 
 export class ReceivingItemDto {
   @ApiProperty()
@@ -41,6 +42,11 @@ export class ReceivingItemDto {
   @IsString()
   @IsOptional()
   condition?: string;
+
+  @ApiPropertyOptional({ enum: ITEM_CONDITIONS, description: 'New / Refurbish chosen at receipt. Optional for older clients (stored as null).' })
+  @IsIn([...ITEM_CONDITIONS], { message: 'itemCondition must be NEW or REFURBISH' })
+  @IsOptional()
+  itemCondition?: 'NEW' | 'REFURBISH';
 
   @ApiPropertyOptional({ enum: OwnershipType })
   @IsEnum(OwnershipType)

@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import type { UserRole } from '@/types';
 import { labelOf, useT, type Messages } from '@/i18n';
+import { useModuleVisible, type ModuleKey } from '@/lib/feature-flags';
 
 type NavLabel = keyof Messages['nav']['items'];
 type NavGroupKey = keyof Messages['nav']['groups'];
@@ -25,6 +26,8 @@ interface NavItem {
   label: NavLabel;
   icon: React.ComponentType<{ className?: string }>;
   roles?: UserRole[];
+  /** Optional module (P7 7.1): hidden while switched off in System Settings → Modules. */
+  module?: ModuleKey;
 }
 
 interface NavGroup {
@@ -69,6 +72,9 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/receiving', label: 'goodsReceiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'putaway', icon: MapPin, roles: WH },
       { href: '/inventory', label: 'inventory', icon: Package },
+      // P4 4.2: approval sits in the outbound flow — approve, then allocate/fulfil.
+      // Role list is deliberately its own (not WH): DEPT_APPROVER must keep seeing it.
+      { href: '/approvals', label: 'approvalWorkspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
       { href: '/outbound/fulfillment', label: 'fulfillmentBoard', icon: Truck, roles: WH },
       { href: '/handover', label: 'handover', icon: CheckCircle2, roles: WH },
       { href: '/warehouse/returns', label: 'returnsInbound', icon: RefreshCw, roles: WH },
@@ -80,8 +86,8 @@ const NAV_GROUPS: NavGroup[] = [
     // Same legacy roles as the backend access rules (mrpView / warrantyView); the API enforces the real permission.
     group: 'planning',
     items: [
-      { href: '/mrp', label: 'materialPlanning', icon: Boxes, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER'] },
-      { href: '/warranty', label: 'warranty', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'RMA_TEAM', 'RTV_OFFICER'] },
+      { href: '/mrp', label: 'materialPlanning', icon: Boxes, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'MGMT_VIEWER'], module: 'mrp' },
+      { href: '/warranty', label: 'warranty', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'RMA_TEAM', 'RTV_OFFICER'], module: 'warranty' },
     ],
   },
   {
@@ -102,12 +108,6 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    group: 'approvals',
-    items: [
-      { href: '/approvals', label: 'approvalWorkspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
-    ],
-  },
-  {
     group: 'admin',
     items: [
       { href: '/data-io', label: 'importExport', icon: Database, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR'] },
@@ -122,6 +122,12 @@ export function Sidebar() {
   const router = useRouter();
   const { user, clearAuth } = useAuthStore();
   const { m } = useT();
+  // Defaults (hidden) apply until the setting is read, so hidden items never flash in.
+  const moduleOn: Record<ModuleKey, boolean> = {
+    warranty: useModuleVisible('warranty'),
+    mrp: useModuleVisible('mrp'),
+    floorPlan2d: useModuleVisible('floorPlan2d'),
+  };
 
   function handleLogout() {
     clearAuth();
@@ -129,6 +135,7 @@ export function Sidebar() {
   }
 
   function canSee(item: NavItem) {
+    if (item.module && !moduleOn[item.module]) return false;
     return !item.roles || (user && item.roles.includes(user.role));
   }
 

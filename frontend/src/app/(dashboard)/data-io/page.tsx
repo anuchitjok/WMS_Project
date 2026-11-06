@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { getT, labelOf, useT } from '@/i18n';
+import { useAuthStore } from '@/store/auth.store';
 
 // Values are the API's import/export type keys; labels come from the dataio messages.
 const IMPORT_TYPES = ['products', 'inventory', 'users', 'warehouse', 'serials'] as const;
@@ -21,9 +22,14 @@ interface Preview {
   alreadyImported?: { batch: string | null; at: string; by: string | null } | null;
 }
 
+// Product imports are limited to the roles that may edit the Product Master (plan 1.7).
+const PRODUCT_WRITE_ROLES = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
+
 export default function DataIOPage() {
+  const role = useAuthStore((s) => s.user?.role);
+  const importTypes = IMPORT_TYPES.filter((v) => v !== 'products' || (role && PRODUCT_WRITE_ROLES.includes(role)));
   const [tab, setTab] = useState<'import' | 'export'>('import');
-  const [importType, setImportType] = useState('products');
+  const [importType, setImportType] = useState<string>(importTypes[0]);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -99,7 +105,7 @@ export default function DataIOPage() {
               <label className="text-xs font-medium text-slate-500">{D.dataType}</label>
               <Select value={importType} onValueChange={(v) => { setImportType(v ?? 'products'); reset(); }}>
                 <SelectTrigger className="w-52"><SelectValue>{labelOf(D.importTypes, importType)}</SelectValue></SelectTrigger>
-                <SelectContent>{IMPORT_TYPES.map((v) => <SelectItem key={v} value={v}>{D.importTypes[v]}</SelectItem>)}</SelectContent>
+                <SelectContent>{importTypes.map((v) => <SelectItem key={v} value={v}>{D.importTypes[v]}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <Button variant="outline" onClick={downloadTemplate}>

@@ -8,12 +8,11 @@ import type { Response } from 'express';
 import { DataioService } from './dataio.service';
 import { ImportService } from './import.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { AccessGuard } from '../auth/guards/access.guard';
-import { Access } from '../auth/decorators/access.decorator';
 import { ACCESS } from '../auth/access';
 import { hasAccess } from '../auth/access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ImportType, ExportType, IMPORT_SCHEMAS } from './import-schemas';
+import { ImportAccessGuard } from './import-access.guard';
 
 const UPLOAD_OPTS = { limits: { fileSize: 10 * 1024 * 1024 } }; // 10 MB cap
 
@@ -45,18 +44,22 @@ export class DataioController {
   }
 
   @Post('import/:type/preview')
-  @UseGuards(AccessGuard)
-  @Access(ACCESS.dataImport)
+  @UseGuards(ImportAccessGuard)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Parse + validate upload, return preview (no save)' })
-  async preview(@Param('type') type: string, @UploadedFile() file: Express.Multer.File, @CurrentUser() user: any) {
-    return this.importer.preview(this.assertImportType(type), file, user);
+  async preview(
+    @Param('type') type: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: any,
+    @Query('createMissingBrands') createMissingBrands?: string,
+  ) {
+    const t = this.assertImportType(type);
+    return this.importer.preview(t, file, user, { createMissingBrands: t === 'products' && createMissingBrands === 'true' });
   }
 
   @Post('import/:type/commit')
-  @UseGuards(AccessGuard)
-  @Access(ACCESS.dataImport)
+  @UseGuards(ImportAccessGuard)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', UPLOAD_OPTS))
   @ApiOperation({ summary: 'Import valid rows (partial), rollback on critical failure' })
@@ -65,8 +68,13 @@ export class DataioController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: any,
     @Query('allowReimport') allowReimport?: string,
+    @Query('createMissingBrands') createMissingBrands?: string,
   ) {
-    return this.importer.commit(this.assertImportType(type), file, user, { allowReimport: allowReimport === 'true' });
+    const t = this.assertImportType(type);
+    return this.importer.commit(t, file, user, {
+      allowReimport: allowReimport === 'true',
+      createMissingBrands: t === 'products' && createMissingBrands === 'true',
+    });
   }
 
   @Get('export/:type')

@@ -2,6 +2,7 @@ export const fulfillment = {
   title: 'Fulfillment Execution',
   subtitle: 'Pick / Pack / Ship',
   lanes: {
+    awaiting: 'Awaiting Allocation',
     all: 'All Active',
     allocated: 'Pending Inventory',
     picking: 'Picking',
@@ -84,6 +85,14 @@ export const fulfillment = {
     notes: 'Notes',
     warning: 'Confirming dispatch will trigger Goods Issue — stock will be deducted from inventory.',
     dispatch: 'Dispatch & Issue Stock',
+  },
+  awaiting: {
+    title: 'Awaiting allocation',
+    hint: 'Approved requests with no fulfillment task yet. Allocate one to reserve stock and start picking.',
+    newBadge: '{count} new',
+    approvedAt: 'Approved {time}',
+    viewAll: 'View all',
+    more: '+{count} more waiting',
   },
   toast: {
     loadFailed: 'Failed to load board',

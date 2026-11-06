@@ -21,7 +21,7 @@ export type SettingEffect = 'enforced' | 'informational';
 export interface SettingDefinition {
   key: string;
   label: string;
-  category: 'workflow' | 'validation' | 'inventory' | 'sla' | 'notification';
+  category: 'workflow' | 'validation' | 'inventory' | 'sla' | 'notification' | 'ui';
   effect: SettingEffect;
   /** Seed value written when the table is first initialised (unchanged from before). */
   seed: string;
@@ -35,7 +35,24 @@ export interface SettingDefinition {
   max?: number;
   /** Can be set to "disabled". */
   canDisable?: boolean;
+  /**
+   * Comma-separated list setting: every entry must be one of these values.
+   * An empty value is a valid, explicit "none".
+   */
+  list?: readonly string[];
 }
+
+/**
+ * Optional modules that can be hidden from menus (P7 7.1, P1 1.8). Hidden
+ * modules keep their data and code; the web app only takes them out of the
+ * menu and shows a "not enabled" notice on their pages. Must match ModuleKey in
+ * frontend/src/lib/feature-flags.ts.
+ */
+export const MODULE_KEYS = ['warranty', 'mrp', 'floorPlan2d'] as const;
+export type ModuleKey = (typeof MODULE_KEYS)[number];
+export const HIDDEN_MODULES_KEY = 'ui.hiddenModules';
+/** Built-in behaviour while the setting is missing or invalid: all three hidden. */
+export const DEFAULT_HIDDEN_MODULES: readonly ModuleKey[] = ['warranty', 'mrp', 'floorPlan2d'];
 
 export const DISABLED = 'disabled';
 
@@ -125,6 +142,17 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
+    key: HIDDEN_MODULES_KEY,
+    label: 'Hidden modules',
+    category: 'ui',
+    effect: 'enforced',
+    seed: DEFAULT_HIDDEN_MODULES.join(','),
+    accepts: `Comma-separated list of: ${MODULE_KEYS.join(', ')} (empty = show all)`,
+    list: MODULE_KEYS,
+    description:
+      'Modules taken out of the menu. Their pages show a "not enabled" notice instead. Data and code are kept, so a module can be switched back on at any time.',
+  },
+  {
     key: 'notification.template',
     label: 'Notification template',
     category: 'notification',
@@ -162,6 +190,7 @@ export function parseSetting(
 ): SettingValue<string | number> {
   if (raw === null || raw === undefined) return { state: 'missing' };
   const v = raw.trim();
+  if (def.list) return parseList(def, raw, v);
   if (v.toLowerCase() === DISABLED) {
     return def.canDisable
       ? { state: 'disabled' }
@@ -189,4 +218,46 @@ export function parseSetting(
     return { state: 'configured', value: n };
   }
   return { state: 'configured', value: v };
+}
+
+/**
+ * List settings: entries are trimmed, de-duplicated and stored in catalogue
+ * order, so equal selections always store the same value. Unknown entries make
+ * the whole value invalid (nothing is silently dropped).
+ */
+function parseList(
+  def: SettingDefinition,
+  raw: string,
+  v: string,
+): SettingValue<string | number> {
+  const allowed = def.list ?? [];
+  if (v.toLowerCase() === DISABLED && !allowed.includes(v)) {
+    return { state: 'invalid', raw, reason: `${def.label} cannot be disabled` };
+  }
+  const parts = v
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const unknown = parts.filter((p) => !allowed.includes(p));
+  if (unknown.length) {
+    return {
+      state: 'invalid',
+      raw,
+      reason: `Unknown value: ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}`,
+    };
+  }
+  const set = new Set(parts);
+  return {
+    state: 'configured',
+    value: allowed.filter((a) => set.has(a)).join(','),
+  };
+}
+
+/** Hidden modules in force: the configured list, or the built-in default when missing/invalid. */
+export function hiddenModulesFrom(
+  parsed: SettingValue<string | number>,
+): ModuleKey[] {
+  if (parsed.state !== 'configured') return [...DEFAULT_HIDDEN_MODULES];
+  const value = String(parsed.value);
+  return value ? (value.split(',') as ModuleKey[]) : [];
 }
