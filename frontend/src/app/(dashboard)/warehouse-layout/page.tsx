@@ -9,8 +9,7 @@
 // Occupancy is derived from actual stock placement.
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box, Boxes } from 'lucide-react';
+import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box } from 'lucide-react';
 import { warehouseApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -140,11 +139,8 @@ export default function WarehouseOperationsPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Interactive 3D demo (sample data) — its own full-height page. */}
-          <Link href="/warehouse-layout/smart-3d" title={m.layout3d.smart.openTitle}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
-            <Boxes className="h-4 w-4 text-green-600" /> {m.layout3d.smart.open}
-          </Link>
+          {/* The sample-data demo at /warehouse-layout/smart-3d is no longer linked:
+              the 3D view tab shows the same experience with live WMS data. */}
           <Button variant="outline" size="sm" className="h-9 gap-1.5 bg-white" onClick={load} disabled={loading}>
             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} /> {P.refresh}
           </Button>
@@ -158,8 +154,8 @@ export default function WarehouseOperationsPage() {
         </div>
       ) : null}
 
-      {/* Warehouse selector */}
-      {loading && warehouses.length === 0 ? (
+      {/* Warehouse selector — the 3D tab has its own (in its filter bar) */}
+      {tab === '3d' && warehouses.length > 0 ? null : loading && warehouses.length === 0 ? (
         <div className="flex gap-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-9 w-40 rounded-full" />)}</div>
       ) : warehouses.length === 0 && !error ? (
         <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
@@ -169,7 +165,8 @@ export default function WarehouseOperationsPage() {
         <WarehouseChips warehouses={warehouses} selectedId={selectedWhId} onSelect={(id) => { setSelectedWhId(id); setFocus(null); }} />
       )}
 
-      <KpiStrip wh={selectedWh} loading={loading && warehouses.length === 0} />
+      {/* The 3D tab shows the same figures as KPI cards. */}
+      {tab !== '3d' && <KpiStrip wh={selectedWh} loading={loading && warehouses.length === 0} />}
 
       {/* Working area, per tab */}
       <Tabs value={tab} onValueChange={(v) => setTab(v as string)}>
@@ -193,8 +190,9 @@ export default function WarehouseOperationsPage() {
         <TabsContent value="3d" className="mt-4">
           {/* Mounted only while open: three.js loads on first visit to this tab. */}
           {tab === '3d' && (
-            <Warehouse3D key={selectedWhId} wh={selectedWh} loading={loading && warehouses.length === 0}
-              onReload={load} onViewStock={viewStock} />
+            <Warehouse3D key={selectedWhId} warehouses={warehouses} wh={selectedWh}
+              onSelectWarehouse={(id) => { setSelectedWhId(id); setFocus(null); }}
+              loading={loading && warehouses.length === 0} onReload={load} onViewStock={viewStock} />
           )}
         </TabsContent>
       </Tabs>

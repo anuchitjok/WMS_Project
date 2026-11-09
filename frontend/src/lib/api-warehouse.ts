@@ -81,6 +81,55 @@ export interface WarehouseSpaceSummary {
   slots: SlotCounts;
   stockQty: number;
   capacityUsedPct: number | null;
+  /** Layer 1 — floor space vs the FULL warehouse area (100%). */
+  floor: FloorSpace;
+  /** Layer 2 — rack storage space estimated from slot status share. */
+  storage: StorageSpace;
+}
+
+/** OCCUPIED = has stock, RESERVED = booked, available = EMPTY, blockedOther = BLOCKED / QUARANTINE / RTV / unknown. */
+export type StorageBucket = 'occupied' | 'reserved' | 'available' | 'blockedOther';
+export type BucketValues = Record<StorageBucket, number>;
+
+export interface FloorSpace {
+  totalAreaM2: number | null;
+  rackFootprintM2: number;
+  /** Not clamped: negative when racks exceed the warehouse area. */
+  availableM2: number | null;
+  /** Not clamped: can exceed 100. */
+  utilPct: number | null;
+  overCapacity: boolean;
+  racksWithoutSize: number;
+  racksWithoutSizeCodes: string[];
+}
+
+export interface StorageSpace {
+  totalRackAreaM2: number;
+  areaM2: BucketValues;
+  slots: BucketValues & { total: number };
+  utilPct: number | null;
+  racksCounted: number;
+  racksWithoutSizeCodes: string[];
+  racksWithoutSlotsCodes: string[];
+}
+
+export interface RackSpaceRow {
+  rackId: string;
+  rackCode: string;
+  zone: string | null;
+  isActive: boolean;
+  hasSize: boolean;
+  rackSizeM2: number | null;
+  counted: boolean;
+  slots: BucketValues & { total: number };
+  areaM2: BucketValues | null;
+  utilPct: number | null;
+}
+
+export interface RackSpaceResponse {
+  generatedAt: string;
+  warehouse: WarehouseSpaceSummary;
+  racks: RackSpaceRow[];
 }
 
 export interface SpaceSummaryResponse {
@@ -148,6 +197,7 @@ export const warehouseSpaceApi = {
   updateRackType: (id: string, dto: Partial<Omit<RackTypeMaster, 'id' | 'code' | '_count'>>) => request<RackTypeMaster>(`/warehouse-master/rack-types/${id}`, json('PATCH', dto)),
 
   spaceSummary: (warehouseId?: string) => request<SpaceSummaryResponse>(`/warehouse-master/space-summary${warehouseId ? `?warehouseId=${encodeURIComponent(warehouseId)}` : ''}`),
+  rackSpace: (warehouseId: string) => request<RackSpaceResponse>(`/warehouse-master/space-summary/${encodeURIComponent(warehouseId)}/racks`),
   planner: (warehouseId: string, rackTypeId: string) =>
     request<CapacityPlan>(`/warehouse-master/space-planner?warehouseId=${encodeURIComponent(warehouseId)}&rackTypeId=${encodeURIComponent(rackTypeId)}`),
   simulate: (input: SimulateInput) => request<SimulationResult>('/warehouse-master/space-simulate', json('POST', input)),

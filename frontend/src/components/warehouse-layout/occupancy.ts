@@ -29,6 +29,8 @@ export interface WarehouseData {
   id: string; code: string; name: string; location?: string;
   /** Real floor size in cm (migration 29). Null = not measured. */
   lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null;
+  /** % of the floor usable after aisles (Warehouse Master); null/undefined = 100. */
+  usableAreaPct?: number | null;
   racks: RackData[];
   _count?: { racks: number; stockItems: number };
 }

@@ -1,7 +1,7 @@
 // Pure calculations for the Warehouse Space dashboard tab (plan P6 6.1 / 6.2).
 // Inputs are rows from GET /warehouse-master/space-summary; nothing here
 // fetches or renders, so the rules stay easy to check by reading.
-import type { SlotCounts, WarehouseSpaceSummary } from '@/lib/api-warehouse';
+import type { BucketValues, SlotCounts, StorageBucket, WarehouseSpaceSummary } from '@/lib/api-warehouse';
 
 export const DEFAULT_NEAR_FULL_PCT = 85;
 export const MIN_NEAR_FULL_PCT = 50;
@@ -132,4 +132,74 @@ export function readThreshold(): number {
 
 export function writeThreshold(v: number): void {
   try { localStorage.setItem(THRESHOLD_KEY, String(v)); } catch { /* storage unavailable */ }
+}
+
+// ── Layer 1 (floor) / Layer 2 (storage) totals for the selected warehouses ────
+// Same rules as the backend: added in whole cents so totals match the rows,
+// never clamped, and the two layers are never mixed.
+
+export const STORAGE_BUCKETS: StorageBucket[] = ['occupied', 'reserved', 'available', 'blockedOther'];
+const cents = (n: number) => Math.round(n * 100);
+const pct1 = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
+
+export interface FloorTotals {
+  /** null when none of the selected warehouses has a size. */
+  totalAreaM2: number | null;
+  rackFootprintM2: number;
+  availableM2: number | null;
+  utilPct: number | null;
+  overCapacity: WarehouseSpaceSummary[];
+  withoutSize: WarehouseSpaceSummary[];
+  racksWithoutSizeCodes: string[];
+}
+
+export function floorTotals(rows: WarehouseSpaceSummary[]): FloorTotals {
+  let total = 0, fp = 0, sized = 0;
+  const over: WarehouseSpaceSummary[] = [];
+  const noSize: WarehouseSpaceSummary[] = [];
+  const rackCodes: string[] = [];
+  for (const w of rows) {
+    rackCodes.push(...w.floor.racksWithoutSizeCodes.map((c) => `${w.code}/${c}`));
+    if (w.floor.totalAreaM2 == null) { noSize.push(w); continue; }
+    sized++;
+    total += cents(w.floor.totalAreaM2);
+    fp += cents(w.floor.rackFootprintM2);
+    if (w.floor.overCapacity) over.push(w);
+  }
+  return {
+    totalAreaM2: sized ? total / 100 : null,
+    rackFootprintM2: fp / 100,
+    availableM2: sized ? (total - fp) / 100 : null,
+    utilPct: pct1(fp, total),
+    overCapacity: over,
+    withoutSize: noSize,
+    racksWithoutSizeCodes: rackCodes,
+  };
+}
+
+export interface StorageTotals {
+  totalRackAreaM2: number;
+  areaM2: BucketValues;
+  slots: BucketValues & { total: number };
+  utilPct: number | null;
+  racksCounted: number;
+  racksWithoutSlotsCodes: string[];
+}
+
+export function storageTotals(rows: WarehouseSpaceSummary[]): StorageTotals {
+  let total = 0, counted = 0;
+  const area: BucketValues = { occupied: 0, reserved: 0, available: 0, blockedOther: 0 };
+  const slots = { ...area, total: 0 };
+  const noSlots: string[] = [];
+  for (const w of rows) {
+    const s = w.storage;
+    total += cents(s.totalRackAreaM2);
+    counted += s.racksCounted;
+    noSlots.push(...s.racksWithoutSlotsCodes.map((c) => `${w.code}/${c}`));
+    for (const k of STORAGE_BUCKETS) { area[k] += cents(s.areaM2[k]); slots[k] += s.slots[k]; }
+    slots.total += s.slots.total;
+  }
+  const used = area.occupied + area.reserved;
+  for (const k of STORAGE_BUCKETS) area[k] /= 100;
+  return { totalRackAreaM2: total / 100, areaM2: area, slots, utilPct: pct1(used, total), racksCounted: counted, racksWithoutSlotsCodes: noSlots };
 }

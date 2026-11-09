@@ -5,6 +5,7 @@ import { ScopePrincipal, warehouseFilter, scopedWarehouseIds } from '../common/w
 import {
   RackCategory, addSlots, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType,
   planCapacity, planSlotCodes, rackCategory, simulate, slotSize, SlotCounts, WarehouseSpaceSummary,
+  rackSpaceRow, RackSpaceRow, STORAGE_BUCKETS,
   SimLineInput, SimulationResult, CapacityPlan, PlannedSlot,
 } from './space-math';
 import type {
@@ -40,7 +41,43 @@ export interface SpaceSummaryResponse {
     slots: SlotCounts;
     stockQty: number;
     capacityUsedPct: number | null;
+    /** Layer 1 over warehouses that have a size (racks of unsized warehouses are not compared with any area). */
+    floor: { totalAreaM2: number; rackFootprintM2: number; availableM2: number; utilPct: number | null; overCapacityWarehouses: number; warehousesWithoutSize: number };
+    /** Layer 2 over every counted rack. */
+    storage: { totalRackAreaM2: number; areaM2: Record<string, number>; slots: Record<string, number>; utilPct: number | null; racksCounted: number; racksExcluded: number };
   };
+}
+
+// Totals are added in whole cents so they match the per-warehouse figures exactly.
+const cents = (n: number) => Math.round(n * 100);
+const pct1 = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 1000) / 10 : null);
+
+export function floorTotals(rows: WarehouseSpaceSummary[]): SpaceSummaryResponse['totals']['floor'] {
+  let total = 0, fp = 0, over = 0, noSize = 0;
+  for (const w of rows) {
+    if (w.floor.totalAreaM2 == null) { noSize++; continue; }
+    total += cents(w.floor.totalAreaM2);
+    fp += cents(w.floor.rackFootprintM2);
+    if (w.floor.overCapacity) over++;
+  }
+  return { totalAreaM2: total / 100, rackFootprintM2: fp / 100, availableM2: (total - fp) / 100, utilPct: pct1(fp, total), overCapacityWarehouses: over, warehousesWithoutSize: noSize };
+}
+
+export function storageTotals(rows: WarehouseSpaceSummary[]): SpaceSummaryResponse['totals']['storage'] {
+  let total = 0, counted = 0, excluded = 0;
+  const area: Record<string, number> = {};
+  const slots: Record<string, number> = { total: 0 };
+  for (const k of STORAGE_BUCKETS) { area[k] = 0; slots[k] = 0; }
+  for (const w of rows) {
+    const s = w.storage;
+    total += cents(s.totalRackAreaM2);
+    counted += s.racksCounted;
+    excluded += s.racksWithoutSizeCodes.length + s.racksWithoutSlotsCodes.length;
+    for (const k of STORAGE_BUCKETS) { area[k] += cents(s.areaM2[k]); slots[k] += s.slots[k]; }
+    slots.total += s.slots.total;
+  }
+  for (const k of STORAGE_BUCKETS) area[k] /= 100;
+  return { totalRackAreaM2: total / 100, areaM2: area, slots, utilPct: pct1(cents(area.occupied + area.reserved), total), racksCounted: counted, racksExcluded: excluded };
 }
 
 @Injectable()
@@ -123,7 +160,10 @@ export class WarehouseMasterService {
   }
 
   // ── Space summary (plan 1.5) — scoped to the caller's warehouses ─────────────
-  async getSpaceSummaries(scope: ScopePrincipal | null | undefined, warehouseId?: string): Promise<WarehouseSpaceSummary[]> {
+  private async computeSpace(
+    scope: ScopePrincipal | null | undefined,
+    warehouseId?: string,
+  ): Promise<{ summary: WarehouseSpaceSummary; rows: RackSpaceRow[] }[]> {
     const filter = warehouseFilter(scope, warehouseId);
     const where: Prisma.WarehouseWhereInput = { isDeleted: false, ...(filter ? { id: filter } : {}) };
     const warehouses = await this.prisma.warehouse.findMany({ where, orderBy: { code: 'asc' } });
@@ -148,17 +188,42 @@ export class WarehouseMasterService {
 
     const rackWh = new Map(racks.map((r) => [r.id, r.warehouseId]));
     const slotsByWh = new Map<string, SlotCounts>();
+    const slotsByRack = new Map<string, SlotCounts>();
     for (const g of slotGroups) {
       const wh = rackWh.get(g.rackId);
       if (!wh) continue;
       if (!slotsByWh.has(wh)) slotsByWh.set(wh, emptySlotCounts());
+      if (!slotsByRack.has(g.rackId)) slotsByRack.set(g.rackId, emptySlotCounts());
       addSlots(slotsByWh.get(wh)!, g.status, g._count._all, g._sum.capacity ?? 0);
+      addSlots(slotsByRack.get(g.rackId)!, g.status, g._count._all, g._sum.capacity ?? 0);
     }
     const stockByWh = new Map(stockGroups.map((g) => [g.warehouseId, g._sum.quantity ?? 0]));
 
-    return warehouses.map((w) =>
-      buildSpaceSummary(w, racks.filter((r) => r.warehouseId === w.id), slotsByWh.get(w.id) ?? emptySlotCounts(), stockByWh.get(w.id) ?? 0),
-    );
+    const racksByWh = new Map<string, typeof racks>();
+    for (const r of racks) {
+      const list = racksByWh.get(r.warehouseId);
+      if (list) list.push(r); else racksByWh.set(r.warehouseId, [r]);
+    }
+
+    return warehouses.map((w) => {
+      const whRacks = racksByWh.get(w.id) ?? [];
+      const rows = whRacks
+        .map((r) => rackSpaceRow(r, slotsByRack.get(r.id) ?? emptySlotCounts()))
+        .sort((a, b) => a.rackCode.localeCompare(b.rackCode));
+      return { summary: buildSpaceSummary(w, whRacks, slotsByWh.get(w.id) ?? emptySlotCounts(), stockByWh.get(w.id) ?? 0, rows), rows };
+    });
+  }
+
+  async getSpaceSummaries(scope: ScopePrincipal | null | undefined, warehouseId?: string): Promise<WarehouseSpaceSummary[]> {
+    return (await this.computeSpace(scope, warehouseId)).map((x) => x.summary);
+  }
+
+  /** Drill-down: one row per rack of one warehouse (Layer 2 per rack + slot counts). */
+  async getRackSpace(scope: ScopePrincipal | null | undefined, warehouseId: string): Promise<{ generatedAt: string; warehouse: WarehouseSpaceSummary; racks: RackSpaceRow[] }> {
+    if (!warehouseId) throw new BadRequestException('warehouseId is required');
+    const [hit] = await this.computeSpace(scope, warehouseId);
+    if (!hit) throw new NotFoundException('Warehouse not found');
+    return { generatedAt: new Date().toISOString(), warehouse: hit.summary, racks: hit.rows };
   }
 
   async getSpaceSummary(scope: ScopePrincipal | null | undefined, warehouseId?: string): Promise<SpaceSummaryResponse> {
@@ -184,6 +249,8 @@ export class WarehouseMasterService {
         slots,
         stockQty,
         capacityUsedPct: slots.capacity > 0 ? Math.round((stockQty / slots.capacity) * 1000) / 10 : null,
+        floor: floorTotals(warehouses),
+        storage: storageTotals(warehouses),
       },
     };
   }

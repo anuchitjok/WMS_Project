@@ -14,6 +14,7 @@ import { warehouseSpaceApi, type SpaceSummaryResponse } from '@/lib/api-warehous
 import { useWarehouseMasterPerms } from '@/components/warehouse-master/shared';
 import { aggregateSpace, clampThreshold, DEFAULT_NEAR_FULL_PCT, readThreshold, writeThreshold } from './space-math';
 import { NearFullList, OfferableSpace, SpaceBreakdown, SpaceCaveats, SpaceKpis, WarehouseCards } from './space-parts';
+import { SpaceDrillDown, SpaceLayers } from './space-layers';
 
 export function WarehouseSpaceView() {
   const { m, t, fmt } = useT();
@@ -110,6 +111,13 @@ export function WarehouseSpaceView() {
 
       {(busy || (data && all.length > 0)) && (
         <>
+          <SpaceLayers rows={rows} loading={busy} />
+          <SpaceDrillDown rows={rows} loading={busy} />
+
+          <div className="pt-2">
+            <h2 className="text-base font-semibold text-slate-900">{S.layers.planningTitle}</h2>
+            <p className="text-xs text-slate-500">{S.layers.planningSub}</p>
+          </div>
           <SpaceKpis agg={agg} loading={busy} threshold={threshold} />
           {agg && <SpaceCaveats agg={agg} />}
 
