@@ -159,6 +159,166 @@ export function rackFootprints(racks: RackLike[]): RackFootprint {
   return out;
 }
 
+// ── Floor space (Layer 1) and rack storage space (Layer 2) ────────────────────
+// Layer 1 compares rack footprints with the FULL warehouse area (100%, never the
+// usable %). Layer 2 estimates storage area from the share of slots per status.
+// The two layers are never mixed.
+
+export type StorageBucket = 'occupied' | 'reserved' | 'available' | 'blockedOther';
+export const STORAGE_BUCKETS: StorageBucket[] = ['occupied', 'reserved', 'available', 'blockedOther'];
+
+/** OCCUPIED = has stock, RESERVED = booked, EMPTY = available; anything else (BLOCKED, QUARANTINE, RTV, unknown) = blockedOther. */
+export function storageBucket(status: string): StorageBucket {
+  if (status === 'OCCUPIED') return 'occupied';
+  if (status === 'RESERVED') return 'reserved';
+  if (status === 'EMPTY') return 'available';
+  return 'blockedOther';
+}
+
+export type BucketValues = Record<StorageBucket, number>;
+const zeroBuckets = (): BucketValues => ({ occupied: 0, reserved: 0, available: 0, blockedOther: 0 });
+
+/** Slot counts of a SlotCounts grouped into the 4 storage buckets. */
+export function bucketSlots(c: SlotCounts): BucketValues {
+  return { occupied: c.occupied, reserved: c.reserved, available: c.empty, blockedOther: c.blocked + c.other };
+}
+
+/**
+ * Splits `totalCents` by `weights` so the parts are whole cents and add up EXACTLY
+ * to the total (largest-remainder rounding). Used so the 4 storage areas always
+ * sum to the rack area shown, without changing any input.
+ */
+export function splitCents(totalCents: number, weights: BucketValues): BucketValues {
+  const sumW = STORAGE_BUCKETS.reduce((a, k) => a + weights[k], 0);
+  const out = zeroBuckets();
+  if (sumW <= 0 || totalCents <= 0) return out;
+  const raw = STORAGE_BUCKETS.map((k) => ({ k, v: (totalCents * weights[k]) / sumW }));
+  let given = 0;
+  for (const r of raw) { out[r.k] = Math.floor(r.v); given += out[r.k]; }
+  raw.sort((a, b) => (b.v - Math.floor(b.v)) - (a.v - Math.floor(a.v)));
+  for (let i = 0; given < totalCents; i++, given++) out[raw[i % raw.length].k] += 1;
+  return out;
+}
+
+const toM2 = (cents: number) => cents / 100;
+
+export interface RackSpaceRow {
+  rackId: string;
+  rackCode: string;
+  zone: string | null;
+  isActive: boolean;
+  hasSize: boolean;
+  /** Rack footprint (L×W) in m²; null = size not entered. */
+  rackSizeM2: number | null;
+  /** true when the rack has a size AND at least one slot, so it is in the Layer 2 totals. */
+  counted: boolean;
+  slots: BucketValues & { total: number };
+  /** m² per status; null when the rack is not counted. */
+  areaM2: BucketValues | null;
+  /** (occupied + reserved) ÷ rack size × 100; null when not counted. */
+  utilPct: number | null;
+}
+
+export function rackSpaceRow(
+  rack: RackLike & { id: string; zone?: string | null; isActive?: boolean },
+  slots: SlotCounts,
+): RackSpaceRow {
+  const fp = footprintM2(effectiveRackSize(rack));
+  const cents = fp != null ? Math.round(fp * 100) : null;
+  const b = bucketSlots(slots);
+  const counted = cents != null && cents > 0 && slots.total > 0;
+  const area = counted ? splitCents(cents!, b) : null;
+  return {
+    rackId: rack.id,
+    rackCode: rack.code,
+    zone: rack.zone ?? null,
+    isActive: rack.isActive ?? true,
+    hasSize: fp != null,
+    rackSizeM2: cents != null ? toM2(cents) : null,
+    counted,
+    slots: { ...b, total: slots.total },
+    areaM2: area ? { occupied: toM2(area.occupied), reserved: toM2(area.reserved), available: toM2(area.available), blockedOther: toM2(area.blockedOther) } : null,
+    utilPct: area ? round(((area.occupied + area.reserved) / cents!) * 100, 1) : null,
+  };
+}
+
+export interface FloorSpace {
+  /** Full warehouse area L×W (100%); null = warehouse size not entered. */
+  totalAreaM2: number | null;
+  /** Sum of the real footprint of racks that have a size. */
+  rackFootprintM2: number;
+  /** total − footprint, NOT clamped: negative means racks exceed the warehouse (data problem). */
+  availableM2: number | null;
+  /** footprint ÷ total × 100, NOT clamped (can exceed 100). */
+  utilPct: number | null;
+  /** true when the rack footprint is larger than the warehouse area → show a "check data" warning. */
+  overCapacity: boolean;
+  racksWithoutSize: number;
+  racksWithoutSizeCodes: string[];
+}
+
+export function floorSpace(wh: Size3, racks: RackLike[]): FloorSpace {
+  const total = footprintM2(wh);
+  const totalCents = total != null ? Math.round(total * 100) : null;
+  let fpCents = 0;
+  const withoutSizeCodes: string[] = [];
+  for (const r of racks) {
+    const fp = footprintM2(effectiveRackSize(r));
+    if (fp == null) withoutSizeCodes.push(r.code); else fpCents += Math.round(fp * 100);
+  }
+  return {
+    totalAreaM2: totalCents != null ? toM2(totalCents) : null,
+    rackFootprintM2: toM2(fpCents),
+    availableM2: totalCents != null ? toM2(totalCents - fpCents) : null,
+    utilPct: totalCents ? round((fpCents / totalCents) * 100, 1) : null,
+    overCapacity: totalCents != null && fpCents > totalCents,
+    racksWithoutSize: withoutSizeCodes.length,
+    racksWithoutSizeCodes: withoutSizeCodes,
+  };
+}
+
+export interface StorageSpace {
+  /** Sum of rack sizes of counted racks (size + at least one slot). */
+  totalRackAreaM2: number;
+  /** m² per status; the four always add up to totalRackAreaM2. */
+  areaM2: BucketValues;
+  /** Slot counts per status in counted racks. */
+  slots: BucketValues & { total: number };
+  /** (occupied + reserved) ÷ totalRackAreaM2 × 100; null when nothing is counted. */
+  utilPct: number | null;
+  racksCounted: number;
+  /** Racks left out of Layer 2 because they have no size. */
+  racksWithoutSizeCodes: string[];
+  /** Racks with a size but no slots, also left out of Layer 2. */
+  racksWithoutSlotsCodes: string[];
+}
+
+export function storageSpace(rows: RackSpaceRow[]): StorageSpace {
+  const cents = zeroBuckets();
+  const slots = { ...zeroBuckets(), total: 0 };
+  let totalCents = 0;
+  let counted = 0;
+  const noSize: string[] = [];
+  const noSlots: string[] = [];
+  for (const r of rows) {
+    if (!r.hasSize) { noSize.push(r.rackCode); continue; }
+    if (!r.counted || !r.areaM2) { noSlots.push(r.rackCode); continue; }
+    counted++;
+    totalCents += Math.round(r.rackSizeM2! * 100);
+    for (const k of STORAGE_BUCKETS) { cents[k] += Math.round(r.areaM2[k] * 100); slots[k] += r.slots[k]; }
+    slots.total += r.slots.total;
+  }
+  return {
+    totalRackAreaM2: toM2(totalCents),
+    areaM2: { occupied: toM2(cents.occupied), reserved: toM2(cents.reserved), available: toM2(cents.available), blockedOther: toM2(cents.blockedOther) },
+    slots,
+    utilPct: totalCents > 0 ? round(((cents.occupied + cents.reserved) / totalCents) * 100, 1) : null,
+    racksCounted: counted,
+    racksWithoutSizeCodes: noSize,
+    racksWithoutSlotsCodes: noSlots,
+  };
+}
+
 /**
  * Stable shape returned by GET /warehouse-master/space-summary (one per warehouse).
  * Reused by the capacity planner, the simulator and (later) the dashboard.
@@ -184,6 +344,10 @@ export interface WarehouseSpaceSummary {
   slots: SlotCounts;
   stockQty: number; // active stock quantity sitting in slots
   capacityUsedPct: number | null; // stockQty ÷ slots.capacity × 100
+  /** Layer 1 — floor space vs the FULL warehouse area. */
+  floor: FloorSpace;
+  /** Layer 2 — rack storage space estimated from slot status share. */
+  storage: StorageSpace;
 }
 
 export function buildSpaceSummary(
@@ -191,6 +355,7 @@ export function buildSpaceSummary(
   racks: RackLike[],
   slots: SlotCounts,
   stockQty: number,
+  rackRows: RackSpaceRow[] = [],
 ): WarehouseSpaceSummary {
   const area = warehouseArea(wh);
   const fp = rackFootprints(racks);
@@ -215,6 +380,8 @@ export function buildSpaceSummary(
     slots: { ...slots },
     stockQty: round(stockQty),
     capacityUsedPct: slots.capacity > 0 ? round((stockQty / slots.capacity) * 100, 1) : null,
+    floor: floorSpace(wh, racks),
+    storage: storageSpace(rackRows),
   };
 }
 

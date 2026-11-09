@@ -1,6 +1,7 @@
 import {
   addSlots, boxesPerLayer, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType, planCapacity,
   planSlotCodes, rackCategory, rackFootprints, simulate, simulateLine, slotCode, slotSize, warehouseArea,
+  floorSpace, rackSpaceRow, splitCents, storageBucket, storageSpace,
 } from './space-math';
 
 const STD = { id: 't1', code: 'STD-250', name: 'Standard 2.5 m', category: 'STANDARD_RACK', lengthCm: 250, widthCm: 100, heightCm: 250, levels: 5, columns: 5, slotCapacity: 1 };
@@ -157,5 +158,94 @@ describe('space simulator', () => {
     expect(r.requiredSlots).toBe(4);
     expect(r.requiredAreaM2).toBe(4.8);
     expect(r.warehouses[0].fitsArea).toBe(true);
+  });
+});
+
+// ── Layer 1 floor space / Layer 2 storage space (user-defined formulas, 9 Nov 2026) ──
+describe('floor space (Layer 1, full area 100%)', () => {
+  // User example: warehouse 150 m², 10 racks × 10 m² = 100 m², available 50 m².
+  const tenRacks = Array.from({ length: 10 }, (_, i) => rack({ code: `R${i}`, lengthCm: 500, widthCm: 200 }));
+
+  it('matches the user example and ignores usableAreaPct', () => {
+    const f = floorSpace({ lengthCm: 1500, widthCm: 1000, heightCm: null }, tenRacks);
+    expect(f).toMatchObject({ totalAreaM2: 150, rackFootprintM2: 100, availableM2: 50, utilPct: 66.7, overCapacity: false });
+    const s = buildSpaceSummary(wh({ lengthCm: 1500, widthCm: 1000, usableAreaPct: 85 }), tenRacks, emptySlotCounts(), 0);
+    expect(s.floor.totalAreaM2).toBe(150);
+    expect(s.floor.availableM2).toBe(50);
+  });
+
+  it('flags racks larger than the warehouse and never clamps the numbers', () => {
+    const f = floorSpace({ lengthCm: 1000, widthCm: 800, heightCm: null }, tenRacks); // 80 m² vs 100 m²
+    expect(f.overCapacity).toBe(true);
+    expect(f.availableM2).toBe(-20);
+    expect(f.utilPct).toBe(125);
+  });
+
+  it('returns null figures when the warehouse has no size and lists racks without size', () => {
+    const f = floorSpace({ lengthCm: null, widthCm: null, heightCm: null }, [rack({ code: 'X1' }), tenRacks[0]]);
+    expect(f.totalAreaM2).toBeNull();
+    expect(f.availableM2).toBeNull();
+    expect(f.utilPct).toBeNull();
+    expect(f.rackFootprintM2).toBe(10);
+    expect(f.racksWithoutSizeCodes).toEqual(['X1']);
+  });
+});
+
+describe('storage space (Layer 2, slot share × rack area)', () => {
+  const slots = (o: Partial<Record<'EMPTY' | 'OCCUPIED' | 'RESERVED' | 'BLOCKED' | 'QUARANTINE' | 'WEIRD', number>>) => {
+    const c = emptySlotCounts();
+    for (const [st, n] of Object.entries(o)) addSlots(c, st, n!, n!);
+    return c;
+  };
+
+  it('maps statuses into 4 buckets; unknown statuses go to blockedOther, never available', () => {
+    expect(storageBucket('OCCUPIED')).toBe('occupied');
+    expect(storageBucket('RESERVED')).toBe('reserved');
+    expect(storageBucket('EMPTY')).toBe('available');
+    expect(storageBucket('BLOCKED')).toBe('blockedOther');
+    expect(storageBucket('QUARANTINE')).toBe('blockedOther');
+    expect(storageBucket('SOMETHING_NEW')).toBe('blockedOther');
+    const row = rackSpaceRow({ ...rack({ lengthCm: 500, widthCm: 200 }), id: 'r1' }, slots({ EMPTY: 2, WEIRD: 3 }));
+    expect(row.slots.blockedOther).toBe(3);
+    expect(row.slots.available).toBe(2);
+  });
+
+  it('matches the user example: 100 m² of racks, 60% used → 60 used, 40 available', () => {
+    const row = rackSpaceRow({ ...rack({ lengthCm: 1000, widthCm: 1000 }), id: 'r1' }, slots({ OCCUPIED: 4, RESERVED: 2, EMPTY: 4 }));
+    expect(row.areaM2).toEqual({ occupied: 40, reserved: 20, available: 40, blockedOther: 0 });
+    expect(row.utilPct).toBe(60);
+  });
+
+  it('the 4 areas always add up exactly to the rack area (awkward fractions too)', () => {
+    const r = rackSpaceRow({ ...rack({ lengthCm: 600, widthCm: 110 }), id: 'r1' }, slots({ OCCUPIED: 13, EMPTY: 10, BLOCKED: 1 }));
+    const a = r.areaM2!;
+    expect(Math.round((a.occupied + a.reserved + a.available + a.blockedOther) * 100)).toBe(Math.round(r.rackSizeM2! * 100));
+    const s = storageSpace([r, rackSpaceRow({ ...rack({ code: 'B', lengthCm: 333, widthCm: 77 }), id: 'r2' }, slots({ OCCUPIED: 1, RESERVED: 1, QUARANTINE: 1 }))]);
+    const t = s.areaM2;
+    expect(Math.round((t.occupied + t.reserved + t.available + t.blockedOther) * 100)).toBe(Math.round(s.totalRackAreaM2 * 100));
+  });
+
+  it('blockedOther is neither used nor available', () => {
+    const r = rackSpaceRow({ ...rack({ lengthCm: 1000, widthCm: 1000 }), id: 'r1' }, slots({ BLOCKED: 5, EMPTY: 5 }));
+    expect(r.utilPct).toBe(0);
+    expect(r.areaM2).toEqual({ occupied: 0, reserved: 0, available: 50, blockedOther: 50 });
+  });
+
+  it('leaves out racks without a size or without slots and lists them', () => {
+    const noSize = rackSpaceRow({ ...rack({ code: 'NS' }), id: 'a' }, slots({ OCCUPIED: 3 }));
+    const noSlots = rackSpaceRow({ ...rack({ code: 'NO', lengthCm: 100, widthCm: 100 }), id: 'b' }, emptySlotCounts());
+    expect(noSize.areaM2).toBeNull();
+    expect(noSize.utilPct).toBeNull();
+    expect(noSlots.counted).toBe(false);
+    const s = storageSpace([noSize, noSlots]);
+    expect(s.racksCounted).toBe(0);
+    expect(s.utilPct).toBeNull();
+    expect(s.racksWithoutSizeCodes).toEqual(['NS']);
+    expect(s.racksWithoutSlotsCodes).toEqual(['NO']);
+  });
+
+  it('splitCents keeps the total exact', () => {
+    const p = splitCents(100, { occupied: 1, reserved: 1, available: 1, blockedOther: 0 });
+    expect(p.occupied + p.reserved + p.available + p.blockedOther).toBe(100);
   });
 });

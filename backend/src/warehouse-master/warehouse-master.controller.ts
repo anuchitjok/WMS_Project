@@ -36,6 +36,11 @@ export class WarehouseMasterController {
     return this.service.getSpaceSummary(user, warehouseId || undefined);
   }
 
+  @Get('space-summary/:warehouseId/racks') @ApiOperation({ summary: 'Per-rack storage space (slot share × rack area) for one warehouse (warehouse-scoped)' })
+  getRackSpace(@Param('warehouseId') warehouseId: string, @CurrentUser() user: any) {
+    return this.service.getRackSpace(user, warehouseId);
+  }
+
   @Get('space-planner') @ApiOperation({ summary: 'How many more racks of a template fit in a warehouse' })
   getSpacePlanner(@Query('warehouseId') warehouseId: string, @Query('rackTypeId') rackTypeId: string, @CurrentUser() user: any) {
     return this.service.planCapacity(user, warehouseId, rackTypeId);

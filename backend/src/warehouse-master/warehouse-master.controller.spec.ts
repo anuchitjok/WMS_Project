@@ -49,6 +49,7 @@ const MANAGER_WRITES: Array<[string, string, Record<string, unknown>]> = [
 const READS = [
   '/warehouse-master', '/warehouse-master/summary', '/warehouse-master/space-summary',
   '/warehouse-master/rack-types', '/warehouse-master/space-planner?warehouseId=w1&rackTypeId=t1',
+  '/warehouse-master/space-summary/w1/racks',
 ];
 
 describe('WarehouseMasterController (HTTP)', () => {
@@ -107,6 +108,11 @@ describe('WarehouseMasterController (HTTP)', () => {
   it('space summary passes the caller scope and warehouse filter', async () => {
     await request(app.getHttpServer()).get('/warehouse-master/space-summary?warehouseId=w1').expect(200);
     expect(service.getSpaceSummary).toHaveBeenCalledWith(expect.objectContaining({ warehouseIds: ['w1'] }), 'w1');
+  });
+
+  it('rack space drill-down passes the caller scope and warehouse id', async () => {
+    await request(app.getHttpServer()).get('/warehouse-master/space-summary/w1/racks').expect(200);
+    expect(service.getRackSpace).toHaveBeenCalledWith(expect.objectContaining({ warehouseIds: ['w1'] }), 'w1');
   });
 
   it('PATCH slots/bulk reaches bulkUpdateSlots, not updateSlot', async () => {

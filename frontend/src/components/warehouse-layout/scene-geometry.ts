@@ -45,13 +45,27 @@ export type SlotState3D = 'empty' | 'inUse' | 'full' | 'blocked';
 export const slotState3D = (s: SlotData): SlotState3D =>
   isBlocked(s) ? 'blocked' : !isOccupied(s) ? 'empty' : slotUtil(s) >= 90 ? 'full' : 'inUse';
 
-// Labels are translated in the UI (layout3d.state.<key>); `label` is the English fallback.
-export const STATE_3D: Record<SlotState3D, { label: string; color: string; swatch: string; pill: string }> = {
-  empty:   { label: 'Empty',   color: '#e2e8f0', swatch: 'bg-slate-200 border-slate-300',     pill: 'bg-slate-100 text-slate-600' },
-  inUse:   { label: 'In use',  color: '#86efac', swatch: 'bg-green-300 border-green-400',     pill: 'bg-emerald-50 text-emerald-700' },
-  full:    { label: 'Full',    color: '#16a34a', swatch: 'bg-green-600 border-green-700',     pill: 'bg-green-600 text-white' },
-  blocked: { label: 'Blocked', color: '#ef4444', swatch: 'bg-red-500 border-red-600',         pill: 'bg-red-50 text-red-700' },
+// 3D status palette (reference design): green = available, blue = in use,
+// orange = full, red = blocked. Labels are translated in the UI
+// (layout3d.w3d.status.<key>); `label` is the English fallback. The 2D tabs keep their own colours.
+export const STATE_3D: Record<SlotState3D, { label: string; color: string; swatch: string; pill: string; dot: string }> = {
+  empty:   { label: 'Available', color: '#22c55e', swatch: 'bg-green-500 border-green-600', pill: 'bg-green-50 text-green-700 ring-1 ring-green-200',  dot: 'bg-green-500' },
+  inUse:   { label: 'In use',    color: '#2563eb', swatch: 'bg-blue-600 border-blue-700',   pill: 'bg-blue-50 text-blue-700 ring-1 ring-blue-200',     dot: 'bg-blue-600' },
+  full:    { label: 'Full',      color: '#f59e0b', swatch: 'bg-amber-500 border-amber-600', pill: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',  dot: 'bg-amber-500' },
+  blocked: { label: 'Blocked',   color: '#ef4444', swatch: 'bg-red-500 border-red-600',     pill: 'bg-red-50 text-red-700 ring-1 ring-red-200',        dot: 'bg-red-500' },
 };
+export const STATE_ORDER: SlotState3D[] = ['empty', 'inUse', 'full', 'blocked'];
+
+/** Fill % filter buckets (slotUtil = stock rows ÷ capacity, same rule as Racks & slots). */
+export type FillBucket = 'zero' | 'low' | 'mid' | 'high';
+export const FILL_BUCKETS: FillBucket[] = ['zero', 'low', 'mid', 'high'];
+export function fillBucket(s: SlotData): FillBucket {
+  const u = slotUtil(s);
+  return !isOccupied(s) ? 'zero' : u < 50 ? 'low' : u < 90 ? 'mid' : 'high';
+}
+
+/** Warehouse view modes (scene environment). No walls are drawn in any mode. */
+export type EnvMode = 'open' | 'full' | 'rack';
 export const GHOST_COLOR = '#e5e7eb'; // slots outside the current filter
 
 // Real-warehouse palette (materials only, no photo textures).
@@ -109,12 +123,30 @@ export interface PlacedRack {
 }
 
 export interface ZoneArea { zone: string; minX: number; minZ: number; maxX: number; maxZ: number }
-export interface FloorRect { cx: number; cz: number; w: number; d: number }
+export interface FloorRect {
+  cx: number; cz: number; w: number; d: number;
+  /** Real warehouse size (m) from Warehouse Master; null = not measured (floor is fitted to the racks). */
+  real: { w: number; d: number } | null;
+}
+
+/**
+ * Operational area from the 2D floor plan (RECEIVING / SHIPPING / STAGING / QC /
+ * WORK / STORAGE / CUSTOM). Drawn only when at least one rack is placed from the
+ * same plan, so racks and areas share one coordinate frame.
+ */
+export type AreaType = 'RECEIVING_AREA' | 'SHIPPING_AREA' | 'STAGING_AREA' | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA';
+export const AREA_TYPES: AreaType[] = ['RECEIVING_AREA', 'SHIPPING_AREA', 'STAGING_AREA', 'QC_AREA', 'WORK_AREA', 'STORAGE_AREA', 'CUSTOM_AREA'];
+export interface AreaRect {
+  id: string; type: AreaType; name: string; code: string | null;
+  cx: number; cz: number; w: number; d: number; rotY: number;
+  minX: number; minZ: number; maxX: number; maxZ: number;
+}
 
 export interface Scene3D {
   racks: PlacedRack[];
   slots: PlacedSlot[];
   zones: ZoneArea[];
+  areas: AreaRect[];
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number; maxY: number };
   floor: FloorRect;
 }
@@ -193,9 +225,13 @@ export function floorRect(
   wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm'> | null,
   margin = FLOOR_MARGIN,
 ): FloorRect {
-  const w = Math.max(b.maxX - b.minX + margin * 2, cmToM(wh?.lengthCm) ?? 0);
-  const d = Math.max(b.maxZ - b.minZ + margin * 2, cmToM(wh?.widthCm) ?? 0);
-  return { cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2, w, d };
+  const rl = cmToM(wh?.lengthCm), rw = cmToM(wh?.widthCm);
+  const real = rl && rw ? { w: rl, d: rw } : null;
+  // The floor edge is the real warehouse size; it only grows past it when racks
+  // stick out (a data problem the Dashboard › Warehouse Space tab flags).
+  const w = Math.max(b.maxX - b.minX + (real ? 0 : margin * 2), real?.w ?? 0);
+  const d = Math.max(b.maxZ - b.minZ + (real ? 0 : margin * 2), real?.d ?? 0);
+  return { cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2, w, d, real };
 }
 
 function place(r: RackData, center: [number, number], rotY: number, zone: string): PlacedRack {
@@ -280,9 +316,32 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
   }
   if (!placed.length) { minX = -5; minZ = -5; maxX = 5; maxZ = 5; }
   const zones = [...zoneBox.values()].map((b) => ({ ...b, minX: b.minX - 1.2, minZ: b.minZ - 1.2, maxX: b.maxX + 1.2, maxZ: b.maxZ + 1.2 }));
+
+  // Operational areas from the same plan (same scale k as the linked racks).
+  const areas: AreaRect[] = [];
+  if (linked.length) {
+    for (const o of layoutObjects) {
+      if (!AREA_TYPES.includes(o.objectType as AreaType) || o.status === 'INACTIVE') continue;
+      if (!(o.width > 0 && o.height > 0)) continue;
+      const w = o.width * k, d = o.height * k;
+      const cx = (o.x + o.width / 2) * k, cz = (o.y + o.height / 2) * k;
+      const rotY = -((o.rotation || 0) * Math.PI) / 180;
+      // Axis-aligned bounds of the (possibly rotated) rectangle.
+      const c = Math.abs(Math.cos(rotY)), s = Math.abs(Math.sin(rotY));
+      const hx = (w * c + d * s) / 2, hz = (w * s + d * c) / 2;
+      areas.push({ id: o.id, type: o.objectType as AreaType, name: o.name, code: o.code, cx, cz, w, d, rotY,
+        minX: cx - hx, maxX: cx + hx, minZ: cz - hz, maxZ: cz + hz });
+    }
+  }
+  const all = { minX, minZ, maxX, maxZ };
+  for (const a of areas) {
+    all.minX = Math.min(all.minX, a.minX); all.maxX = Math.max(all.maxX, a.maxX);
+    all.minZ = Math.min(all.minZ, a.minZ); all.maxZ = Math.max(all.maxZ, a.maxZ);
+  }
+  // `bounds` = racks only (camera framing); the floor also covers the areas.
   const bounds = { minX, minZ, maxX, maxZ, maxY };
 
-  return { racks: placed, slots, zones, bounds, floor: floorRect(bounds, wh) };
+  return { racks: placed, slots, zones, areas, bounds, floor: floorRect(all, wh) };
 }
 
 /** Bounds of a subset of racks (used to frame the camera on a filter). */
@@ -396,6 +455,29 @@ export const AGE_BANDS: (Band & { maxDays: number })[] = [
   { key: 'age4', maxDays: Infinity, label: 'Over 90 days', color: '#14532d' },
 ];
 
+/** a → b by t (0…1), hex in / hex out. */
+export function mixHex(a: string, b: string, t: number): string {
+  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+}
+
+/** Status colour mode: kraft cartons take a little of the slot's status colour, so stock reads blue / orange from afar. */
+export const CARTON_TINT: Record<SlotState3D, string> = {
+  empty: mixHex('#d8c09a', STATE_3D.empty.color, 0.38),
+  inUse: mixHex('#d8c09a', STATE_3D.inUse.color, 0.38),
+  full: mixHex('#d8c09a', STATE_3D.full.color, 0.38),
+  blocked: STATE_3D.blocked.color,
+};
+
+/** Status deck: strong where stock sits, pale where the slot is free, so free space reads at a glance. */
+export const DECK_STATUS: Record<SlotState3D, string> = {
+  empty: mixHex(STATE_3D.empty.color, '#ffffff', 0.8),
+  inUse: mixHex(STATE_3D.inUse.color, '#ffffff', 0.04),
+  full: mixHex(STATE_3D.full.color, '#ffffff', 0.04),
+  blocked: mixHex(STATE_3D.blocked.color, '#ffffff', 0.55),
+};
+
 export const NO_AGE_COLOR = '#cbd5e1';   // occupied, but no age row (yet)
 export const PALLET_COLOR = COLORS.deck; // legend swatch for an empty slot (bare deck)
 
@@ -411,7 +493,7 @@ export function ageDays(oldestIso: string, asOfIso: string): number {
 export function slotColor(s: SlotData, mode: ViewMode, ageOf?: (slotId: string) => number | null): string | null {
   if (isBlocked(s)) return STATE_3D.blocked.color;
   if (!isOccupied(s)) return null;
-  if (mode === 'status') return COLORS.carton;
+  if (mode === 'status') return CARTON_TINT[slotState3D(s)];
   if (mode === 'fill') return fillBand(slotUtil(s)).color;
   const d = ageOf?.(s.id);
   return d == null ? NO_AGE_COLOR : ageBand(d).color;

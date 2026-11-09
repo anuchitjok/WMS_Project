@@ -1,35 +1,39 @@
 'use client';
 
-// Warehouse Operations — 3D view tab.
+// Warehouse Operations — 3D view tab (control-tower layout).
+//
+//   KPI cards + view mode → search & filters → 3D scene | Location Details → bottom summary
 //
 // Read-only. Every figure comes from real data through existing APIs:
 //   • warehouse tree from the page (/warehouse: racks, slots, placement counts)
-//   • rack positions from the 2D floor plan when a RACK object is linked (/warehouse-layout/:id)
+//   • rack positions + operational areas from the 2D floor plan (/warehouse-layout/:id)
 //   • slot contents from /warehouse/slots/:id/detail (same call as Racks & slots)
-//   • SKU / serial search from /inventory?search= (existing stock search)
+//   • SKU / serial search and Related from /inventory?search= (existing stock search)
 //   • stock age from /warehouse/:id/slot-stock-age (oldest receivedDate per slot)
-// Nothing here writes anything.
+//   • History from /inventory/:id/detail-full (audit log of the newest stock row)
+// KPIs use the same whMetrics() as the page's KPI strip and the Racks & slots tab.
+//
+// Split: w3d-panels.tsx (UI around the scene), w3d-overlays.tsx (UI on the scene),
+// use-w3d-data.ts (data), scene-geometry.ts (pure layout), scene-3d.tsx (WebGL).
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import {
-  Box, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Plus, Minus, RotateCcw, ScanEye, X, MapPin,
-  ExternalLink, AlertTriangle, Loader2, Package, Search, Activity, BarChart3, Clock, Crosshair, Maximize2, Minimize2,
-} from 'lucide-react';
-import { inventoryApi, layoutApi, warehouseApi, type LayoutObject, type SlotStockAge } from '@/lib/api';
-import { Button } from '@/components/ui/button';
+import { Box, AlertTriangle, Loader2, Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useRealtime } from '@/hooks/use-realtime';
-import { cn, formatDate } from '@/lib/utils';
-import { getT, useT } from '@/i18n';
-import { type WarehouseData, type RackData, type SlotData, rackMetrics, slotItems, slotUtil } from './occupancy';
+import { useT } from '@/i18n';
+import { type WarehouseData, type RackData, type SlotData, slotItems, slotUtil, whMetrics, withRate, isOccupied } from './occupancy';
 import {
-  type Scene3D, type SlotState3D, type ViewMode, type Band,
-  buildScene, rackCorners, slotState3D, slotColor, zoneOf, ageDays,
-  STATE_3D, NO_ZONE, FILL_BANDS, AGE_BANDS, NO_AGE_COLOR, PALLET_COLOR, COLORS,
+  type ViewMode, type EnvMode, type SlotState3D,
+  buildScene, slotState3D, slotColor, zoneOf, ageDays, fillBucket, NO_ZONE,
 } from './scene-geometry';
-import type { SceneApi, CameraInfo } from './scene-3d';
+import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
+import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock } from './use-w3d-data';
+import {
+  ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
+  KpiCards, WarehouseAreaCard, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
+} from './w3d-panels';
+import { CameraPresets, ViewControls, Minimap, Legend } from './w3d-overlays';
 
 const WarehouseScene3D = dynamic(() => import('./scene-3d'), {
   ssr: false,
@@ -44,13 +48,6 @@ function SceneLoading() {
     </div>
   );
 }
-
-const ALL = '__all';
-// Stock rows that no longer occupy a location (backend common/stock-presence.ts).
-const NOT_IN_LOCATION = new Set(['SHIPPED', 'CLOSED', 'CANCELLED', 'CONSUMED']);
-const pad2 = (n: number) => String(n).padStart(2, '0');
-const titleCase = (s: string) => s.replace(/_/g, ' ').toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
-const pct = (n: number, total: number) => (total ? ((n / total) * 100).toFixed(1) : '0.0');
 
 // ─── WebGL guard ───────────────────────────────────────────────────────────────
 
@@ -72,627 +69,239 @@ function NoWebGL() {
   return (
     <div className="absolute inset-0 grid place-items-center p-6 text-center">
       <div>
-        <AlertTriangle className="h-8 w-8 mx-auto text-amber-400" />
+        <AlertTriangle className="mx-auto h-8 w-8 text-amber-400" />
         <p className="mt-2 text-sm font-medium text-slate-700">{m.layout3d.view.noWebglTitle}</p>
-        <p className="text-xs text-slate-500 mt-1">{m.layout3d.view.noWebglBody}</p>
+        <p className="mt-1 text-xs text-slate-500">{m.layout3d.view.noWebglBody}</p>
       </div>
     </div>
   );
 }
 
-// ─── Minimap ───────────────────────────────────────────────────────────────────
+// ─── Selected-slot tag (inside the 3D view) ───────────────────────────────────
 
-function Minimap({ scene, active, camera, expanded, onToggle, onPick }: {
-  scene: Scene3D; active: Set<string> | null; camera: CameraInfo | null;
-  expanded: boolean; onToggle: () => void; onPick: (x: number, z: number) => void;
-}) {
-  const { m: msg } = useT();
-  const C = msg.layout3d.controls;
-  const svgRef = useRef<SVGSVGElement>(null);
-  const b = scene.bounds;
-  const m = 2.5;
-  const vb = { x: b.minX - m, y: b.minZ - m, w: b.maxX - b.minX + m * 2, h: b.maxZ - b.minZ + m * 2 };
-  const unit = Math.max(vb.w, vb.h) / 60;
-
-  function click(e: React.MouseEvent<SVGSVGElement>) {
-    const ctm = svgRef.current?.getScreenCTM();
-    if (!ctm) return;
-    const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-    onPick(p.x, p.y);
-  }
-
-  let cam: ReactNode = null;
-  if (camera) {
-    const dx = camera.x - camera.tx, dz = camera.z - camera.tz;
-    const len = Math.hypot(dx, dz) || 1;
-    const l = Math.min(len, unit * 9);
-    // A small view cone from the camera toward the look-at point.
-    const ang = Math.atan2(-dz, -dx), spread = 0.45;
-    const ox = camera.tx + (dx / len) * l, oz = camera.tz + (dz / len) * l;
-    const r = l * 1.1;
-    cam = (
-      <g pointerEvents="none">
-        <polygon points={`${ox},${oz} ${ox + Math.cos(ang - spread) * r},${oz + Math.sin(ang - spread) * r} ${ox + Math.cos(ang + spread) * r},${oz + Math.sin(ang + spread) * r}`}
-          fill="#16a34a" opacity={0.18} />
-        <circle cx={camera.tx} cy={camera.tz} r={unit * 1.3} fill="#16a34a" stroke="#fff" strokeWidth={unit * 0.5} />
-      </g>
-    );
-  }
-
-  return (
-    <div className="absolute left-3 bottom-3 z-40 rounded-xl border border-white bg-white/95 p-1.5 shadow-md ring-1 ring-slate-200">
-      <svg ref={svgRef} viewBox={`${vb.x} ${vb.y} ${vb.w} ${vb.h}`} preserveAspectRatio="xMidYMid meet"
-        className={cn('block cursor-crosshair rounded-lg bg-slate-50 transition-[width,height]', expanded ? 'h-44 w-60 sm:h-56 sm:w-80' : 'h-24 w-32 sm:h-28 sm:w-40')}
-        onClick={click} role="img" aria-label={C.minimapAria}>
-        {scene.zones.map((z) => (
-          <rect key={z.zone} x={z.minX} y={z.minZ} width={z.maxX - z.minX} height={z.maxZ - z.minZ}
-            fill="#f1f5f9" stroke="#94a3b8" strokeWidth={unit * 0.25} strokeDasharray={`${unit} ${unit * 0.7}`} />
-        ))}
-        {scene.racks.map((p) => {
-          const on = !active || active.has(p.rack.id);
-          return (
-            <polygon key={p.rack.id} points={rackCorners(p).map(([x, z]) => `${x},${z}`).join(' ')}
-              fill={!on ? '#e2e8f0' : p.kind === 'floor' ? '#fef08a' : '#bfdbfe'} stroke={!on ? '#cbd5e1' : p.kind === 'floor' ? '#ca8a04' : '#1d4ed8'} strokeWidth={unit * 0.3} />
-          );
-        })}
-        {cam}
-      </svg>
-      <button type="button" onClick={onToggle} aria-label={expanded ? C.shrinkMinimap : C.expandMinimap}
-        className="absolute bottom-2.5 right-2.5 grid h-6 w-6 place-items-center rounded-md bg-white/95 text-slate-500 shadow-sm ring-1 ring-slate-200 hover:text-emerald-700">
-        {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  );
-}
-
-// ─── Camera controls ───────────────────────────────────────────────────────────
-
-function ViewControls({ api }: { api: React.RefObject<SceneApi | null> }) {
+function SlotTag({ slot }: { slot: SlotData }) {
   const { m } = useT();
-  const C = m.layout3d.controls;
-  const STEP = Math.PI / 12;
-  const btn = 'grid place-items-center text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 transition-colors';
-  const card = 'rounded-xl border border-white bg-white/95 shadow-md ring-1 ring-slate-200';
   return (
-    <div className="absolute right-3 top-3 z-40 flex flex-col items-center gap-2">
-      <div className={cn('relative h-[76px] w-[76px] !rounded-full', card)} role="group" aria-label={C.rotateView}>
-        <button type="button" className={cn(btn, 'absolute left-1/2 top-1 h-6 w-6 -translate-x-1/2 rounded-full')} onClick={() => api.current?.rotate(0, -STEP)} aria-label={C.tiltUp} title={C.tiltUp}><ChevronUp className="h-4 w-4" /></button>
-        <button type="button" className={cn(btn, 'absolute bottom-1 left-1/2 h-6 w-6 -translate-x-1/2 rounded-full')} onClick={() => api.current?.rotate(0, STEP)} aria-label={C.tiltDown} title={C.tiltDown}><ChevronDown className="h-4 w-4" /></button>
-        <button type="button" className={cn(btn, 'absolute left-1 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full')} onClick={() => api.current?.rotate(-STEP, 0)} aria-label={C.rotateLeft} title={C.rotateLeft}><ChevronLeft className="h-4 w-4" /></button>
-        <button type="button" className={cn(btn, 'absolute right-1 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full')} onClick={() => api.current?.rotate(STEP, 0)} aria-label={C.rotateRight} title={C.rotateRight}><ChevronRight className="h-4 w-4" /></button>
-        <span className="absolute left-1/2 top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-slate-300" />
-      </div>
-      <div className={cn('flex flex-col overflow-hidden', card)}>
-        <button type="button" className={cn(btn, 'h-9 w-9')} onClick={() => api.current?.zoom(0.75)} aria-label={C.zoomIn} title={C.zoomIn}><Plus className="h-4 w-4" /></button>
-        <span className="h-px bg-slate-200" />
-        <button type="button" className={cn(btn, 'h-9 w-9')} onClick={() => api.current?.zoom(1.33)} aria-label={C.zoomOut} title={C.zoomOut}><Minus className="h-4 w-4" /></button>
-      </div>
-      <button type="button" className={cn(btn, 'h-9 w-9', card)} onClick={() => api.current?.reset()} aria-label={C.home} title={C.home}><Box className="h-4 w-4" /></button>
-      <button type="button" className={cn(btn, 'h-9 w-9', card)} onClick={() => api.current?.top()} aria-label={C.topView} title={C.topView}><ScanEye className="h-4 w-4" /></button>
-    </div>
-  );
-}
-
-// ─── Search: location code (local), SKU / serial (existing /inventory search) ──
-
-interface SearchHit { key: string; slotId: string; title: string; sub: string; kind: 'location' | 'stock' }
-
-function SlotSearch({ warehouseId, slots, onPick }: {
-  warehouseId: string;
-  slots: Map<string, { slot: SlotData; rack: RackData }>;
-  onPick: (slotId: string) => void;
-}) {
-  const { m, t } = useT();
-  const S = m.layout3d.search, V = m.layout3d.view;
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState(false);
-  const [stock, setStock] = useState<SearchHit[]>([]);
-  const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
-  const boxRef = useRef<HTMLDivElement>(null);
-  const term = q.trim();
-
-  const locations = useMemo<SearchHit[]>(() => {
-    if (!term) return [];
-    const needle = term.toLowerCase();
-    const out: SearchHit[] = [];
-    for (const { slot, rack } of slots.values()) {
-      if (slot.code.toLowerCase().includes(needle)) {
-        out.push({ key: `l:${slot.id}`, slotId: slot.id, kind: 'location', title: slot.code,
-          sub: [t(V.rackN, { rack: rack.code }), rack.zone ? t(V.zoneN, { zone: rack.zone }) : '', m.layout3d.state[slotState3D(slot)]].filter(Boolean).join(' · ') });
-        if (out.length >= 5) break;
-      }
-    }
-    return out;
-  }, [term, slots, m, t, V]);
-
-  // SKU / serial / batch / product name through the existing inventory search.
-  useEffect(() => {
-    if (term.length < 2) { setStock([]); setState('idle'); return; }
-    let cancelled = false;
-    setState('loading');
-    const t = setTimeout(() => {
-      inventoryApi.list({ search: term, warehouseId, limit: 20 })
-        .then((res) => {
-          if (cancelled) return;
-          const { m: gm, t: gt } = getT();
-          const hits: SearchHit[] = [];
-          const seen = new Set<string>();
-          for (const it of res.data ?? []) {
-            if (!it.slotId || !slots.has(it.slotId) || NOT_IN_LOCATION.has(String(it.status))) continue;
-            const key = `s:${it.id}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const loc = slots.get(it.slotId)!;
-            hits.push({ key, slotId: it.slotId, kind: 'stock',
-              title: `${it.product?.code ?? gm.layout3d.search.item}${it.serialNumber ? ` · ${it.serialNumber}` : ''}`,
-              sub: gt(gm.layout3d.search.inSlot, { slot: loc.slot.code, qty: it.quantity }) });
-            if (hits.length >= 6) break;
-          }
-          setStock(hits); setState('idle');
-        })
-        .catch(() => { if (!cancelled) { setStock([]); setState('error'); } });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [term, warehouseId, slots]);
-
-  useEffect(() => {
-    const close = (e: MouseEvent) => { if (!boxRef.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, []);
-
-  const hits = [...locations, ...stock];
-  const pick = (h: SearchHit) => { onPick(h.slotId); setOpen(false); };
-
-  return (
-    <div ref={boxRef} className="relative min-w-0 flex-1">
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-      <input
-        value={q}
-        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && hits[0]) { e.preventDefault(); pick(hits[0]); }
-          if (e.key === 'Escape') setOpen(false);
-        }}
-        placeholder={S.placeholder}
-        aria-label={S.aria}
-        className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-9 text-sm text-slate-800 shadow-sm outline-none placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
-      />
-      {q && (
-        <button type="button" onClick={() => { setQ(''); setStock([]); }} aria-label={S.clear}
-          className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
-      {open && term && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1.5 max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
-          {hits.map((h) => (
-            <button key={h.key} type="button" onClick={() => pick(h)}
-              className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-emerald-50">
-              {h.kind === 'location'
-                ? <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
-                : <Package className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />}
-              <span className="min-w-0">
-                <span className="block truncate font-mono text-sm font-semibold text-slate-800">{h.title}</span>
-                <span className="block truncate text-xs text-slate-500">{h.sub}</span>
-              </span>
-            </button>
-          ))}
-          {state === 'loading' && (
-            <p className="flex items-center gap-2 px-2.5 py-2 text-xs text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {S.searching}</p>
-          )}
-          {state === 'error' && <p className="px-2.5 py-2 text-xs text-red-600">{S.error}</p>}
-          {state === 'idle' && hits.length === 0 && (
-            <p className="px-2.5 py-2 text-xs text-slate-500">{t(S.noMatch, { term })}</p>
-          )}
-          {term.length === 1 && <p className="px-2.5 pb-1 text-xs text-slate-400">{S.typeMore}</p>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── View mode switch + legend ────────────────────────────────────────────────
-
-const MODES: { id: ViewMode; icon: React.ElementType }[] = [
-  { id: 'status', icon: Activity },
-  { id: 'fill', icon: BarChart3 },
-  { id: 'age', icon: Clock },
-];
-
-function ModeSwitch({ mode, onChange }: { mode: ViewMode; onChange: (m: ViewMode) => void }) {
-  const { m: msg } = useT();
-  return (
-    <div className="inline-flex flex-shrink-0 rounded-xl border border-slate-200 bg-white p-1 shadow-sm" role="radiogroup" aria-label={msg.layout3d.modes.aria}>
-      {MODES.map((m) => (
-        <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} onClick={() => onChange(m.id)}
-          className={cn('flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm transition-colors',
-            mode === m.id ? 'bg-emerald-700 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-50')}>
-          <m.icon className="h-4 w-4" /> {msg.layout3d.modes[m.id]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Swatch({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-slate-600">
-      <span className="h-3 w-3 flex-shrink-0 rounded-[3px] ring-1 ring-black/10" style={{ background: color }} />{label}
-    </span>
-  );
-}
-
-function ModeLegend({ mode, ageState, onRetryAge, hasFloor }: { mode: ViewMode; ageState: AgeState['state']; onRetryAge: () => void; hasFloor: boolean }) {
-  const { m } = useT();
-  const L = m.layout3d.legend;
-  const B = m.layout3d.bands as Record<string, string>;
-  const box = 'absolute bottom-3 right-3 z-40 max-w-[calc(100%-12rem)] rounded-xl border border-white bg-white/95 px-3 py-2 shadow-md ring-1 ring-slate-200';
-  if (mode === 'status') {
-    return (
-      <div className={box}>
-        <p className="mb-1 text-xs font-medium text-slate-500">{L.statusTitle}</p>
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          <Swatch color={COLORS.carton} label={L.cartons} />
-          <Swatch color={PALLET_COLOR} label={L.emptyShelf} />
-          <Swatch color={STATE_3D.blocked.color} label={L.blocked} />
-          {hasFloor && <Swatch color={COLORS.line} label={L.palletArea} />}
-        </div>
-      </div>
-    );
-  }
-  const bands: Band[] = mode === 'fill' ? FILL_BANDS : [...AGE_BANDS, { key: 'noDate', label: L.noDate, color: NO_AGE_COLOR }];
-  return (
-    <div className={box}>
-      <p className="mb-1 text-xs font-medium text-slate-500">{mode === 'fill' ? L.fillTitle : L.ageTitle}</p>
-      {mode === 'age' && ageState === 'loading' ? (
-        <p className="flex items-center gap-1.5 text-xs text-slate-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {L.loadingAge}</p>
-      ) : mode === 'age' && ageState === 'error' ? (
-        <p className="flex items-center gap-2 text-xs text-red-600">{L.ageError}
-          <button type="button" onClick={onRetryAge} className="pointer-events-auto font-medium underline">{L.retry}</button></p>
-      ) : (
-        <div className="flex flex-wrap gap-x-3 gap-y-1">
-          {[{ key: 'empty', label: L.empty, color: PALLET_COLOR }, ...bands, { key: 'blocked', label: m.layout3d.state.blocked, color: STATE_3D.blocked.color }].map((b) => (
-            <Swatch key={b.key} color={b.color} label={B[b.key] ?? b.label} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Selected-slot tooltip (inside the 3D view) ───────────────────────────────
-
-function SlotTooltip({ slot, detail, loading }: { slot: SlotData; detail: any; loading: boolean }) {
-  const { m, t } = useT();
-  const D = m.layout3d.details;
-  const items: any[] = detail?.stockItems ?? [];
-  const qty = items.reduce((a, it) => a + (it.quantity ?? 0), 0);
-  const util = slotUtil(slot);
-  return (
-    <div className="w-44 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-slate-200">
-      <div className="bg-emerald-700 px-3 py-1.5 font-mono text-sm font-semibold text-white">{slot.code}</div>
-      <div className="px-3 py-2">
-        <p className="truncate font-mono text-sm font-medium text-slate-800">
-          {loading ? '…' : items[0]?.product?.code ?? (slotItems(slot) ? '—' : D.empty)}
-          {items.length > 1 && <span className="ml-1 font-sans text-xs text-slate-400">+{items.length - 1}</span>}
-        </p>
-        <p className="text-xs text-slate-500">{t(D.qtyN, { qty: loading ? '…' : qty.toLocaleString() })}</p>
-        <div className="mt-1.5 flex items-center gap-2">
-          <div className="h-1.5 flex-1 rounded-full bg-slate-200"><div className="h-1.5 rounded-full bg-emerald-600" style={{ width: `${util}%` }} /></div>
-          <span className="text-xs font-medium tabular-nums text-slate-700">{util}%</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Slot details panel ────────────────────────────────────────────────────────
-
-function DRow({ k, v }: { k: string; v: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[7.5rem_1fr] gap-2 text-sm">
-      <dt className="text-slate-500">{k}</dt>
-      <dd className="font-medium text-slate-800 break-words">{v}</dd>
-    </div>
-  );
-}
-
-function SlotDetails({ wh, rack, slot, detail, detailState, age, onRetry, onClose, onFly, onViewStock }: {
-  wh: WarehouseData; rack: RackData | null; slot: SlotData | null;
-  detail: any; detailState: 'idle' | 'loading' | 'error';
-  age: { days: number; oldest: string } | null;
-  onRetry: () => void; onClose: () => void; onFly: () => void; onViewStock: (slotId: string) => void;
-}) {
-  const { m, t } = useT();
-  const D = m.layout3d.details;
-  if (!slot) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-        <MapPin className="h-7 w-7 mx-auto text-slate-300" />
-        <p className="mt-2 text-sm font-medium text-slate-700">{D.title}</p>
-        <p className="text-xs text-slate-500">{D.emptyHint}</p>
-      </div>
-    );
-  }
-
-  const st: SlotState3D = slotState3D(slot);
-  const items: any[] = detail?.stockItems ?? [];
-  const loading = detailState === 'loading' && !detail;
-  const qty = items.reduce((a, it) => a + (it.quantity ?? 0), 0);
-  const first = items[0];
-  const lastMove = first?.updatedAt ?? slot.updatedAt;
-  const rows = slotItems(slot);
-  const util = slotUtil(slot);
-  const dash = loading ? '…' : '—';
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
-        <h2 className="text-base font-semibold text-slate-900">{D.title}</h2>
-        <button type="button" onClick={onClose} className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600" aria-label={D.close}>
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="flex items-center justify-between gap-2 px-4 pt-3">
-        <p className="truncate font-mono text-lg font-semibold text-slate-900">{slot.code}</p>
-        <span className={cn('flex-shrink-0 rounded-full px-2.5 py-1 text-xs font-medium', STATE_3D[st].pill)}>{m.layout3d.state[st]}</span>
-      </div>
-
-      <dl className="space-y-2 px-4 py-3">
-        <DRow k={D.warehouse} v={wh.name} />
-        <DRow k={D.zone} v={rack?.zone || '—'} />
-        <DRow k={D.rack} v={rack?.code ?? '—'} />
-        <DRow k={D.level} v={pad2(slot.level)} />
-        <DRow k={D.column} v={pad2(slot.column)} />
-      </dl>
-
-      <dl className="mx-4 space-y-2 border-t border-slate-100 py-3">
-        {detailState === 'error' ? (
-          <div className="flex items-center justify-between gap-2 text-xs text-red-600">
-            {D.loadError}
-            <Button size="sm" variant="outline" className="h-7 bg-white text-xs" onClick={onRetry}>{D.retry}</Button>
-          </div>
-        ) : (
-          <>
-            <DRow k={D.itemCode} v={first ? <span className="font-mono">{first.product?.code ?? '—'}{items.length > 1 && <span className="ml-1 font-sans text-xs text-slate-400">{t(D.more, { n: items.length - 1 })}</span>}</span> : dash} />
-            <DRow k={D.serial} v={first?.serialNumber ? <span className="font-mono">{first.serialNumber}</span> : dash} />
-            <DRow k={D.qty} v={loading ? '…' : `${qty.toLocaleString()}${rows > items.length && !loading ? '+' : ''}`} />
-            <DRow k={D.locationType} v={titleCase(slot.slotType)} />
-            <DRow k={D.lastMove} v={lastMove ? formatDate(lastMove) : '—'} />
-            {age && <DRow k={D.stockAge} v={t(D.ageValue, { days: age.days, date: formatDate(age.oldest) })} />}
-          </>
-        )}
-      </dl>
-
-      <div className="mx-4 border-t border-slate-100 py-3">
-        <div className="flex items-baseline justify-between">
-          <p className="text-sm font-semibold text-slate-900">{D.utilization}</p>
-          <p className="text-sm font-semibold tabular-nums text-slate-900">{util}%</p>
-        </div>
-        <div className="mt-2 h-2 rounded-full bg-slate-200"><div className="h-2 rounded-full bg-emerald-600 transition-[width]" style={{ width: `${util}%` }} /></div>
-        <p className="mt-1 text-xs text-slate-400">{t(D.capacityLine, { rows, capacity: slot.capacity })}</p>
-        <Button className="mt-3 h-10 w-full gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={onFly}>
-          <Crosshair className="h-4 w-4" /> {D.flyTo}
-        </Button>
-      </div>
-
-      {items.length > 0 && (
-        <div className="mx-4 border-t border-slate-100 py-3">
-          <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-            <Package className="h-4 w-4 text-emerald-600" /> {D.stockInSlot}
-            {rows > items.length && <span className="text-xs font-normal text-slate-400">{t(D.latestOf, { n: items.length, total: rows })}</span>}
-          </p>
-          <ul className="max-h-44 space-y-1.5 overflow-y-auto">
-            {items.map((it) => (
-              <li key={it.id} className="rounded-lg border border-slate-100 px-2.5 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-500" />
-                    <span className="truncate font-mono text-xs font-semibold text-slate-800">{it.product?.code}</span>
-                  </span>
-                  <span className="flex-shrink-0 text-xs tabular-nums text-slate-600">{it.quantity} {it.product?.unit ?? D.pcs}</span>
-                </div>
-                {it.serialNumber && <p className="mt-0.5 truncate pl-3 font-mono text-xs text-slate-500">{it.serialNumber}</p>}
-                {it.updatedAt && <p className="pl-3 text-xs text-slate-400">{t(D.lastUpdate, { date: formatDate(it.updatedAt) })}</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      <div className="px-4 pb-4 pt-1">
-        <Button variant="outline" className="h-10 w-full gap-2 border-emerald-600 bg-white text-emerald-700 hover:bg-emerald-50" onClick={() => onViewStock(slot.id)}>
-          <ExternalLink className="h-4 w-4" /> {D.viewStock}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Bottom summary ────────────────────────────────────────────────────────────
-
-function StatusSummary({ racks, filtered }: { racks: RackData[]; filtered: boolean }) {
-  const { m } = useT();
-  const U = m.layout3d.summary;
-  const counts: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, blocked: 0 };
-  let total = 0, used = 0, available = 0;
-  for (const r of racks) {
-    for (const s of r.slots ?? []) counts[slotState3D(s)]++;
-    const m = rackMetrics(r);
-    total += m.total; used += m.occupied; available += m.available;
-  }
-  const order: [SlotState3D, string][] = [['empty', U.available], ['inUse', U.inUse], ['full', U.full], ['blocked', U.blocked]];
-
-  return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <p className="text-sm font-semibold text-slate-900">{U.slotStatus}{filtered && <span className="ml-1.5 text-xs font-normal text-slate-400">{U.inFilter}</span>}</p>
-        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4 sm:divide-x divide-slate-100">
-          {order.map(([k, label], i) => (
-            <div key={k} className={cn('flex items-start gap-2.5', i > 0 && 'sm:pl-3')}>
-              <span className={cn('mt-0.5 h-4 w-4 flex-shrink-0 rounded border', k === 'empty' ? 'border-slate-300 bg-slate-300' : STATE_3D[k].swatch)} />
-              <div>
-                <p className="text-xs text-slate-500">{label}</p>
-                <p className="text-lg font-semibold tabular-nums text-slate-900">{counts[k].toLocaleString()}</p>
-                <p className="text-xs tabular-nums text-slate-400">({pct(counts[k], total)}%)</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <span className="hidden h-12 w-12 flex-shrink-0 place-items-center rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100 sm:grid"><Box className="h-6 w-6" /></span>
-        <div className="grid flex-1 grid-cols-3 gap-3">
-          <div><p className="text-xs text-slate-500">{U.totalSlots}</p><p className="text-lg font-semibold tabular-nums text-slate-900">{total.toLocaleString()}</p></div>
-          <div><p className="text-xs text-slate-500">{U.used}</p><p className="text-lg font-semibold tabular-nums text-slate-900">{used.toLocaleString()} <span className="text-xs font-normal text-slate-400">({pct(used, total)}%)</span></p></div>
-          <div><p className="text-xs text-slate-500">{U.available}</p><p className="text-lg font-semibold tabular-nums text-slate-900">{available.toLocaleString()} <span className="text-xs font-normal text-slate-400">({pct(available, total)}%)</span></p></div>
-        </div>
-      </div>
+    <div className="whitespace-nowrap rounded-lg bg-blue-600 px-3 py-1.5 text-center text-white shadow-lg shadow-blue-600/30">
+      <p className="font-mono text-sm font-semibold leading-tight">{slot.code}</p>
+      <p className="text-[11px] leading-tight text-blue-100">{m.layout3d.w3d.status[slotState3D(slot)]} · {slotUtil(slot)}%</p>
     </div>
   );
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
-interface AgeState { state: 'idle' | 'loading' | 'error' | 'ready'; data: SlotStockAge | null }
-
-export function Warehouse3D({ wh, loading, onReload, onViewStock }: {
+export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onReload, onViewStock }: {
+  warehouses: WarehouseData[];
   wh: WarehouseData | null;
+  onSelectWarehouse: (id: string) => void;
   loading: boolean;
   onReload: () => void | Promise<void>;
   onViewStock: (slotId: string) => void;
 }) {
   const { m, t } = useT();
-  const V = m.layout3d.view;
+  const V = m.layout3d.view, W = m.layout3d.w3d;
   const warehouseId = wh?.id ?? '';
-  const [objects, setObjects] = useState<LayoutObject[] | null>(null);
-  const [zone, setZone] = useState(ALL);
-  const [rackId, setRackId] = useState(ALL);
-  const [mode, setMode] = useState<ViewMode>('status');
+  const objects = useLayoutObjects(warehouseId);
+  const age = useStockAge(warehouseId);
+
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [colorMode, setColorMode] = useState<ViewMode>('status');
+  const [envMode, setEnvMode] = useState<EnvMode>('open');
+  const [roof, setRoof] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [tab, setTab] = useState<DetailTab>('stock');
   const [camera, setCamera] = useState<CameraInfo | null>(null);
+  const [preset, setPreset] = useState<CameraPreset | null>('iso');
   const [miniOpen, setMiniOpen] = useState(false);
   const [gl, setGl] = useState<boolean | null>(null);
-  const [age, setAge] = useState<AgeState>({ state: 'idle', data: null });
-  const [detail, setDetail] = useState<any>(null);
-  const [detailState, setDetailState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [fullscreen, setFullscreen] = useState(false);
+  const [hideBoxes, setHideBoxes] = useState(false);
   const api = useRef<SceneApi | null>(null);
-  const detailReq = useRef(0);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [stageW, setStageW] = useState(0);
+  const [barH, setBarH] = useState(0);
+  // Wide stage: the filter bar floats over the top of the 3D scene (one-screen layout).
+  const barInScene = stageW > 760;
+
 
   useEffect(() => { setGl(webglAvailable()); }, []);
-
-  // Rack positions from the 2D plan, if one exists; any failure falls back to the automatic arrangement.
   useEffect(() => {
-    if (!warehouseId) return;
-    let cancelled = false;
-    setObjects(null);
-    layoutApi.get(warehouseId)
-      .then((r) => { if (!cancelled) setObjects(r.objects ?? []); })
-      .catch(() => { if (!cancelled) setObjects([]); });
-    return () => { cancelled = true; };
-  }, [warehouseId]);
+    const on = () => setFullscreen(document.fullscreenElement === stageRef.current && !!stageRef.current);
+    document.addEventListener('fullscreenchange', on);
+    return () => document.removeEventListener('fullscreenchange', on);
+  }, []);
 
-  const loadAge = useCallback(() => {
-    if (!warehouseId) return;
-    setAge((a) => ({ state: 'loading', data: a.data }));
-    warehouseApi.slotStockAge(warehouseId)
-      .then((d) => setAge({ state: 'ready', data: d }))
-      .catch(() => setAge((a) => ({ state: 'error', data: a.data })));
-  }, [warehouseId]);
-
-  // Stock age is fetched only when that mode is first opened.
-  useEffect(() => { if (mode === 'age' && age.state === 'idle') loadAge(); }, [mode, age.state, loadAge]);
-
-  // Same live signals as the Floor plan tab: re-read the tree (and ages if shown).
+  // Same live signals as the Floor plan tab: re-read the tree and stock ages.
   useRealtime(['inventory:update', 'request:update'], () => {
     void onReload();
-    if (mode === 'age') loadAge();
+    age.reload();
   }, { enabled: !!warehouseId });
 
   const scene = useMemo(() => buildScene(wh, objects ?? []), [wh, objects]);
+
+  // Track the stage width whenever the stage mounts (it appears once loading is over and there are racks).
+  const stageObs = useRef<ResizeObserver | null>(null);
+  const [stageEl, setStageEl] = useState<HTMLDivElement | null>(null);
+  const stageCallbackRef = useCallback((el: HTMLDivElement | null) => {
+    stageRef.current = el;
+    setStageEl(el);
+    stageObs.current?.disconnect();
+    stageObs.current = null;
+    if (!el) return;
+    setStageW(el.clientWidth);
+    if (typeof ResizeObserver !== 'undefined') {
+      stageObs.current = new ResizeObserver(() => setStageW(el.clientWidth));
+      stageObs.current.observe(el);
+    }
+  }, []);
+  // Measure the floating bar whenever it mounts (it appears only once WebGL is confirmed).
+  const barObs = useRef<ResizeObserver | null>(null);
+  const barRef = useCallback((el: HTMLDivElement | null) => {
+    barObs.current?.disconnect();
+    barObs.current = null;
+    if (!el) { setBarH(0); return; }
+    setBarH(el.offsetHeight);
+    if (typeof ResizeObserver !== 'undefined') {
+      barObs.current = new ResizeObserver(() => setBarH(el.offsetHeight));
+      barObs.current.observe(el);
+    }
+  }, []);
   const fromPlan = useMemo(() => {
     const ids = new Set((objects ?? []).filter((o) => o.objectType === 'RACK' && o.rackId).map((o) => o.rackId));
     return scene.racks.filter((p) => ids.has(p.rack.id)).length;
   }, [objects, scene]);
 
   const ageMap = useMemo(() => {
-    const m = new Map<string, { days: number; oldest: string }>();
+    const out = new Map<string, { days: number; oldest: string }>();
     const d = age.data;
-    if (d) for (const s of d.slots) m.set(s.slotId, { days: ageDays(s.oldestReceivedDate, d.asOf), oldest: s.oldestReceivedDate });
-    return m;
+    if (d) for (const s of d.slots) out.set(s.slotId, { days: ageDays(s.oldestReceivedDate, d.asOf), oldest: s.oldestReceivedDate });
+    return out;
   }, [age.data]);
 
   const colors = useMemo(() => {
     const ageOf = (id: string) => ageMap.get(id)?.days ?? null;
-    return scene.slots.map((s) => slotColor(s.slot, mode, ageOf));
-  }, [scene, mode, ageMap]);
+    return scene.slots.map((s) => slotColor(s.slot, colorMode, ageOf));
+  }, [scene, colorMode, ageMap]);
 
+  // ── Filters ──
   const allRacks = useMemo(() => scene.racks.map((p) => p.rack), [scene]);
   const zones = useMemo(() => [...new Set(allRacks.map(zoneOf))].sort((a, b) => (a === NO_ZONE ? 1 : b === NO_ZONE ? -1 : a.localeCompare(b, undefined, { numeric: true }))), [allRacks]);
-  const zoneRacks = useMemo(() => allRacks.filter((r) => zone === ALL || zoneOf(r) === zone)
-    .slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [allRacks, zone]);
-  const filteredRacks = useMemo(() => (rackId === ALL ? zoneRacks : zoneRacks.filter((r) => r.id === rackId)), [zoneRacks, rackId]);
-  const filtered = zone !== ALL || rackId !== ALL;
-  const active = useMemo(() => (filtered ? new Set(filteredRacks.map((r) => r.id)) : null), [filtered, filteredRacks]);
+  const zoneRacks = useMemo(() => allRacks.filter((r) => filters.zone === ALL || zoneOf(r) === filters.zone)
+    .slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [allRacks, filters.zone]);
+
+  const filtered = filters.zone !== ALL || filters.rackId !== ALL || filters.status !== ALL || filters.fill !== ALL;
+  const matches = useCallback((s: SlotData, r: RackData) => (
+    (filters.zone === ALL || zoneOf(r) === filters.zone)
+    && (filters.rackId === ALL || r.id === filters.rackId)
+    && (filters.status === ALL || slotState3D(s) === filters.status)
+    && (filters.fill === ALL || fillBucket(s) === filters.fill)
+  ), [filters]);
+
+  // Per scene slot: in the filter or not (null = no filter).
+  const slotOn = useMemo(() => (filtered ? scene.slots.map((s) => matches(s.slot, s.rack)) : null), [filtered, scene, matches]);
+  // Racks that keep at least one slot in the filter (frame the camera on them).
+  const active = useMemo(() => {
+    if (!slotOn) return null;
+    const set = new Set<string>();
+    scene.slots.forEach((s, i) => { if (slotOn[i]) set.add(s.rack.id); });
+    // A rack with no slots yet still shows when it is picked by zone/rack.
+    for (const r of zoneRacks) if (!(r.slots ?? []).length && (filters.rackId === ALL || r.id === filters.rackId) && filters.status === ALL && filters.fill === ALL) set.add(r.id);
+    return set;
+  }, [slotOn, scene, zoneRacks, filters]);
+
+  const counts = useMemo(() => {
+    const c: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, blocked: 0 };
+    scene.slots.forEach((s, i) => { if (!slotOn || slotOn[i]) c[s.state]++; });
+    return c;
+  }, [scene, slotOn]);
+  const inFilter = counts.empty + counts.inUse + counts.full + counts.blocked;
 
   const slotIndex = useMemo(() => {
-    const m = new Map<string, { slot: SlotData; rack: RackData }>();
-    for (const r of allRacks) for (const s of r.slots ?? []) m.set(s.id, { slot: s, rack: r });
-    return m;
-  }, [allRacks]);
+    const out = new Map<string, { slot: SlotData; rack: RackData; i: number }>();
+    scene.slots.forEach((s, i) => out.set(s.slot.id, { slot: s.slot, rack: s.rack, i }));
+    return out;
+  }, [scene]);
   const selected = selectedSlotId ? slotIndex.get(selectedSlotId) ?? null : null;
+  const isOn = useCallback((slotId: string) => {
+    const s = slotIndex.get(slotId);
+    return !!s && (!slotOn || slotOn[s.i]);
+  }, [slotIndex, slotOn]);
 
   // A slot outside the filter (or deleted by a refresh) is no longer selectable.
+  // When a rack / zone is in focus, move the selection to the first slot with
+  // stock inside it instead (none → clear), so the details panel follows the focus.
   useEffect(() => {
-    if (!selectedSlotId) return;
-    const s = slotIndex.get(selectedSlotId);
-    if (!s || (active && !active.has(s.rack.id))) setSelectedSlotId(null);
-  }, [selectedSlotId, slotIndex, active]);
+    if (!selectedSlotId || isOn(selectedSlotId)) return;
+    const focus = filters.rackId !== ALL || filters.zone !== ALL;
+    const next = focus && slotOn ? scene.slots.find((s, i) => slotOn[i] && isOccupied(s.slot)) : undefined;
+    setSelectedSlotId(next ? next.slot.id : null);
+  }, [selectedSlotId, isOn, filters.rackId, filters.zone, slotOn, scene]);
 
-  // Slot contents, shared by the tooltip and the details panel. Re-read when
-  // the slot's placement count changes after a realtime refresh.
+  // ── Selected slot data ──
   const stamp = selected ? `${slotItems(selected.slot)}|${selected.slot.updatedAt ?? ''}` : '';
-  const loadDetail = useCallback(() => {
-    if (!selectedSlotId) { setDetail(null); setDetailState('idle'); return; }
-    const n = ++detailReq.current;
-    setDetail(null);
-    setDetailState('loading');
-    warehouseApi.getSlotDetail(selectedSlotId)
-      .then((d) => { if (n === detailReq.current) { setDetail(d); setDetailState('idle'); } })
-      .catch(() => { if (n === detailReq.current) { setDetail(null); setDetailState('error'); } });
-  }, [selectedSlotId]);
-  useEffect(() => { loadDetail(); }, [loadDetail, stamp]);
+  const slotDetail = useSlotDetail(selectedSlotId, stamp);
+  const summary = selected ? summarizeSlot(selected.slot, slotDetail.detail) : null;
+  const history = useStockHistory(summary?.first?.id ?? null, tab === 'history');
+  const related = useRelatedStock(warehouseId, summary?.skus[0] ?? null, selectedSlotId, tab === 'related',
+    (id) => slotIndex.has(id));
 
   const selectRack = useCallback((id: string) => {
     const r = allRacks.find((x) => x.id === id);
     if (!r) return;
-    if (zone !== ALL && zoneOf(r) !== zone) setZone(zoneOf(r));
-    setRackId(id);
-  }, [allRacks, zone]);
+    setFilters((f) => ({ ...f, zone: f.zone !== ALL && zoneOf(r) !== f.zone ? zoneOf(r) : f.zone, rackId: id }));
+    setPreset(null);
+  }, [allRacks]);
+  // Clicking a slot in the scene selects it and focuses its rack: the other racks fade out.
+  const selectSlot = useCallback((slotId: string) => {
+    setSelectedSlotId(slotId);
+    const hit = slotIndex.get(slotId);
+    if (hit && filters.rackId !== hit.rack.id) selectRack(hit.rack.id);
+  }, [slotIndex, filters.rackId, selectRack]);
+  // Zone name on the floor: focus every rack in the zone (same as picking it in the Zone filter).
+  const selectZone = useCallback((zone: string) => {
+    setFilters((f) => ({ ...f, zone, rackId: ALL }));
+    setPreset(null);
+  }, []);
 
-  // Search hit / Fly to Slot: make sure the slot is in view, select it, glide in.
+  // Search hit / Related / Focus: make sure the slot is in view, select it, glide in.
   const goToSlot = useCallback((slotId: string) => {
     const hit = slotIndex.get(slotId);
     if (!hit) return;
-    if (active && !active.has(hit.rack.id)) { setZone(ALL); setRackId(ALL); }
+    if (!isOn(slotId)) setFilters(NO_FILTERS);
     setSelectedSlotId(slotId);
+    setPreset(null);
     // After any filter change has re-framed the camera.
     setTimeout(() => api.current?.flyTo(slotId), 80);
-  }, [slotIndex, active]);
+  }, [slotIndex, isOn]);
 
-  const resetView = () => { setZone(ALL); setRackId(ALL); api.current?.reset(); };
+  const pickPreset = (p: CameraPreset) => { setPreset(p); api.current?.preset(p); };
+  // ⟲ in the scene: back to the start view and out of any rack / zone focus (other filters stay).
+  const resetView = () => {
+    setFilters((f) => ({ ...f, zone: ALL, rackId: ALL }));
+    setPreset('iso');
+    // After the focus change has re-framed the camera, so the start view wins.
+    setTimeout(() => api.current?.reset(), 80);
+  };
+  const resetAll = () => { setFilters(NO_FILTERS); setPreset('iso'); api.current?.reset(); };
+  const toggleFullscreen = () => {
+    const el = stageRef.current;
+    if (!el) return;
+    const p = document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen?.();
+    Promise.resolve(p).catch(() => {});
+  };
 
-  const zoneLabel = (v: string) => (v === ALL ? V.allZones : v === NO_ZONE ? V.noZone : t(V.zoneN, { zone: v }));
-  const rackLabel = (v: string) => (v === ALL ? V.allRacks : allRacks.find((r) => r.id === v)?.code ?? v);
-  const hasFloor = scene.racks.some((p) => p.kind === 'floor');
+  const metrics = useMemo(() => withRate(wh ? whMetrics(wh) : { total: 0, occupied: 0, available: 0, blocked: 0, items: 0, utilPct: 0 }), [wh]);
+  const selPos = selected ? scene.slots[selected.i].pos : null;
 
   if (loading || (wh && objects === null)) {
     return (
-      <div className="space-y-4">
-        <Skeleton className="h-10 w-full max-w-xl rounded-lg" />
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_21rem]">
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_14rem]">
+          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}
+        </div>
+        <Skeleton className="h-12 w-full rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <Skeleton className="h-[600px] rounded-2xl" />
           <Skeleton className="h-96 rounded-2xl" />
         </div>
@@ -702,102 +311,126 @@ export function Warehouse3D({ wh, loading, onReload, onViewStock }: {
 
   if (!wh) return null;
 
+  const header = (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-[repeat(5,minmax(0,1fr))_14rem]">
+      <KpiCards metrics={metrics} />
+      <div className="col-span-2 lg:col-span-1"><WarehouseAreaCard wh={wh} /></div>
+      <div className="col-span-2 lg:col-span-5 xl:col-span-1"><ViewModeCard mode={envMode} onChange={setEnvMode} /></div>
+    </div>
+  );
+
+  const filterBar = (
+    <FilterBar warehouses={warehouses} wh={wh} onWarehouse={onSelectWarehouse}
+      slots={slotIndex} zones={zones} zoneRacks={zoneRacks}
+      filters={filters} onFilters={setFilters} onPickSlot={goToSlot} onReset={resetAll} />
+  );
+  // Overlays at the top of the stage start below the floating bar; the camera keeps that band free too.
+  const overlayTop = barInScene ? barH + 20 : 12;
+  const topInset = overlayTop + 44; // the camera preset buttons always float at the top
+
   if (!scene.racks.length) {
     return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
-        <Box className="h-10 w-10 mx-auto text-slate-300" />
-        <p className="mt-2 text-sm font-medium text-slate-600">{t(V.noRacks, { name: wh.name })}</p>
-        <p className="text-xs text-slate-400 mt-1">{V.noRacksHint}</p>
+      <div className="space-y-3">
+        {header}
+        <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+          <Box className="mx-auto h-10 w-10 text-slate-300" />
+          <p className="mt-2 text-sm font-medium text-slate-600">{t(V.noRacks, { name: wh.name })}</p>
+          <p className="mt-1 text-xs text-slate-400">{V.noRacksHint}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-slate-600">{V.zone}</p>
-          <Select value={zone} onValueChange={(v) => { setZone((v as string) ?? ALL); setRackId(ALL); }}>
-            <SelectTrigger className="h-9 w-44 bg-white"><SelectValue>{(v: string) => zoneLabel(v)}</SelectValue></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>{V.allZones}</SelectItem>
-              {zones.map((z) => <SelectItem key={z} value={z}>{zoneLabel(z)}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <p className="text-xs font-medium text-slate-600">{V.rack}</p>
-          <Select value={rackId} onValueChange={(v) => setRackId((v as string) ?? ALL)}>
-            <SelectTrigger className="h-9 w-44 bg-white"><SelectValue>{(v: string) => rackLabel(v)}</SelectValue></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>{V.allRacks}</SelectItem>
-              {zoneRacks.map((r) => <SelectItem key={r.id} value={r.id}>{r.code}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <p className="text-xs text-slate-400 sm:ml-2 sm:pb-2">
-          {fromPlan === scene.racks.length
-            ? V.posAllPlan
-            : fromPlan > 0
-              ? t(V.posSome, { n: fromPlan, total: scene.racks.length })
-              : V.posNone}
-        </p>
-        <Button variant="outline" size="sm" className="ml-auto h-9 gap-1.5 bg-white" onClick={resetView}>
-          <RotateCcw className="h-4 w-4" /> {V.resetView}
-        </Button>
-      </div>
+    <div className="space-y-3">
+      {header}
 
-      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="space-y-3">
-          {/* Search + view mode */}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <SlotSearch warehouseId={warehouseId} slots={slotIndex} onPick={goToSlot} />
-            <ModeSwitch mode={mode} onChange={setMode} />
-          </div>
+      {!barInScene && filterBar}
 
-          {/* 3D canvas */}
-          <div className="relative h-[460px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-sm sm:h-[600px] xl:h-[640px]">
-            {gl === false ? <NoWebGL /> : gl === null ? null : (
-              <SceneBoundary>
-                <WarehouseScene3D
-                  scene={scene}
-                  active={active}
-                  colors={colors}
-                  selectedSlotId={selectedSlotId}
-                  onSelectSlot={setSelectedSlotId}
-                  onSelectRack={selectRack}
-                  apiRef={api}
-                  onCamera={setCamera}
-                  tooltip={selected ? <SlotTooltip slot={selected.slot} detail={detail} loading={detailState === 'loading'} /> : null}
-                />
-                <ViewControls api={api} />
-                <Minimap scene={scene} active={active} camera={camera} expanded={miniOpen}
-                  onToggle={() => setMiniOpen((v) => !v)} onPick={(x, z) => api.current?.focus(x, z)} />
-                <ModeLegend mode={mode} ageState={age.state} onRetryAge={loadAge} hasFloor={hasFloor} />
-              </SceneBoundary>
-            )}
-          </div>
+      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <div ref={stageCallbackRef}
+          className="relative h-[460px] overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 shadow-sm sm:h-[600px] xl:h-[max(540px,calc(100vh-400px))] [&:fullscreen]:h-screen [&:fullscreen]:rounded-none">
+          {gl === false ? <NoWebGL /> : gl === null ? null : (
+            <SceneBoundary>
+              <WarehouseScene3D
+                scene={scene}
+                active={active}
+                slotOn={slotOn}
+                colors={colors}
+                colorMode={colorMode}
+                envMode={envMode}
+                roof={roof}
+                hideBoxes={colorMode === 'status' && hideBoxes}
+                topInset={topInset}
+                selectedSlotId={selectedSlotId}
+                onSelectSlot={selectSlot}
+                onSelectRack={selectRack}
+                onSelectZone={selectZone}
+                apiRef={api}
+                onCamera={setCamera}
+                onUserCamera={() => setPreset(null)}
+                tooltip={selected ? <SlotTag slot={selected.slot} /> : null}
+              />
+              {barInScene && (
+                <div ref={barRef} className="absolute inset-x-3 top-3 z-50 rounded-2xl bg-white/70 p-1.5 shadow-md ring-1 ring-slate-200 backdrop-blur-sm">
+                  <PopupContainer.Provider value={fullscreen ? stageEl : null}>{filterBar}</PopupContainer.Provider>
+                </div>
+              )}
+              <CameraPresets active={preset} onPick={pickPreset} top={overlayTop}>
+                {envMode === 'full' && (
+                  <label className="flex items-center gap-2 rounded-lg bg-white/95 px-3 py-1.5 text-xs text-slate-700 shadow-md ring-1 ring-slate-200">
+                    <input type="checkbox" checked={roof} onChange={(e) => setRoof(e.target.checked)} className="h-3.5 w-3.5 accent-emerald-700" />
+                    {W.viewMode.roof}
+                  </label>
+                )}
+              </CameraPresets>
+              <ViewControls api={api} onReset={resetView} hasSelection={!!selected} fullscreen={fullscreen} onFullscreen={toggleFullscreen} top={overlayTop} />
+              <Minimap scene={scene} active={active} camera={camera} selected={selPos ? [selPos[0], selPos[2]] : null}
+                expanded={miniOpen} onToggle={() => setMiniOpen((v) => !v)} onPick={(x, z) => { setPreset(null); api.current?.focus(x, z); }} />
+              <Legend mode={colorMode} onMode={setColorMode} counts={counts} ageState={age.state} onRetryAge={age.reload}
+                hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
+              {filtered && inFilter === 0 && (
+                <div style={{ top: overlayTop + 52 }} className="pointer-events-none absolute inset-x-0 z-30 mx-auto w-fit rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-md ring-1 ring-slate-200">
+                  {W.filters.noMatch}
+                </div>
+              )}
+            </SceneBoundary>
+          )}
         </div>
 
-        {/* Details */}
         <div className="xl:sticky xl:top-4">
-          <SlotDetails
+          <LocationDetails
             wh={wh}
             rack={selected?.rack ?? null}
             slot={selected?.slot ?? null}
-            detail={detail}
-            detailState={detailState}
+            detail={slotDetail.detail}
+            detailState={slotDetail.state}
             age={selected ? ageMap.get(selected.slot.id) ?? null : null}
-            onRetry={loadDetail}
+            ageState={age.state}
+            tab={tab}
+            onTab={setTab}
+            history={history}
+            related={related}
+            slotCode={(id) => slotIndex.get(id)?.slot.code ?? null}
+            onRetry={slotDetail.reload}
             onClose={() => setSelectedSlotId(null)}
-            onFly={() => selected && goToSlot(selected.slot.id)}
+            onFocusSlot={() => selected && goToSlot(selected.slot.id)}
+            onFocusRack={() => { setPreset(null); api.current?.focusSelectedRack(); }}
             onViewStock={onViewStock}
+            onGoSlot={goToSlot}
           />
         </div>
       </div>
 
-      <StatusSummary racks={filteredRacks} filtered={filtered} />
+      <BottomSummary rack={selected?.rack ?? null} slot={selected?.slot ?? null} detail={slotDetail.detail}
+        detailLoading={slotDetail.state === 'loading' && !slotDetail.detail} />
+
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+        <Info className="h-3.5 w-3.5" />
+        <span>{fromPlan === scene.racks.length ? V.posAllPlan : fromPlan > 0 ? t(V.posSome, { n: fromPlan, total: scene.racks.length }) : V.posNone}</span>
+        {filtered && <span>· {t(W.filters.inFilter, { n: inFilter, total: scene.slots.length })}</span>}
+        {envMode === 'full' && <span>· {W.viewMode.estimated}</span>}
+      </p>
     </div>
   );
 }
