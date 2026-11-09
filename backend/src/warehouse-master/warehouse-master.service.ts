@@ -5,13 +5,14 @@ import { ScopePrincipal, warehouseFilter, scopedWarehouseIds } from '../common/w
 import {
   RackCategory, addSlots, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType,
   planCapacity, planSlotCodes, rackCategory, simulate, slotSize, SlotCounts, WarehouseSpaceSummary,
-  rackSpaceRow, RackSpaceRow, STORAGE_BUCKETS,
+  rackSpaceRow, RackSpaceRow, STORAGE_BUCKETS, StorageSlots, addStorageSlot, emptyStorageSlots,
   SimLineInput, SimulationResult, CapacityPlan, PlannedSlot,
 } from './space-math';
 import type {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
   CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto,
 } from './warehouse-master.dto';
+import { IN_LOCATION_COUNT } from '../common/stock-presence';
 
 // Stock statuses that count as "active inventory" occupying a location.
 const ACTIVE_STOCK = ['AVAILABLE', 'RESERVED', 'PICKED', 'QUARANTINE', 'PENDING_INSPECTION', 'RTV_PENDING'] as const;
@@ -171,7 +172,7 @@ export class WarehouseMasterService {
     const ids = warehouses.map((w) => w.id);
     if (!ids.length) return [];
 
-    const [racks, slotGroups, stockGroups] = await Promise.all([
+    const [racks, slotGroups, stockGroups, slotStock] = await Promise.all([
       this.prisma.rack.findMany({ where: { warehouseId: { in: ids }, isDeleted: false }, include: { rackTypeMaster: true } }),
       this.prisma.slot.groupBy({
         by: ['rackId', 'status'],
@@ -184,18 +185,26 @@ export class WarehouseMasterService {
         where: { warehouseId: { in: ids }, slotId: { not: null }, status: { in: ACTIVE_STOCK as any } },
         _sum: { quantity: true },
       }),
+      // Per-slot in-location stock: Layer 2 "occupied" = slots that really hold stock.
+      this.prisma.slot.findMany({
+        where: { isDeleted: false, rack: { warehouseId: { in: ids }, isDeleted: false } },
+        select: { rackId: true, status: true, _count: { select: { stockItems: IN_LOCATION_COUNT } } },
+      }),
     ]);
 
     const rackWh = new Map(racks.map((r) => [r.id, r.warehouseId]));
     const slotsByWh = new Map<string, SlotCounts>();
-    const slotsByRack = new Map<string, SlotCounts>();
     for (const g of slotGroups) {
       const wh = rackWh.get(g.rackId);
       if (!wh) continue;
       if (!slotsByWh.has(wh)) slotsByWh.set(wh, emptySlotCounts());
-      if (!slotsByRack.has(g.rackId)) slotsByRack.set(g.rackId, emptySlotCounts());
       addSlots(slotsByWh.get(wh)!, g.status, g._count._all, g._sum.capacity ?? 0);
-      addSlots(slotsByRack.get(g.rackId)!, g.status, g._count._all, g._sum.capacity ?? 0);
+    }
+    const storageByRack = new Map<string, StorageSlots>();
+    for (const sl of slotStock) {
+      let st = storageByRack.get(sl.rackId);
+      if (!st) storageByRack.set(sl.rackId, (st = emptyStorageSlots()));
+      addStorageSlot(st, sl.status, sl._count.stockItems > 0);
     }
     const stockByWh = new Map(stockGroups.map((g) => [g.warehouseId, g._sum.quantity ?? 0]));
 
@@ -208,7 +217,7 @@ export class WarehouseMasterService {
     return warehouses.map((w) => {
       const whRacks = racksByWh.get(w.id) ?? [];
       const rows = whRacks
-        .map((r) => rackSpaceRow(r, slotsByRack.get(r.id) ?? emptySlotCounts()))
+        .map((r) => rackSpaceRow(r, storageByRack.get(r.id) ?? emptyStorageSlots()))
         .sort((a, b) => a.rackCode.localeCompare(b.rackCode));
       return { summary: buildSpaceSummary(w, whRacks, slotsByWh.get(w.id) ?? emptySlotCounts(), stockByWh.get(w.id) ?? 0, rows), rows };
     });
