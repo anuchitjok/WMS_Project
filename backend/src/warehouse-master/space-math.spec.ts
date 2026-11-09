@@ -1,7 +1,7 @@
 import {
   addSlots, boxesPerLayer, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType, planCapacity,
   planSlotCodes, rackCategory, rackFootprints, simulate, simulateLine, slotCode, slotSize, warehouseArea,
-  floorSpace, rackSpaceRow, splitCents, storageBucket, storageSpace,
+  floorSpace, rackSpaceRow, splitCents, storageBucket, storageSpace, addStorageSlot, emptyStorageSlots,
 } from './space-math';
 
 const STD = { id: 't1', code: 'STD-250', name: 'Standard 2.5 m', category: 'STANDARD_RACK', lengthCm: 250, widthCm: 100, heightCm: 250, levels: 5, columns: 5, slotCapacity: 1 };
@@ -166,6 +166,20 @@ describe('floor space (Layer 1, full area 100%)', () => {
   // User example: warehouse 150 m², 10 racks × 10 m² = 100 m², available 50 m².
   const tenRacks = Array.from({ length: 10 }, (_, i) => rack({ code: `R${i}`, lengthCm: 500, widthCm: 200 }));
 
+  it('occupied comes from real stock, not the slot status', () => {
+    expect(storageBucket('EMPTY', true)).toBe('occupied');      // putaway never sets OCCUPIED
+    expect(storageBucket('OCCUPIED', false)).toBe('available'); // stale status, no stock left
+    expect(storageBucket('RESERVED', true)).toBe('occupied');
+    expect(storageBucket('BLOCKED', true)).toBe('occupied');
+    const c = emptyStorageSlots();
+    addStorageSlot(c, 'EMPTY', true);
+    addStorageSlot(c, 'EMPTY', false, 3);
+    const row = rackSpaceRow({ ...rack({ lengthCm: 1000, widthCm: 200 }), id: 'r1' }, c);
+    expect(row.slots).toEqual({ occupied: 1, reserved: 0, available: 3, blockedOther: 0, total: 4 });
+    expect(row.areaM2).toEqual({ occupied: 5, reserved: 0, available: 15, blockedOther: 0 });
+    expect(row.utilPct).toBe(25);
+  });
+
   it('matches the user example and ignores usableAreaPct', () => {
     const f = floorSpace({ lengthCm: 1500, widthCm: 1000, heightCm: null }, tenRacks);
     expect(f).toMatchObject({ totalAreaM2: 150, rackFootprintM2: 100, availableM2: 50, utilPct: 66.7, overCapacity: false });
@@ -192,19 +206,19 @@ describe('floor space (Layer 1, full area 100%)', () => {
 });
 
 describe('storage space (Layer 2, slot share × rack area)', () => {
+  // Test shorthand: OCCUPIED slots hold stock, every other status has none.
   const slots = (o: Partial<Record<'EMPTY' | 'OCCUPIED' | 'RESERVED' | 'BLOCKED' | 'QUARANTINE' | 'WEIRD', number>>) => {
-    const c = emptySlotCounts();
-    for (const [st, n] of Object.entries(o)) addSlots(c, st, n!, n!);
+    const c = emptyStorageSlots();
+    for (const [st, n] of Object.entries(o)) addStorageSlot(c, st, st === 'OCCUPIED', n!);
     return c;
   };
 
   it('maps statuses into 4 buckets; unknown statuses go to blockedOther, never available', () => {
-    expect(storageBucket('OCCUPIED')).toBe('occupied');
-    expect(storageBucket('RESERVED')).toBe('reserved');
-    expect(storageBucket('EMPTY')).toBe('available');
-    expect(storageBucket('BLOCKED')).toBe('blockedOther');
-    expect(storageBucket('QUARANTINE')).toBe('blockedOther');
-    expect(storageBucket('SOMETHING_NEW')).toBe('blockedOther');
+    expect(storageBucket('RESERVED', false)).toBe('reserved');
+    expect(storageBucket('EMPTY', false)).toBe('available');
+    expect(storageBucket('BLOCKED', false)).toBe('blockedOther');
+    expect(storageBucket('QUARANTINE', false)).toBe('blockedOther');
+    expect(storageBucket('SOMETHING_NEW', false)).toBe('blockedOther');
     const row = rackSpaceRow({ ...rack({ lengthCm: 500, widthCm: 200 }), id: 'r1' }, slots({ EMPTY: 2, WEIRD: 3 }));
     expect(row.slots.blockedOther).toBe(3);
     expect(row.slots.available).toBe(2);
@@ -233,7 +247,7 @@ describe('storage space (Layer 2, slot share × rack area)', () => {
 
   it('leaves out racks without a size or without slots and lists them', () => {
     const noSize = rackSpaceRow({ ...rack({ code: 'NS' }), id: 'a' }, slots({ OCCUPIED: 3 }));
-    const noSlots = rackSpaceRow({ ...rack({ code: 'NO', lengthCm: 100, widthCm: 100 }), id: 'b' }, emptySlotCounts());
+    const noSlots = rackSpaceRow({ ...rack({ code: 'NO', lengthCm: 100, widthCm: 100 }), id: 'b' }, emptyStorageSlots());
     expect(noSize.areaM2).toBeNull();
     expect(noSize.utilPct).toBeNull();
     expect(noSlots.counted).toBe(false);

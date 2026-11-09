@@ -248,7 +248,7 @@ export const dashboard: Messages['dashboard'] = {
       },
       storage: {
         title: '货架存储面积',
-        subtitle: '按各状态货位占比 × 货架面积估算，并非货物实际占用的面积。',
+        subtitle: '按各类货位占比 × 货架面积估算，存有库存的货位计为“已占用”。并非货物实际占用的面积。',
         total: '货架总面积',
         occupied: '有货存储面积',
         reservedSub: '+ 已预留 {value}',

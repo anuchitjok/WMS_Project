@@ -250,7 +250,7 @@ export const dashboard = {
       },
       storage: {
         title: 'Rack Storage Space',
-        subtitle: 'Estimated from the share of slots in each status × rack area. Not the physical area taken by goods.',
+        subtitle: 'Estimated from the share of slots in each bucket × rack area. A slot that holds stock counts as occupied. Not the physical area taken by goods.',
         total: 'Total Rack Area',
         occupied: 'Occupied Storage Area',
         reservedSub: '+ {value} reserved',

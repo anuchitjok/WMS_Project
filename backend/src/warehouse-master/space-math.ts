@@ -167,20 +167,32 @@ export function rackFootprints(racks: RackLike[]): RackFootprint {
 export type StorageBucket = 'occupied' | 'reserved' | 'available' | 'blockedOther';
 export const STORAGE_BUCKETS: StorageBucket[] = ['occupied', 'reserved', 'available', 'blockedOther'];
 
-/** OCCUPIED = has stock, RESERVED = booked, EMPTY = available; anything else (BLOCKED, QUARANTINE, RTV, unknown) = blockedOther. */
-export function storageBucket(status: string): StorageBucket {
-  if (status === 'OCCUPIED') return 'occupied';
+/**
+ * Bucket of one slot. "Occupied" comes from real stock (same rule as the 3D view),
+ * because receiving and putaway never change slot.status:
+ *  1. holds in-location stock → occupied (whatever the status says)
+ *  2. no stock, RESERVED → reserved
+ *  3. no stock, EMPTY or a stale OCCUPIED → available
+ *  4. no stock, anything else (BLOCKED, QUARANTINE, RTV, unknown) → blockedOther
+ */
+export function storageBucket(status: string, hasStock: boolean): StorageBucket {
+  if (hasStock) return 'occupied';
   if (status === 'RESERVED') return 'reserved';
-  if (status === 'EMPTY') return 'available';
+  if (status === 'EMPTY' || status === 'OCCUPIED') return 'available';
   return 'blockedOther';
 }
 
 export type BucketValues = Record<StorageBucket, number>;
 const zeroBuckets = (): BucketValues => ({ occupied: 0, reserved: 0, available: 0, blockedOther: 0 });
 
-/** Slot counts of a SlotCounts grouped into the 4 storage buckets. */
-export function bucketSlots(c: SlotCounts): BucketValues {
-  return { occupied: c.occupied, reserved: c.reserved, available: c.empty, blockedOther: c.blocked + c.other };
+/** Slot counts per storage bucket, plus the total. */
+export type StorageSlots = BucketValues & { total: number };
+export const emptyStorageSlots = (): StorageSlots => ({ ...zeroBuckets(), total: 0 });
+
+/** Adds `n` slots of one status (with / without stock) to `s`. */
+export function addStorageSlot(s: StorageSlots, status: string, hasStock: boolean, n = 1): void {
+  s[storageBucket(status, hasStock)] += n;
+  s.total += n;
 }
 
 /**
@@ -221,11 +233,11 @@ export interface RackSpaceRow {
 
 export function rackSpaceRow(
   rack: RackLike & { id: string; zone?: string | null; isActive?: boolean },
-  slots: SlotCounts,
+  slots: StorageSlots,
 ): RackSpaceRow {
   const fp = footprintM2(effectiveRackSize(rack));
   const cents = fp != null ? Math.round(fp * 100) : null;
-  const b = bucketSlots(slots);
+  const b: BucketValues = { occupied: slots.occupied, reserved: slots.reserved, available: slots.available, blockedOther: slots.blockedOther };
   const counted = cents != null && cents > 0 && slots.total > 0;
   const area = counted ? splitCents(cents!, b) : null;
   return {
