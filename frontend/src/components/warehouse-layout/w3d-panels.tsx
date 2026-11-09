@@ -104,7 +104,7 @@ export function WarehouseAreaCard({ wh }: { wh: WarehouseData }) {
         ) : (
           <>
             <p className="text-base font-semibold leading-tight text-slate-400">{K.areaNotSet}</p>
-            <Link href="/warehouse-master" className="truncate text-xs text-emerald-700 underline-offset-2 hover:underline">{K.areaSetLink}</Link>
+            <Link href="/warehouse-master" className="block break-words text-xs leading-snug text-emerald-700 underline-offset-2 hover:underline">{K.areaSetLink}</Link>
           </>
         )}
       </div>
