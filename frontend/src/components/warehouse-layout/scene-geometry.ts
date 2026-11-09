@@ -6,8 +6,9 @@
 //   1. If the 2D Floor Plan has a RACK object linked to it (rackId), use that
 //      object's centre and orientation, so 2D and 3D agree. This still applies
 //      while the 2D editor is hidden — positions drawn earlier are kept.
-//   2. Otherwise lay racks out automatically: one block per zone, racks as
-//      parallel rows inside it.
+//   2. Otherwise lay racks out automatically (autoLayout): one block per zone,
+//      racks in a grid of parallel rows inside it, zone blocks packed into rows
+//      so the whole layout fits the warehouse shape.
 //
 // Rack size: the rack's real size (Rack.lengthCm / widthCm / heightCm) when it
 // has one, otherwise the defaults below. Two kinds of rack are drawn:
@@ -34,8 +35,10 @@ export const PALLET_H = 0.14; // wooden pallet height
 const FLOOR_SLOT_W = 1.35;   // default pallet position (1.2 m pallet + gap)
 const FLOOR_ROW_D = 1.25;    // default pallet row depth
 const FLOOR_STACK_H = 1.5;   // default max stack height on the floor
-const AISLE = 2.8;           // gap between rows of racks
-const ZONE_GAP = 5;          // gap between zone blocks
+const AISLE = 2.8;           // widest aisle between rack rows (pallet racking)
+const MIN_AISLE = 1.2;       // narrowest aisle (small shelving)
+const ZONE_GAP = 5;          // gap between the floor-plan racks and the auto layout
+const AUTO_ZONE_GAP = 3;     // main aisle between auto-laid zone blocks
 export const FLOOR_MARGIN = 5; // floor around the racks
 
 // ─── Slot state (same rules as the Racks & slots tab) ──────────────────────────
@@ -239,6 +242,91 @@ function place(r: RackData, center: [number, number], rotY: number, zone: string
   return { rack: r, zone, center, rotY, ...sz };
 }
 
+/** Aisle between rack rows, scaled to the rack depth: narrow for small shelving, up to 2.8 m for pallet racks. */
+export const aisleFor = (depth: number) => Math.min(AISLE, Math.max(MIN_AISLE, depth * 2.5));
+
+export interface AutoPlacement { rack: RackData; zone: string; center: [number, number] }
+
+const byCode = (a: RackData, b: RackData) => a.code.localeCompare(b.code, undefined, { numeric: true });
+const ratioMiss = (w: number, d: number, target: number) => Math.abs(Math.log(Math.max(w, 0.1) / Math.max(d, 0.1) / target));
+
+/**
+ * Automatic rack layout (racks not drawn on the floor plan):
+ *  - one block per zone (No zone last); racks sorted by code, left→right then
+ *    row by row, every row facing an aisle sized to the rack depth;
+ *  - each block wraps into as many columns as keeps it roughly square;
+ *  - blocks are packed into rows of zones, choosing the arrangement whose overall
+ *    shape best matches the warehouse (length × width when recorded) and that
+ *    fits inside it when possible.
+ * Racks are centred in their grid cell, so racks of a zone line up.
+ */
+export function autoLayout(
+  racks: RackData[],
+  wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm'> | null,
+  startZ = 0,
+): AutoPlacement[] {
+  if (!racks.length) return [];
+  const byZone = new Map<string, RackData[]>();
+  for (const r of racks) {
+    const z = zoneOf(r);
+    if (!byZone.has(z)) byZone.set(z, []);
+    byZone.get(z)!.push(r);
+  }
+  const zoneNames = [...byZone.keys()].sort((a, b) => (a === NO_ZONE ? 1 : b === NO_ZONE ? -1 : a.localeCompare(b, undefined, { numeric: true })));
+
+  // 1) Each zone → a block with racks on a grid.
+  const blocks = zoneNames.map((zone) => {
+    const list = byZone.get(zone)!.slice().sort(byCode);
+    const sizes = list.map(rackSize);
+    const L = Math.max(...sizes.map((s) => s.length)), D = Math.max(...sizes.map((s) => s.depth));
+    const aisle = aisleFor(D);
+    const n = list.length;
+    let best = { cols: 1, w: L, d: n * D + (n - 1) * aisle, miss: Infinity };
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      if (cols > 1 && Math.ceil(n / (cols - 1)) === rows) continue; // same rows, more empty cells
+      const w = cols * L + (cols - 1) * aisle, d = rows * D + (rows - 1) * aisle;
+      const miss = ratioMiss(w, d, 1);
+      if (miss < best.miss - 1e-9) best = { cols, w, d, miss };
+    }
+    const items = list.map((rack, i) => {
+      const c = i % best.cols, r = Math.floor(i / best.cols);
+      return { rack, x: c * (L + aisle) + L / 2, z: r * (D + aisle) + D / 2 };
+    });
+    return { zone, w: best.w, d: best.d, items };
+  });
+
+  // 2) Pack zone blocks into rows of `perRow` zones; pick the best shape.
+  const realW = cmToM(wh?.lengthCm), realD = cmToM(wh?.widthCm);
+  const target = realW && realD ? realW / realD : 1.6;
+  const pack = (perRow: number) => {
+    const pos: { x: number; z: number }[] = [];
+    let z = 0, w = 0;
+    for (let i = 0; i < blocks.length; i += perRow) {
+      const row = blocks.slice(i, i + perRow);
+      let x = 0;
+      for (const b of row) { pos.push({ x, z }); x += b.w + AUTO_ZONE_GAP; }
+      w = Math.max(w, x - AUTO_ZONE_GAP);
+      z += Math.max(...row.map((b) => b.d)) + AUTO_ZONE_GAP;
+    }
+    return { pos, w, d: z - AUTO_ZONE_GAP };
+  };
+  let chosen = pack(1), score = Infinity;
+  for (let perRow = 1; perRow <= blocks.length; perRow++) {
+    const p = pack(perRow);
+    const fits = !realW || !realD || (p.w <= realW && p.d <= realD);
+    const sc = ratioMiss(p.w, p.d, target) + (fits ? 0 : 10);
+    if (sc < score - 1e-9) { score = sc; chosen = p; }
+  }
+
+  const out: AutoPlacement[] = [];
+  blocks.forEach((b, i) => {
+    const o = chosen.pos[i];
+    for (const it of b.items) out.push({ rack: it.rack, zone: b.zone, center: [o.x + it.x, startZ + o.z + it.z] });
+  });
+  return out;
+}
+
 export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject[] = []): Scene3D {
   const racks = (wh?.racks ?? []).filter((r) => r.isActive !== false);
   const placed: PlacedRack[] = [];
@@ -267,30 +355,10 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
     for (const [, z] of rackCorners(p)) linkedMaxZ = Math.max(linkedMaxZ, z);
   }
 
-  // 2) Everything else: zone blocks side by side, rows inside each block.
+  // 2) Everything else: automatic layout, below the floor-plan racks if any.
   const rest = racks.filter((r) => !drawn.has(r.id));
-  const byZone = new Map<string, RackData[]>();
-  for (const r of rest) {
-    const z = zoneOf(r);
-    if (!byZone.has(z)) byZone.set(z, []);
-    byZone.get(z)!.push(r);
-  }
-  const zoneNames = [...byZone.keys()].sort((a, b) => (a === NO_ZONE ? 1 : b === NO_ZONE ? -1 : a.localeCompare(b, undefined, { numeric: true })));
   const startZ = Number.isFinite(linkedMaxZ) ? linkedMaxZ + ZONE_GAP : 0;
-  let cursorX = 0;
-  for (const zone of zoneNames) {
-    const list = byZone.get(zone)!.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }));
-    const sizes = list.map(rackSize);
-    const blockLen = Math.max(...sizes.map((s) => s.length));
-    let z = startZ;
-    list.forEach((r, i) => {
-      const { length, depth } = sizes[i];
-      // Left-aligned in the block so rack ends line up along the main aisle.
-      placed.push(place(r, [cursorX + length / 2, z + depth / 2], 0, zone));
-      z += depth + AISLE;
-    });
-    cursorX += blockLen + ZONE_GAP;
-  }
+  for (const a of autoLayout(rest, wh, startZ)) placed.push(place(a.rack, a.center, 0, a.zone));
 
   // Slots
   const slots: PlacedSlot[] = [];
