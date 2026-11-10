@@ -168,6 +168,14 @@ export const layout3d: Messages['layout3d'] = {
       areaNotSet: '未填写尺寸',
       areaSetLink: '在仓库主数据中填写尺寸',
     },
+    setup: {
+      title: '{code}：仓库数据不完整',
+      hint: '补全之前，3D 布局和仓库面积使用估算值。',
+      whSize: '未填写仓库尺寸（长 × 宽）',
+      rackSize: '{n} 个货架未填写尺寸', rackZone: '{n} 个货架未设置区域', rackSlots: '{n} 个货架没有货位',
+      examples: '例如 {codes}',
+      open: '打开仓库主数据',
+    },
     viewMode: {
       title: '视图模式',
       aria: '仓库视图模式',

@@ -31,7 +31,7 @@ import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
 import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
-  KpiCards, WarehouseAreaCard, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
+  KpiCards, WarehouseAreaCard, SetupChecklist, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
 } from './w3d-panels';
 import { CameraPresets, ViewControls, Minimap, Legend } from './w3d-overlays';
 
@@ -312,11 +312,14 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   if (!wh) return null;
 
   const header = (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-[repeat(5,minmax(0,1fr))_14rem]">
-      <KpiCards metrics={metrics} />
-      <div className="col-span-2 lg:col-span-1"><WarehouseAreaCard wh={wh} /></div>
-      <div className="col-span-2 lg:col-span-5 xl:col-span-1"><ViewModeCard mode={envMode} onChange={setEnvMode} /></div>
-    </div>
+    <>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-[repeat(5,minmax(0,1fr))_14rem]">
+        <KpiCards metrics={metrics} />
+        <div className="col-span-2 lg:col-span-1"><WarehouseAreaCard wh={wh} /></div>
+        <div className="col-span-2 lg:col-span-5 xl:col-span-1"><ViewModeCard mode={envMode} onChange={setEnvMode} /></div>
+      </div>
+      <SetupChecklist wh={wh} />
+    </>
   );
 
   const filterBar = (

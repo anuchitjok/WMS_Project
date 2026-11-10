@@ -169,6 +169,14 @@ export const layout3d = {
       areaNotSet: 'Size not set',
       areaSetLink: 'Enter size in Warehouse Master',
     },
+    setup: {
+      title: '{code}: warehouse data not complete',
+      hint: 'Until these are filled in, the 3D layout and floor space use estimates.',
+      whSize: 'Warehouse size (length × width) not entered',
+      rackSize: '{n} racks without a size', rackZone: '{n} racks without a zone', rackSlots: '{n} racks without slots',
+      examples: 'e.g. {codes}',
+      open: 'Open Warehouse Master',
+    },
     viewMode: {
       title: 'View Mode',
       aria: 'Warehouse view mode',

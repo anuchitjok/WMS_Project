@@ -168,6 +168,14 @@ export const layout3d: Messages['layout3d'] = {
       areaNotSet: 'ยังไม่ได้ระบุขนาด',
       areaSetLink: 'ระบุขนาดที่ Warehouse Master',
     },
+    setup: {
+      title: '{code}: ข้อมูลคลังยังไม่ครบ',
+      hint: 'ระหว่างที่ยังไม่ครบ ผัง 3D และพื้นที่คลังจะใช้ค่าประมาณ',
+      whSize: 'ยังไม่ได้กรอกขนาดคลัง (ยาว × กว้าง)',
+      rackSize: 'rack {n} ตัวยังไม่มีขนาด', rackZone: 'rack {n} ตัวยังไม่มีโซน', rackSlots: 'rack {n} ตัวยังไม่มีช่อง',
+      examples: 'เช่น {codes}',
+      open: 'ไปที่ Warehouse Master',
+    },
     viewMode: {
       title: 'โหมดการแสดงผล',
       aria: 'โหมดการแสดงผลคลังสินค้า',
