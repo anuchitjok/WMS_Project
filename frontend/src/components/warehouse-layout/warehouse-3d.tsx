@@ -2,7 +2,8 @@
 
 // Warehouse Operations — 3D view tab (control-tower layout).
 //
-//   KPI cards + view mode → search & filters → 3D scene | Location Details → bottom summary
+//   header bar (warehouse · system status · last refresh · view mode) → 6 KPI cards
+//   → search & filters → 3D scene | Location Details → bottom summary
 //
 // Read-only. Every figure comes from real data through existing APIs:
 //   • warehouse tree from the page (/warehouse: racks, slots, placement counts)
@@ -11,7 +12,8 @@
 //   • SKU / serial search and Related from /inventory?search= (existing stock search)
 //   • stock age from /warehouse/:id/slot-stock-age (oldest receivedDate per slot)
 //   • History from /inventory/:id/detail-full (audit log of the newest stock row)
-// KPIs use the same whMetrics() as the page's KPI strip and the Racks & slots tab.
+//   • header + KPI row (PR8 Phase 1): see use-tower-data.ts — Slots Used / Empty Slots
+//     use the same whMetrics() as the page's KPI strip and the Racks & slots tab
 //
 // Split: w3d-panels.tsx (UI around the scene), w3d-overlays.tsx (UI on the scene),
 // use-w3d-data.ts (data), scene-geometry.ts (pure layout), scene-3d.tsx (WebGL).
@@ -31,8 +33,10 @@ import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
 import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
-  KpiCards, WarehouseAreaCard, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
+  FilterBar, LocationDetails, BottomSummary, summarizeSlot,
 } from './w3d-panels';
+import { TowerHeader, TowerKpis } from './w3d-tower';
+import { useTowerData } from './use-tower-data';
 import { SetupHealthCard } from './setup-health-card';
 import { setupHealth } from './setup-health';
 import { CameraPresets, ViewControls, Minimap, Legend } from './w3d-overlays';
@@ -106,6 +110,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   const warehouseId = wh?.id ?? '';
   const objects = useLayoutObjects(warehouseId);
   const age = useStockAge(warehouseId);
+  const tower = useTowerData(warehouseId);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [colorMode, setColorMode] = useState<ViewMode>('status');
@@ -134,11 +139,21 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
     return () => document.removeEventListener('fullscreenchange', on);
   }, []);
 
-  // Same live signals as the Floor plan tab: re-read the tree and stock ages.
-  useRealtime(['inventory:update', 'request:update'], () => {
-    void onReload();
-    age.reload();
-  }, { enabled: !!warehouseId });
+  // One refresh signal for everything on this tab: server events, a 60 s poll while
+  // the browser tab is visible, and coming back to the tab (debounced together).
+  // No duplicates: skipped while a refresh is still running or within 3 s of the last one.
+  const { reload: reloadAge } = age, { reload: reloadTower } = tower;
+  const lastRefresh = useRef(0);
+  const refreshing = useRef(false);
+  const refreshAll = useCallback(() => {
+    const now = Date.now();
+    if (refreshing.current || now - lastRefresh.current < 3_000) return;
+    lastRefresh.current = now;
+    refreshing.current = true;
+    reloadAge();
+    void Promise.allSettled([onReload(), reloadTower()]).finally(() => { refreshing.current = false; });
+  }, [onReload, reloadAge, reloadTower]);
+  useRealtime(['inventory:update', 'request:update'], refreshAll, { enabled: !!warehouseId });
 
   const scene = useMemo(() => buildScene(wh, objects ?? []), [wh, objects]);
 
@@ -305,8 +320,9 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   if (loading || (wh && objects === null)) {
     return (
       <div className="space-y-3">
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-[repeat(4,minmax(0,1fr))_14rem]">
-          {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}
+        <Skeleton className="h-14 w-full rounded-2xl" />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-16 rounded-2xl" />)}
         </div>
         <Skeleton className="h-12 w-full rounded-xl" />
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_22rem]">
@@ -321,11 +337,9 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
 
   const header = (
     <>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 xl:grid-cols-[repeat(5,minmax(0,1fr))_14rem]">
-        <KpiCards metrics={metrics} />
-        <div className="col-span-2 lg:col-span-1"><WarehouseAreaCard wh={wh} /></div>
-        <div className="col-span-2 lg:col-span-5 xl:col-span-1"><ViewModeCard mode={envMode} onChange={setEnvMode} /></div>
-      </div>
+      <TowerHeader wh={wh} system={tower.system} updatedAt={tower.updatedAt} refreshing={tower.refreshing} failed={tower.failed}
+        onRefresh={refreshAll} mode={envMode} onMode={setEnvMode} />
+      <TowerKpis metrics={metrics} stock={tower.stock} tasks={tower.tasks} />
       <SetupHealthCard wh={wh} onRack={focusRackFromCard} />
     </>
   );

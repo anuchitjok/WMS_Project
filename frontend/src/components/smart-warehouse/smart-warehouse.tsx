@@ -139,10 +139,13 @@ export function SmartWarehouse({ source = mockDataSource }: { source?: Warehouse
         </Link>
         <span className="h-4 w-px bg-slate-200" aria-hidden />
         <h1 className="text-base font-semibold text-slate-900">{P.title}</h1>
-        <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700" title={P.demoNote}>
+        <span className="rounded-md bg-amber-500 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-white" title={P.demoNote} data-testid="smart3d-demo-badge">
           {P.demoBadge}
         </span>
-        <span className="hidden text-xs text-slate-500 sm:inline">{P.demoNote}</span>
+      </div>
+      {/* Sample data only: say so on every visit, in a bar that cannot be closed (PR8). */}
+      <div role="note" className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-xs text-amber-900" data-testid="smart3d-demo-note">
+        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" /> {P.demoNote}
       </div>
 
       <Toolbar data={data} searchIndex={searchIndex} onSearchPick={onSearchPick} disabled={!layout} />
@@ -151,6 +154,10 @@ export function SmartWarehouse({ source = mockDataSource }: { source?: Warehouse
         {st.leftOpen && data && index && <NavPanel data={data} index={index} onOpenRack={openRack} />}
 
         <div className="relative min-w-0 flex-1 bg-[#f3f5f7]" data-testid="smart3d-viewport">
+          {/* Watermark on the 3D view itself, so a screenshot can't pass for live stock. */}
+          <div aria-hidden className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 select-none rounded-lg bg-white/80 px-3 py-1 text-sm font-bold uppercase tracking-widest text-amber-600 ring-1 ring-amber-200">
+            {P.demoBadge}
+          </div>
           {error ? (
             <div className="absolute inset-0 grid place-items-center p-6" data-testid="smart3d-error">
               <div className="max-w-sm rounded-xl border border-red-200 bg-white p-5 text-center shadow-sm">
