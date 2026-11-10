@@ -29,9 +29,9 @@ import { useT } from '@/i18n';
 import {
   type Scene3D, type PlacedRack, type PlacedSlot, type ViewMode, type EnvMode, type AreaRect,
   BASE_Y, PALLET_H, COLORS, NO_ZONE, STATE_3D, DECK_STATUS, boundsOf, rackToWorld, frameColumns, bracingPanels,
-  cartonGrid, cartonCount, cartonLayout, rackCorners,
+  cartonGrid, cartonCount, cartonLayout, rackCorners, slotState3D,
 } from './scene-geometry';
-import { isOccupied, isBlocked } from './occupancy';
+import { isOccupied, isBlocked, slotUtil } from './occupancy';
 import { intersectSpans, pointInPolygon, spansAt } from './floor-geometry';
 
 export type CameraPreset = 'iso' | 'top' | 'front';
@@ -46,6 +46,8 @@ export interface SceneApi {
   flyTo: (slotId: string) => void;
   focusSelectedSlot: () => void;
   focusSelectedRack: () => void;
+  /** Glide to one rack (rack panel "Zoom to rack"). */
+  focusRack: (rackId: string) => void;
 }
 export interface CameraInfo { x: number; z: number; tx: number; tz: number }
 
@@ -665,7 +667,7 @@ function clampTarget(v: THREE.Vector3, floor: Scene3D['floor'], maxY: number) {
   return v;
 }
 
-function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, floor, maxY, slotPos, selectedSlotId, rackOfSlot, onCamera, onUserCamera }: {
+function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, floor, maxY, slotPos, selectedSlotId, rackOfSlot, rackOf, onCamera, onUserCamera }: {
   apiRef: RefObject<SceneApi | null>;
   homeBounds: Bounds; fitBounds: Bounds; fitKey: string;
   /** A subset of racks is in focus (filter / rack or zone label). */
@@ -676,6 +678,7 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
   slotPos: (slotId: string) => [number, number, number] | null;
   selectedSlotId: string | null;
   rackOfSlot: (slotId: string) => PlacedRack | null;
+  rackOf: (rackId: string) => PlacedRack | null;
   onCamera?: (c: CameraInfo) => void;
   onUserCamera?: () => void;
 }) {
@@ -752,6 +755,13 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
       goal.current = { pos: pos.clone().add(t.clone().sub(target)), target: t };
       invalidate();
     };
+    const focusPlaced = (r: PlacedRack | null) => {
+      if (!r) return;
+      const { pos, target } = current();
+      const dir = pos.clone().sub(target);
+      const v = frame(padded(boundsOf([r])), focusDir(dir.lengthSq() > 0 ? dir : PRESET_DIR.iso));
+      go(v.pos, v.target);
+    };
     const flyTo = (slotId: string) => {
       const p = slotPos(slotId);
       if (!p) return;
@@ -787,17 +797,11 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
       },
       flyTo,
       focusSelectedSlot: () => { if (sel.current) flyTo(sel.current); },
-      focusSelectedRack: () => {
-        const r = sel.current ? rackOfSlot(sel.current) : null;
-        if (!r) return;
-        const { pos, target } = current();
-        const dir = pos.clone().sub(target);
-        const v = frame(padded(boundsOf([r])), focusDir(dir.lengthSq() > 0 ? dir : PRESET_DIR.iso));
-        go(v.pos, v.target);
-      },
+      focusSelectedRack: () => focusPlaced(sel.current ? rackOfSlot(sel.current) : null),
+      focusRack: (rackId: string) => focusPlaced(rackOf(rackId)),
     };
     return () => { apiRef.current = null; };
-  }, [apiRef, camera, controls, homeBounds, invalidate, size, slotPos, floor, maxY, rackOfSlot, topInset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [apiRef, camera, controls, homeBounds, invalidate, size, slotPos, floor, maxY, rackOfSlot, rackOf, topInset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 }
@@ -815,6 +819,29 @@ function Outline({ s, color }: { s: PlacedSlot; color: string }) {
     </group>
   );
 }
+
+/**
+ * Rack in focus (PR8 Phase 2): the same cyan-blue as the selected slot, as an edge
+ * round the whole rack plus a soft footprint on the floor. Cyan, not the status
+ * blue, so it stays readable over "In use" slots (decided with the user).
+ */
+function RackHighlight({ p }: { p: PlacedRack }) {
+  const pad = 0.12;
+  // Wider than the red "data looks wrong" band (FLAG_MARGIN), so both show on a flagged rack.
+  const band = useMemo(() => footprintBand(p, FOCUS_MARGIN, FOCUS_W), [p]);
+  return (
+    <>
+      <group position={[p.center[0], 0, p.center[1]]} rotation={[0, p.rotY, 0]}>
+        <lineSegments geometry={OUTLINE_GEOM} position={[0, p.height / 2 + 0.02, 0]} scale={[p.length + pad * 2, p.height + 0.08, p.depth + pad * 2]} renderOrder={3}>
+          <lineBasicMaterial color="#06b6d4" />
+        </lineSegments>
+      </group>
+      <BoxInstances items={band} color="#22d3ee" roughness={0.6} />
+    </>
+  );
+}
+const FOCUS_MARGIN = 0.5; // m around the rack footprint
+const FOCUS_W = 0.18;     // band width on the floor
 
 /** Selected slot: translucent cyan volume with a bright edge (the 3D accent colour). */
 function Highlight({ s }: { s: PlacedSlot }) {
@@ -932,16 +959,17 @@ const FLAG_W = 0.14;      // line width on the floor
 /** Red line round the floor footprint of each flagged rack (rack data looks wrong). */
 function flagOutline(racks: PlacedRack[], flagged: Set<string> | undefined): BoxItem[] {
   if (!flagged?.size) return [];
+  return racks.filter((p) => flagged.has(p.rack.id)).flatMap((p) => footprintBand(p, FLAG_MARGIN, FLAG_W));
+}
+
+/** Four flat bars on the floor round a rack footprint, `margin` m out, `w` m wide. */
+function footprintBand(p: PlacedRack, margin: number, w: number): BoxItem[] {
+  const c = rackCorners({ ...p, length: p.length + margin * 2, depth: p.depth + margin * 2 });
   const out: BoxItem[] = [];
-  for (const p of racks) {
-    if (!flagged.has(p.rack.id)) continue;
-    const grown: PlacedRack = { ...p, length: p.length + FLAG_MARGIN * 2, depth: p.depth + FLAG_MARGIN * 2 };
-    const c = rackCorners(grown);
-    for (let i = 0; i < 4; i++) {
-      const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
-      const len = Math.hypot(x1 - x0, z1 - z0) + FLAG_W;
-      out.push({ pos: [(x0 + x1) / 2, 0.012, (z0 + z1) / 2], scale: [len, 0.012, FLAG_W], rotY: -Math.atan2(z1 - z0, x1 - x0) });
-    }
+  for (let i = 0; i < 4; i++) {
+    const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
+    const len = Math.hypot(x1 - x0, z1 - z0) + w;
+    out.push({ pos: [(x0 + x1) / 2, 0.012, (z0 + z1) / 2], scale: [len, 0.012, w], rotY: -Math.atan2(z1 - z0, x1 - x0) });
   }
   return out;
 }
@@ -985,7 +1013,8 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, onSelectSlot, apiRef, onCamera, onUserCamera, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
+  onHoverSlot?: (i: number | null) => void;
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -1067,9 +1096,13 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
   };
   const hoverSlot = (i: number | null) => {
     const ok = i != null && !!scene.slots[i] && slotIsOn(i);
-    setHover(ok ? i : null);
+    const next = ok ? i : null;
+    if (next !== hover) onHoverSlot?.(next);
+    setHover(next);
     document.body.style.cursor = ok ? 'pointer' : '';
   };
+  const rackOf = useMemo(() => (id: string) => rackById.get(id) ?? null, [rackById]);
+  const focusRack = focusRackId ? rackById.get(focusRackId) : undefined;
   useEffect(() => () => { document.body.style.cursor = ''; }, []);
 
   return (
@@ -1161,14 +1194,30 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
 
       {hovered && hovered.slot.id !== selectedSlotId && <Outline s={hovered} color="#334155" />}
       {selected && <Highlight s={selected} />}
+      {focusRack && <RackHighlight p={focusRack} />}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
         maxPolarAngle={MAX_POLAR} minDistance={2} maxDistance={maxDist} />
       <CameraRig apiRef={apiRef} homeBounds={homeBounds} fitBounds={fitBounds} fitKey={fitKey}
         focused={!!active && activeRacks.length > 0 && activeRacks.length < scene.racks.length} topInset={topInset}
-        floor={f} maxY={scene.bounds.maxY} slotPos={slotPos} selectedSlotId={selectedSlotId} rackOfSlot={rackOfSlot}
+        floor={f} maxY={scene.bounds.maxY} slotPos={slotPos} selectedSlotId={selectedSlotId} rackOfSlot={rackOfSlot} rackOf={rackOf}
         onCamera={onCamera} onUserCamera={onUserCamera} />
     </>
+  );
+}
+
+/** Small card over the slot under the pointer: code, rack, status, fill. */
+function HoverTag({ slot, rack }: { slot: PlacedSlot['slot']; rack: PlacedSlot['rack'] }) {
+  const { m, t } = useT();
+  const st = slotState3D(slot);
+  return (
+    <div className="whitespace-nowrap rounded-lg bg-slate-900/90 px-2.5 py-1 text-center text-white shadow-lg">
+      <p className="font-mono text-xs font-semibold leading-tight">{slot.code}</p>
+      <p className="flex items-center justify-center gap-1.5 text-[11px] leading-tight text-slate-200">
+        <span className={`h-1.5 w-1.5 rounded-full ${STATE_3D[st].dot}`} />
+        {m.layout3d.w3d.status[st]} · {slotUtil(slot)}% · {t(m.layout3d.view.rackN, { rack: rack.code })}
+      </p>
+    </div>
   );
 }
 
@@ -1190,6 +1239,8 @@ export interface Scene3DProps {
   /** Pixels at the top of the stage covered by floating overlays (filter bar, presets). */
   topInset?: number;
   selectedSlotId: string | null;
+  /** Rack in focus (one rack picked): drawn with a cyan-blue outline. */
+  focusRackId?: string | null;
   onSelectSlot: (slotId: string) => void;
   onSelectRack: (rackId: string) => void;
   /** A zone name on the floor was clicked: focus every rack in that zone. */
@@ -1208,6 +1259,10 @@ export default function WarehouseScene3D(props: Scene3DProps) {
   const L = m.layout3d.view, A = m.layout3d.w3d.area;
   const labelEls = useRef(new Map<string, HTMLElement>());
   const selected = selectedSlotId ? scene.slots.find((s) => s.slot.id === selectedSlotId) : undefined;
+  // Slot under the pointer (never the selected one: that has its own tag).
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const hoverRaw = hoverIdx != null ? scene.slots[hoverIdx] : undefined;
+  const hovered = hoverRaw && hoverRaw.slot.id !== selectedSlotId ? hoverRaw : undefined;
   const showFloor = envMode !== 'rack';
   const dims = showFloor ? dimensionSpots(scene.floor) : null;
   // A zone is "on" while at least one of its racks is in the focus / filter.
@@ -1231,8 +1286,9 @@ export default function WarehouseScene3D(props: Scene3DProps) {
       out.push({ key: `r:${p.rack.id}`, pos: [x, sg.y, z], lod: 'near', keep: !!active && active.has(p.rack.id) });
     }
     if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
+    if (hovered) out.push({ key: 'hov', pos: [hovered.pos[0], hovered.pos[1] + hovered.size[1] * 0.55, hovered.pos[2]] });
     return out;
-  }, [scene, selected, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, selected, hovered, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) labelEls.current.set(key, el); else labelEls.current.delete(key);
@@ -1243,7 +1299,7 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     <div className="absolute inset-0">
       <Canvas frameloop="demand" dpr={[1, 2]} shadows="percentage" camera={{ fov: FOV, near: 0.1, far: 3000, position: [-20, 30, 30] }}
         gl={{ antialias: true }} className="touch-none">
-        <SceneContent {...props} labels={labels} labelEls={labelEls} zoneNames={zoneNames} />
+        <SceneContent {...props} labels={labels} labelEls={labelEls} zoneNames={zoneNames} onHoverSlot={setHoverIdx} />
       </Canvas>
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -1289,6 +1345,11 @@ export default function WarehouseScene3D(props: Scene3DProps) {
         {selected && (
           <div ref={reg('sel')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`}>
             {tooltip}
+          </div>
+        )}
+        {hovered && (
+          <div ref={reg('hov')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`} role="tooltip">
+            <HoverTag slot={hovered.slot} rack={hovered.rack} />
           </div>
         )}
       </div>

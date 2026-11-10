@@ -36,6 +36,7 @@ import {
   FilterBar, LocationDetails, BottomSummary, summarizeSlot,
 } from './w3d-panels';
 import { TowerHeader, TowerKpis } from './w3d-tower';
+import { RackPanel } from './w3d-rack-panel';
 import { useTowerData } from './use-tower-data';
 import { SetupHealthCard } from './setup-health-card';
 import { setupHealth } from './setup-health';
@@ -246,12 +247,13 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   }, [slotIndex, slotOn]);
 
   // A slot outside the filter (or deleted by a refresh) is no longer selectable.
-  // When a rack / zone is in focus, move the selection to the first slot with
-  // stock inside it instead (none → clear), so the details panel follows the focus.
+  // One rack in focus: clear it, so the rack panel shows (PR8 Phase 2).
+  // A zone in focus: move the selection to the first slot with stock inside it
+  // (none → clear), so the details panel follows the focus.
   useEffect(() => {
     if (!selectedSlotId || isOn(selectedSlotId)) return;
-    const focus = filters.rackId !== ALL || filters.zone !== ALL;
-    const next = focus && slotOn ? scene.slots.find((s, i) => slotOn[i] && isOccupied(s.slot)) : undefined;
+    const zoneFocus = filters.rackId === ALL && filters.zone !== ALL;
+    const next = zoneFocus && slotOn ? scene.slots.find((s, i) => slotOn[i] && isOccupied(s.slot)) : undefined;
     setSelectedSlotId(next ? next.slot.id : null);
   }, [selectedSlotId, isOn, filters.rackId, filters.zone, slotOn, scene]);
 
@@ -269,12 +271,18 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
     setFilters((f) => ({ ...f, zone: f.zone !== ALL && zoneOf(r) !== f.zone ? zoneOf(r) : f.zone, rackId: id }));
     setPreset(null);
   }, [allRacks]);
+  // Rack sign / setup card: focus the rack and show its panel (no slot picked).
+  const openRack = useCallback((id: string) => {
+    selectRack(id);
+    setSelectedSlotId(null);
+  }, [selectRack]);
+  const focusedRack = filters.rackId !== ALL ? allRacks.find((r) => r.id === filters.rackId) ?? null : null;
   // Setup health: racks whose master data looks wrong get a red outline; a code in the card zooms to its rack.
   const flagged = useMemo(() => (wh ? setupHealth(wh).flagged : undefined), [wh]);
   const focusRackFromCard = useCallback((id: string) => {
-    selectRack(id);
+    openRack(id);
     stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [selectRack]);
+  }, [openRack]);
   // Clicking a slot in the scene selects it and focuses its rack: the other racks fade out.
   const selectSlot = useCallback((slotId: string) => {
     setSelectedSlotId(slotId);
@@ -297,6 +305,15 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
     // After any filter change has re-framed the camera.
     setTimeout(() => api.current?.flyTo(slotId), 80);
   }, [slotIndex, isOn]);
+
+  // Rack code from the search box: show that rack (out of any other filter) and glide to it.
+  const searchRack = useCallback((id: string) => {
+    if (!allRacks.some((r) => r.id === id)) return;
+    setFilters({ ...NO_FILTERS, rackId: id });
+    setSelectedSlotId(null);
+    setPreset(null);
+    setTimeout(() => api.current?.focusRack(id), 80);
+  }, [allRacks]);
 
   const pickPreset = (p: CameraPreset) => { setPreset(p); api.current?.preset(p); };
   // ⟲ in the scene: back to the start view and out of any rack / zone focus (other filters stay).
@@ -347,7 +364,8 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   const filterBar = (
     <FilterBar warehouses={warehouses} wh={wh} onWarehouse={onSelectWarehouse}
       slots={slotIndex} zones={zones} zoneRacks={zoneRacks}
-      filters={filters} onFilters={setFilters} onPickSlot={goToSlot} onReset={resetAll} />
+      filters={filters} onFilters={setFilters} onPickSlot={goToSlot} onReset={resetAll}
+      racks={allRacks} onPickRack={searchRack} />
   );
   // Overlays at the top of the stage start below the floating bar; the camera keeps that band free too.
   const overlayTop = barInScene ? barH + 20 : 12;
@@ -389,8 +407,9 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
                 flagged={flagged}
                 topInset={topInset}
                 selectedSlotId={selectedSlotId}
+                focusRackId={filters.rackId !== ALL ? filters.rackId : null}
                 onSelectSlot={selectSlot}
-                onSelectRack={selectRack}
+                onSelectRack={openRack}
                 onSelectZone={selectZone}
                 apiRef={api}
                 onCamera={setCamera}
@@ -426,6 +445,15 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
         </div>
 
         <div className="xl:sticky xl:top-4">
+          {!selected && focusedRack ? (
+            <RackPanel
+              rack={focusedRack}
+              onClose={() => setFilters((f) => ({ ...f, rackId: ALL }))}
+              onZoom={() => { setPreset(null); api.current?.focusRack(focusedRack.id); }}
+              onShowAll={resetView}
+              onPickSlot={goToSlot}
+            />
+          ) : (
           <LocationDetails
             wh={wh}
             rack={selected?.rack ?? null}
@@ -445,7 +473,9 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
             onFocusRack={() => { setPreset(null); api.current?.focusSelectedRack(); }}
             onViewStock={onViewStock}
             onGoSlot={goToSlot}
+            onOpenRack={selected ? () => openRack(selected.rack.id) : undefined}
           />
+          )}
         </div>
       </div>
 
