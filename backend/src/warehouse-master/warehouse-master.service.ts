@@ -6,13 +6,14 @@ import {
   RackCategory, addSlots, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType,
   planCapacity, planSlotCodes, rackCategory, simulate, slotSize, SlotCounts, WarehouseSpaceSummary,
   rackSpaceRow, RackSpaceRow, STORAGE_BUCKETS, StorageSlots, addStorageSlot, emptyStorageSlots,
-  SimLineInput, SimulationResult, CapacityPlan, PlannedSlot,
+  SimLineInput, SimulationResult, CapacityPlan, PlannedSlot, warehouseArea,
 } from './space-math';
 import type {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
   CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto, SetupRacksDto,
 } from './warehouse-master.dto';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
+import { bbox, normalizeOutline, validateOutline, type FloorOutline, type Pt, type ShapeKind } from './floor-geometry';
 
 // Stock statuses that count as "active inventory" occupying a location.
 const ACTIVE_STOCK = ['AVAILABLE', 'RESERVED', 'PICKED', 'QUARANTINE', 'PENDING_INSPECTION', 'RTV_PENDING'] as const;
@@ -362,10 +363,13 @@ export class WarehouseMasterService {
     const code = dto.code.trim();
     const exists = await this.prisma.warehouse.findUnique({ where: { code } });
     if (exists) throw new ConflictException(`Warehouse code "${code}" already exists`);
+    const shape = dto.floorOutline ? prepareOutline(dto.floorOutline) : null;
     const wh = await this.prisma.warehouse.create({
       data: {
         code, name: dto.name.trim(), location: trimOrNull(dto.location),
         ...pick(dto, [...SIZE_KEYS, 'usableAreaPct'] as const),
+        // A shape sets length × width to its outer box, so every old screen still has a size.
+        ...(shape ? { floorOutline: shape.outline as unknown as Prisma.InputJsonValue, lengthCm: shape.lengthCm, widthCm: shape.widthCm } : {}),
       },
     });
     await this.audit(userId, 'WAREHOUSE_CREATED', 'Warehouse', wh.id, null, wh);
@@ -378,6 +382,23 @@ export class WarehouseMasterService {
     const data: Prisma.WarehouseUpdateInput = { ...pick(dto, [...SIZE_KEYS, 'usableAreaPct'] as const) };
     if (dto.name !== undefined) { if (!dto.name.trim()) throw new ConflictException('Warehouse name cannot be empty'); data.name = dto.name.trim(); }
     if (dto.location !== undefined) data.location = trimOrNull(dto.location);
+    if (dto.floorOutline !== undefined) {
+      if (dto.floorOutline === null) data.floorOutline = Prisma.DbNull; // back to a plain rectangle
+      else {
+        const shape = prepareOutline(dto.floorOutline);
+        Object.assign(data, { floorOutline: shape.outline as unknown as Prisma.InputJsonValue, lengthCm: shape.lengthCm, widthCm: shape.widthCm });
+      }
+    } else if (before.floorOutline != null) {
+      // The saved shape owns length × width; a different size alone would not match it.
+      const differs = (k: 'lengthCm' | 'widthCm') => {
+        const v = dto[k], b = before[k];
+        if (v === undefined) return false;
+        return v == null || b == null ? v !== b : Math.abs(v - b) > 0.5;
+      };
+      if (differs('lengthCm') || differs('widthCm')) {
+        throw new BadRequestException({ code: 'FLOOR_SHAPE_SET', message: 'This warehouse has a floor shape. Change the shape (or set it back to a rectangle) to change its length or width.' });
+      }
+    }
     const after = await this.prisma.warehouse.update({ where: { id }, data });
     await this.audit(userId, 'WAREHOUSE_UPDATED', 'Warehouse', id, before, after);
     return after;
@@ -609,7 +630,8 @@ export class WarehouseMasterService {
     const usedFootprintM2 = round2(existing.filter((r) => !r.isDeleted).reduce((a, r) => {
       const s = effectiveRackSize(r as any); return a + m2(s.lengthCm, s.widthCm);
     }, 0));
-    const usableAreaM2 = wh.lengthCm && wh.widthCm ? round2(m2(wh.lengthCm, wh.widthCm) * ((wh.usableAreaPct ?? 100) / 100)) : null;
+    // Same rule as the space summary: real floor shape when set (D3), else length × width.
+    const usableAreaM2 = warehouseArea(wh).usableAreaM2;
     const warnings: string[] = [];
     if (usableAreaM2 == null) warnings.push('NO_WAREHOUSE_SIZE');
     else if (usedFootprintM2 + newFootprintM2 > usableAreaM2) warnings.push('OVER_AREA');
@@ -742,4 +764,45 @@ export class WarehouseMasterService {
     };
     return preview ? run(this.prisma as unknown as Prisma.TransactionClient) : this.prisma.$transaction(run);
   }
+}
+
+// ── Floor shape (migration 33) ──────────────────────────────────────────────────
+const SHAPES: ShapeKind[] = ['RECT', 'L', 'U', 'T', 'CUSTOM'];
+const MAX_FLOOR_M = 2000; // 2 km per side: anything bigger is a typing mistake
+const r3 = (n: number) => Math.round(n * 1000) / 1000; // keep millimetres
+
+/**
+ * Checks a floor shape from the client and returns what is stored:
+ * points cleaned, moved so the outer box starts at (0, 0), in metres (mm precision),
+ * plus length × width in cm from the outer box.
+ */
+export function prepareOutline(raw: Record<string, unknown>): { outline: FloorOutline; lengthCm: number; widthCm: number } {
+  const bad = (code: string, message: string) => new BadRequestException({ code, message });
+  if (raw.version !== undefined && raw.version !== 1) throw bad('FLOOR_SHAPE_INVALID', 'Unsupported floor shape version');
+  if (raw.unit !== undefined && raw.unit !== 'm') throw bad('FLOOR_SHAPE_INVALID', 'Floor shape points must be in metres');
+  const shape = (raw.shape ?? 'CUSTOM') as ShapeKind;
+  if (!SHAPES.includes(shape)) throw bad('FLOOR_SHAPE_INVALID', `Unknown floor shape "${String(raw.shape)}"`);
+  const errs = validateOutline(raw.points);
+  if (errs.length) throw bad('FLOOR_SHAPE_INVALID', `Floor shape is not valid: ${errs.join(', ')}`);
+  const pts = normalizeOutline(raw.points as Pt[]);
+  const box = bbox(pts);
+  if (box.length > MAX_FLOOR_M || box.width > MAX_FLOOR_M) throw bad('FLOOR_SHAPE_INVALID', `Floor shape is larger than ${MAX_FLOOR_M} m`);
+  const points = pts.map(([x, z]) => [r3(x - box.minX), r3(z - box.minZ)] as Pt);
+  // Rounding to mm must not break the shape.
+  const again = validateOutline(points);
+  if (again.length) throw bad('FLOOR_SHAPE_INVALID', `Floor shape is not valid: ${again.join(', ')}`);
+  let params: Record<string, number | string> | undefined;
+  if (raw.params != null) {
+    if (typeof raw.params !== 'object' || Array.isArray(raw.params)) throw bad('FLOOR_SHAPE_INVALID', 'Floor shape params must be an object');
+    params = {};
+    for (const [k, v] of Object.entries(raw.params as Record<string, unknown>).slice(0, 20)) {
+      if (typeof v === 'number' && Number.isFinite(v)) params[k.slice(0, 40)] = v;
+      else if (typeof v === 'string') params[k.slice(0, 40)] = v.slice(0, 40);
+    }
+  }
+  return {
+    outline: { version: 1, unit: 'm', shape, points, ...(params ? { params } : {}) },
+    lengthCm: Math.round(box.length * 100 * 10) / 10,
+    widthCm: Math.round(box.width * 100 * 10) / 10,
+  };
 }

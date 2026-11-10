@@ -13,6 +13,8 @@ import { labelOf, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Field, ModalWrap, isPos, optNum, rackCategoryOf, selectClass } from './shared';
 import { type SizeCm, type SizeWarning, rackSizeWarnings, warehouseSizeWarnings, rackBiggerThanWarehouse } from './size-rules';
+import { FloorShapeField, initialShapeState, shapeResult, shapeTemplate, type ShapeState } from './floor-shape-field';
+import { outlineFromTemplate, validateOutline, normalizeOutline, polygonArea, type Pt } from '@/components/warehouse-layout/floor-geometry';
 
 const str = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(v));
 /** cm (stored) → metres text for the warehouse form. */
@@ -48,9 +50,16 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
   });
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
+  // F2 floor shape. A saved shape not made by this form (CUSTOM) is kept as is.
+  const [shape, setShape] = useState<ShapeState>(() => initialShapeState(data?.floorOutline));
+  const savedPoints: Pt[] | null = data?.floorOutline && validateOutline(data.floorOutline.points).length === 0
+    ? normalizeOutline(data.floorOutline.points) : null;
 
   const L = optNum(form.lengthM), W = optNum(form.widthM), H = optNum(form.heightM), P = optNum(form.usableAreaPct) ?? 100;
-  const area = L && W && L > 0 && W > 0 ? L * W : null;
+  const shaped = shape.shape === 'CUSTOM'
+    ? { area: savedPoints ? polygonArea(savedPoints) : null, errors: [] }
+    : shapeResult(shape, L, W);
+  const area = shaped.area;
   const computed = area != null
     ? t(w.computed, { area: fmt.number(area), usable: fmt.number((area * Math.min(100, Math.max(0, P))) / 100), volume: H && H > 0 ? fmt.number(area * H) : '—' })
     : w.computedNone;
@@ -63,7 +72,15 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
     if (pctRaw !== undefined && !(pctRaw > 0 && pctRaw <= 100)) return toast.error(w.pctRange);
     // Blank sizes: omitted on create, cleared (null) on edit.
     const blank = mode === 'create' ? undefined : null;
-    const sizes = { lengthCm: mToCm(L) ?? blank, widthCm: mToCm(W) ?? blank, heightCm: mToCm(H) ?? blank, usableAreaPct: pctRaw ?? 100 };
+    const sizes: Record<string, unknown> = { lengthCm: mToCm(L) ?? blank, widthCm: mToCm(W) ?? blank, heightCm: mToCm(H) ?? blank, usableAreaPct: pctRaw ?? 100 };
+    // Floor shape: L/U/T → send the outline (the API sets length × width from it);
+    // Rectangle → clear a saved shape; CUSTOM → leave the saved shape and its size alone.
+    const tpl = shapeTemplate(shape, L, W);
+    if (tpl) {
+      if (shaped.errors.length) return toast.error(m.warehouseMaster.floorShape.fixShape);
+      sizes.floorOutline = outlineFromTemplate(tpl);
+    } else if (shape.shape === 'RECT' && mode === 'edit' && data?.floorOutline) sizes.floorOutline = null;
+    else if (shape.shape === 'CUSTOM') { delete sizes.lengthCm; delete sizes.widthCm; }
     setBusy(true);
     try {
       if (mode === 'create') await warehouseSpaceApi.createWarehouse({ code: form.code.trim(), name: form.name.trim(), location: form.location.trim() || undefined, ...sizes });
@@ -83,12 +100,13 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{w.sizeSectionM}</p>
           <p className="mb-2 text-xs text-slate-400">{w.sizeSectionMHint}</p>
           <div className="grid grid-cols-3 gap-3">
-            <Field label={w.lengthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="40" value={form.lengthM} onChange={F('lengthM')} /></Field>
-            <Field label={w.widthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="25" value={form.widthM} onChange={F('widthM')} /></Field>
+            <Field label={w.lengthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="40" value={form.lengthM} onChange={F('lengthM')} disabled={shape.shape === 'CUSTOM'} title={shape.shape === 'CUSTOM' ? m.warehouseMaster.floorShape.shapeOwnsSize : undefined} /></Field>
+            <Field label={w.widthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="25" value={form.widthM} onChange={F('widthM')} disabled={shape.shape === 'CUSTOM'} title={shape.shape === 'CUSTOM' ? m.warehouseMaster.floorShape.shapeOwnsSize : undefined} /></Field>
             <Field label={w.heightM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="8" value={form.heightM} onChange={F('heightM')} /></Field>
           </div>
           <SizeWarnings warnings={warehouseSizeWarnings({ lengthCm: mToCm(L), widthCm: mToCm(W), heightCm: mToCm(H) })} />
         </div>
+        <FloorShapeField value={shape} onChange={setShape} length={L} width={W} customPoints={savedPoints} />
         <Field label={w.usablePct} hint={w.usablePctHint}>
           <Input type="number" min={1} max={100} step="any" inputMode="decimal" value={form.usableAreaPct} onChange={F('usableAreaPct')} className="max-w-[140px]" />
         </Field>
