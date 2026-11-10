@@ -46,6 +46,7 @@ const MANAGER_WRITES: Array<[string, string, Record<string, unknown>]> = [
   ['patch', '/warehouse-master/slots/bulk', { ids: ['s1', 's2'], changes: { capacity: 2 } }],
   ['delete', '/warehouse-master/slots/s1', {}],
   ['post', '/warehouse-master/slots/bulk-delete', { ids: ['s1', 's2'] }],
+  ['post', '/warehouse-master/warehouses/w1/setup-racks', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }], preview: true }],
 ];
 const READS = [
   '/warehouse-master', '/warehouse-master/summary', '/warehouse-master/space-summary',
@@ -153,6 +154,18 @@ describe('WarehouseMasterController (HTTP)', () => {
       await send('post', '/warehouse-master/slots/bulk-delete', { ids: [] }).expect(400);
       await send('post', '/warehouse-master/slots/bulk-delete', { ids: [1, 2] }).expect(400);
       await send('post', '/warehouse-master/slots/bulk-delete', { ids: ['a'], force: true }).expect(400);
+    });
+    it('rejects setup with bad zone names, rack counts or unknown fields', async () => {
+      const url = '/warehouse-master/warehouses/w1/setup-racks';
+      await send('post', url, { rackTypeId: 't1', zones: [] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A B', racks: 1 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 0 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 100 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 1 }], levels: 9 }).expect(400);
+    });
+    it('setup passes the warehouse id, body and caller scope', async () => {
+      await send('post', '/warehouse-master/warehouses/w1/setup-racks', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }] }).expect(200);
+      expect(service.setupRacks).toHaveBeenCalledWith('w1', expect.objectContaining({ rackTypeId: 't1' }), 'u1', expect.objectContaining({ warehouseIds: ['w1'] }));
     });
     it('rejects an unknown simulator mode', async () => {
       await send('post', '/warehouse-master/space-simulate', { mode: 'BOOK' }).expect(400);

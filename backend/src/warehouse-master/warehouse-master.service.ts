@@ -10,7 +10,7 @@ import {
 } from './space-math';
 import type {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
-  CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto,
+  CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto, SetupRacksDto,
 } from './warehouse-master.dto';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 
@@ -22,6 +22,31 @@ const STOCK_NOW = { status: { notIn: NOT_IN_LOCATION } } satisfies Prisma.StockI
 /** A live slot with nothing in it now - the guard on every slot delete write. */
 const DELETABLE = { isDeleted: false, stockItems: { none: STOCK_NOW } } satisfies Prisma.SlotWhereInput;
 const slotDeleted = (userId: string) => ({ isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId });
+
+/** Racks the setup wizard creates in one go (zones × racks, slots from the Rack Type grid). */
+export interface SetupRacksResult {
+  warehouseId: string;
+  rackType: { id: string; code: string; name: string; category: string; lengthCm: number; widthCm: number; heightCm: number; levels: number; columns: number };
+  racks: { code: string; zone: string }[];
+  slotsPerRack: number;
+  totalRacks: number;
+  totalSlots: number;
+  /** Floor taken by the new racks (m²). */
+  newFootprintM2: number;
+  /** Floor already taken by the warehouse's racks (m², racks with a known size). */
+  usedFootprintM2: number;
+  /** Usable floor (m²) = length × width × usable %; null when the size is not entered. */
+  usableAreaM2: number | null;
+  /** NO_WAREHOUSE_SIZE | OVER_AREA (warn only, G4). */
+  warnings: string[];
+  preview: boolean;
+  created: number;
+}
+
+/** Most racks one setup call may create (keeps the transaction short). */
+const SETUP_MAX_RACKS = 500;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export interface BulkDeleteSlotsResult {
   /** Deleted (in preview: would be deleted). */
@@ -526,6 +551,102 @@ export class WarehouseMasterService {
         { levels: dto.levels, columns: dto.columns, created: res.count, codes: missing.map((p) => p.code) }, tx);
       return res.count;
     });
+    return { ...result, created };
+  }
+
+  // ── Setup wizard ────────────────────────────────────────────────────────────
+  /**
+   * Plans (preview) or creates racks for whole zones in one transaction: rack
+   * codes `<Zone>-R<nn>` continue after the zone's highest existing number, each
+   * rack takes the Rack Type (size, levels × columns) and gets its slots right
+   * away. Nothing is half-created: any failure rolls everything back.
+   */
+  async setupRacks(warehouseId: string, dto: SetupRacksDto, userId: string, scope?: ScopePrincipal): Promise<SetupRacksResult> {
+    assertWarehouseAccess(scope, warehouseId, 'this warehouse');
+    const wh = await this.prisma.warehouse.findFirst({ where: { id: warehouseId, isDeleted: false } });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+    const type = await this.prisma.rackTypeMaster.findUnique({ where: { id: dto.rackTypeId } });
+    if (!type || !type.isActive) throw new NotFoundException('Rack type not found or inactive');
+
+    const zones = dto.zones.map((z) => ({ name: z.name.trim(), racks: z.racks }));
+    const seen = new Set<string>();
+    for (const z of zones) {
+      const k = z.name.toUpperCase();
+      if (seen.has(k)) throw new BadRequestException(`Zone "${z.name}" is listed twice`);
+      seen.add(k);
+    }
+    const totalRacks = zones.reduce((a, z) => a + z.racks, 0);
+    if (totalRacks > SETUP_MAX_RACKS) throw new BadRequestException(`At most ${SETUP_MAX_RACKS} racks at a time`);
+
+    // Rack codes: continue after the highest <Zone>-R<nn> already in this warehouse
+    // (deleted racks too — their code still holds the unique key).
+    const existing = await this.prisma.rack.findMany({
+      where: { warehouseId },
+      select: { code: true, isDeleted: true, lengthCm: true, widthCm: true, heightCm: true, rackType: true, rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } } },
+    });
+    const taken = new Set(existing.map((r) => r.code.toUpperCase()));
+    const racks: { code: string; zone: string }[] = [];
+    for (const z of zones) {
+      const re = new RegExp(`^${z.name.replace(/[-]/g, '\\-')}-R(\\d+)$`, 'i');
+      let n = existing.reduce((mx, r) => { const m = re.exec(r.code); return m ? Math.max(mx, Number(m[1])) : mx; }, 0);
+      for (let i = 0; i < z.racks; i++) {
+        let code: string;
+        do { n += 1; code = `${z.name}-R${pad2(n)}`; } while (taken.has(code.toUpperCase()));
+        taken.add(code.toUpperCase());
+        racks.push({ code, zone: z.name });
+      }
+    }
+
+    const levels = Math.max(1, type.levels), columns = Math.max(1, type.columns);
+    const planned = planSlotCodes('X', levels, columns, []); // same grid for every rack
+    const size = { lengthCm: type.lengthCm, widthCm: type.widthCm, heightCm: type.heightCm };
+    const slot = slotSize(size, levels, columns);
+    const category = type.category === 'PALLET_ON_FLOOR' ? 'PALLET_ON_FLOOR' : 'STANDARD_RACK';
+    const slotType = category === 'PALLET_ON_FLOOR' ? SlotType.PALLET : SlotType.STANDARD;
+
+    const m2 = (l: number | null, w: number | null) => (l && w ? (l * w) / 10_000 : 0);
+    const newFootprintM2 = round2(racks.length * m2(type.lengthCm, type.widthCm));
+    const usedFootprintM2 = round2(existing.filter((r) => !r.isDeleted).reduce((a, r) => {
+      const s = effectiveRackSize(r as any); return a + m2(s.lengthCm, s.widthCm);
+    }, 0));
+    const usableAreaM2 = wh.lengthCm && wh.widthCm ? round2(m2(wh.lengthCm, wh.widthCm) * ((wh.usableAreaPct ?? 100) / 100)) : null;
+    const warnings: string[] = [];
+    if (usableAreaM2 == null) warnings.push('NO_WAREHOUSE_SIZE');
+    else if (usedFootprintM2 + newFootprintM2 > usableAreaM2) warnings.push('OVER_AREA');
+
+    const result: SetupRacksResult = {
+      warehouseId,
+      rackType: { id: type.id, code: type.code, name: type.name, category, lengthCm: type.lengthCm, widthCm: type.widthCm, heightCm: type.heightCm, levels, columns },
+      racks, slotsPerRack: planned.length, totalRacks: racks.length, totalSlots: racks.length * planned.length,
+      newFootprintM2, usedFootprintM2, usableAreaM2, warnings, preview: !!dto.preview, created: 0,
+    };
+    if (dto.preview) return result;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const r of racks) {
+        // Rack own size stays empty: it follows the Rack Type (one size rule, G5).
+        const rack = await tx.rack.create({
+          data: {
+            warehouseId, code: r.code, zone: r.zone, levels, columns,
+            rackTypeId: type.id, rackType: legacyRackType(category) as RackType,
+            capacity: planned.length * Math.max(1, type.slotCapacity),
+          },
+          select: { id: true, code: true },
+        });
+        ids.push(rack.id);
+        await tx.slot.createMany({
+          data: planSlotCodes(rack.code, levels, columns, []).map((p) => ({
+            rackId: rack.id, code: p.code, level: p.level, column: p.column, slotType, capacity: type.slotCapacity,
+            lengthCm: slot.lengthCm, widthCm: slot.widthCm, heightCm: slot.heightCm,
+          })),
+        });
+      }
+      await this.audit(userId, 'RACKS_SETUP', 'Warehouse', warehouseId, null, {
+        rackTypeId: type.id, rackType: type.code, zones, rackIds: ids, codes: racks.map((r) => r.code), slots: racks.length * planned.length,
+      }, tx);
+      return ids.length;
+    }, { timeout: 60_000 });
     return { ...result, created };
   }
 

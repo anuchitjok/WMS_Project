@@ -8,7 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
-  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, BulkDeleteSlotsDto, GenerateSlotsDto, SpaceSimulateDto,
+  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, BulkDeleteSlotsDto, SetupRacksDto, GenerateSlotsDto, SpaceSimulateDto,
 } from './warehouse-master.dto';
 
 // Plan P1 1.7 (legacy role enum, as the sidebar uses):
@@ -102,6 +102,13 @@ export class WarehouseMasterController {
 
   @Delete('racks/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   deleteRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deleteRack(id, userId); }
+
+  // Setup wizard: preview or create whole zones of racks + slots in one transaction.
+  @Post('warehouses/:id/setup-racks') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Create racks for zones from a Rack Type, with their slots (preview: true = plan only)' })
+  setupRacks(@Param('id') id: string, @Body() dto: SetupRacksDto, @CurrentUser() user: any) {
+    return this.service.setupRacks(id, dto, user.id, user);
+  }
 
   @Post('racks/:id/generate-slots') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   @ApiOperation({ summary: 'Preview or create <Rack>-<LL>-<CC> slots; existing slots are skipped' })

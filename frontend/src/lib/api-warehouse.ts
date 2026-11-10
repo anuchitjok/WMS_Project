@@ -211,9 +211,28 @@ export const warehouseSpaceApi = {
     request<GenerateSlotsResult>(`/warehouse-master/racks/${rackId}/generate-slots`, json('POST', { levels, columns, preview })),
   updateSlot: (id: string, dto: SlotChanges & { name?: string | null }) => request<any>(`/warehouse-master/slots/${id}`, json('PATCH', dto)),
   bulkUpdateSlots: (ids: string[], changes: SlotChanges) => request<{ updated: number }>('/warehouse-master/slots/bulk', json('PATCH', { ids, changes })),
+  /** Setup wizard: preview or create whole zones of racks + slots (one transaction). */
+  setupRacks: (warehouseId: string, body: { rackTypeId: string; zones: { name: string; racks: number }[]; preview?: boolean }) =>
+    request<SetupRacksResult>(`/warehouse-master/warehouses/${encodeURIComponent(warehouseId)}/setup-racks`, json('POST', body)),
   /** Soft delete; slots with stock in them now are skipped and listed. preview = report only. */
   bulkDeleteSlots: (ids: string[], preview: boolean) => request<BulkDeleteSlotsResult>('/warehouse-master/slots/bulk-delete', json('POST', { ids, preview })),
 };
+
+export interface SetupRacksResult {
+  warehouseId: string;
+  rackType: { id: string; code: string; name: string; category: RackCategory; lengthCm: number; widthCm: number; heightCm: number; levels: number; columns: number };
+  racks: { code: string; zone: string }[];
+  slotsPerRack: number;
+  totalRacks: number;
+  totalSlots: number;
+  newFootprintM2: number;
+  usedFootprintM2: number;
+  usableAreaM2: number | null;
+  /** NO_WAREHOUSE_SIZE | OVER_AREA — warn only */
+  warnings: string[];
+  preview: boolean;
+  created: number;
+}
 
 export interface BulkDeleteSlotsResult {
   deleted: { id: string; code: string }[];

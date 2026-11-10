@@ -24,12 +24,14 @@ import { RackDetail } from '@/components/warehouse-master/rack-detail';
 import { RackTypesTab } from '@/components/warehouse-master/rack-types-tab';
 import { SpaceSimulator } from '@/components/warehouse-master/space-simulator';
 import { DeleteRackDialog, RackForm, WarehouseForm } from '@/components/warehouse-master/forms';
+import { SetupWizard } from '@/components/warehouse-master/setup-wizard';
 
 type Tab = 'structure' | 'rack-types' | 'simulator';
 const TABS: Tab[] = ['structure', 'rack-types', 'simulator'];
 
 type Modal =
   | { kind: 'wh'; mode: 'create' | 'edit'; data?: any }
+  | { kind: 'setup'; warehouseId: string }
   | { kind: 'rack'; mode: 'create' | 'edit'; warehouseId?: string; data?: any; templateId?: string }
   | { kind: 'deleteRack'; id: string; code: string }
   | null;
@@ -179,6 +181,7 @@ function WarehouseMasterInner() {
                   onEdit={() => setModal({ kind: 'wh', mode: 'edit', data: selWarehouse })}
                   onToggleActive={() => toggleActive(selWarehouse)}
                   onAddRack={(templateId) => setModal({ kind: 'rack', mode: 'create', warehouseId: selWarehouse.id, templateId })}
+                  onSetup={() => setModal({ kind: 'setup', warehouseId: selWarehouse.id })}
                   onSelectRack={(id) => setSelection({ type: 'rack', id, warehouseId: selWarehouse.id })}
                 />
               ) : (
@@ -202,6 +205,10 @@ function WarehouseMasterInner() {
         <RackForm mode={modal.mode} warehouseId={modal.warehouseId} data={modal.data} rackTypes={rackTypes} prefillTemplateId={modal.templateId}
           warehouse={tree.find((w) => w.id === (modal.warehouseId ?? modal.data?.warehouseId)) ?? null}
           onClose={() => setModal(null)} onSaved={afterSave} />
+      )}
+      {modal?.kind === 'setup' && tree.find((w) => w.id === modal.warehouseId) && (
+        <SetupWizard warehouse={tree.find((w) => w.id === modal.warehouseId)} rackTypes={rackTypes} isAdmin={isAdmin}
+          onClose={() => setModal(null)} onDone={async () => { setModal(null); await load(); }} />
       )}
       {modal?.kind === 'deleteRack' && (
         <DeleteRackDialog id={modal.id} code={modal.code} onClose={() => setModal(null)}

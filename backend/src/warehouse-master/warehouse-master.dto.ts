@@ -1,6 +1,6 @@
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional,
-  IsPositive, IsString, Max, MaxLength, Min, ValidateNested, IsEnum,
+  IsPositive, IsString, Max, MaxLength, Min, ValidateNested, IsEnum, Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -113,6 +113,23 @@ export class BulkUpdateSlotsDto {
 export class BulkDeleteSlotsDto {
   @ApiProperty({ type: [String] }) @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MAX_GRID * MAX_GRID) @IsString({ each: true }) ids: string[];
   @ApiPropertyOptional({ description: 'true = only report what would be deleted' }) @IsOptional() @IsBoolean() preview?: boolean;
+}
+
+// ── Setup wizard: many racks (+ their slots) in one go ───────────────────────
+export const SETUP_MAX_ZONES = 26;
+export const SETUP_MAX_RACKS_PER_ZONE = 99;
+
+export class SetupZoneDto {
+  @ApiProperty({ description: 'Zone name, also the rack code prefix (letters, digits, dash)' })
+  @IsString() @IsNotEmpty() @MaxLength(20) @Matches(/^[A-Za-z0-9][A-Za-z0-9-]*$/) name: string;
+  @ApiProperty() @IsInt() @Min(1) @Max(SETUP_MAX_RACKS_PER_ZONE) racks: number;
+}
+
+export class SetupRacksDto {
+  @ApiProperty() @IsString() @IsNotEmpty() rackTypeId: string;
+  @ApiProperty({ type: [SetupZoneDto] }) @IsArray() @ArrayMinSize(1) @ArrayMaxSize(SETUP_MAX_ZONES)
+  @ValidateNested({ each: true }) @Type(() => SetupZoneDto) zones: SetupZoneDto[];
+  @ApiPropertyOptional({ description: 'true = only plan, nothing is written' }) @IsOptional() @IsBoolean() preview?: boolean;
 }
 
 export class GenerateSlotsDto {
