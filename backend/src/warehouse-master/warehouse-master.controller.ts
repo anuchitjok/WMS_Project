@@ -8,7 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
-  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, GenerateSlotsDto, SpaceSimulateDto,
+  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, BulkDeleteSlotsDto, GenerateSlotsDto, SpaceSimulateDto,
 } from './warehouse-master.dto';
 
 // Plan P1 1.7 (legacy role enum, as the sidebar uses):
@@ -121,11 +121,18 @@ export class WarehouseMasterController {
     return this.service.bulkUpdateSlots(dto.ids, dto.changes, userId);
   }
 
+  // Soft deletes slots with no stock in them now (G3); the others are listed, not deleted.
+  @Post('slots/bulk-delete') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Delete many slots; slots holding stock now are skipped (preview: true = report only)' })
+  bulkDeleteSlots(@Body() dto: BulkDeleteSlotsDto, @CurrentUser() user: any) {
+    return this.service.bulkDeleteSlots(dto.ids, user.id, dto.preview === true, user);
+  }
+
   @Patch('slots/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   updateSlot(@Param('id') id: string, @Body() dto: UpdateSlotDto, @CurrentUser('id') userId: string) {
     return this.service.updateSlot(id, dto, userId);
   }
 
   @Delete('slots/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
-  deleteSlot(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deleteSlot(id, userId); }
+  deleteSlot(@Param('id') id: string, @CurrentUser() user: any) { return this.service.deleteSlot(id, user.id, user); }
 }

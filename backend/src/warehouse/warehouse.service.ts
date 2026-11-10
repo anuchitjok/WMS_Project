@@ -39,7 +39,7 @@ export class WarehouseService {
           include: {
             slots: this.slotInclude,
             rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } },
-            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
+            _count: { select: { slots: { where: { isActive: true } }, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },
@@ -60,7 +60,7 @@ export class WarehouseService {
           include: {
             slots: this.slotInclude,
             rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } },
-            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
+            _count: { select: { slots: { where: { isActive: true } }, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },

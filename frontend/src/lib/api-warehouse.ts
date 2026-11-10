@@ -211,4 +211,13 @@ export const warehouseSpaceApi = {
     request<GenerateSlotsResult>(`/warehouse-master/racks/${rackId}/generate-slots`, json('POST', { levels, columns, preview })),
   updateSlot: (id: string, dto: SlotChanges & { name?: string | null }) => request<any>(`/warehouse-master/slots/${id}`, json('PATCH', dto)),
   bulkUpdateSlots: (ids: string[], changes: SlotChanges) => request<{ updated: number }>('/warehouse-master/slots/bulk', json('PATCH', { ids, changes })),
+  /** Soft delete; slots with stock in them now are skipped and listed. preview = report only. */
+  bulkDeleteSlots: (ids: string[], preview: boolean) => request<BulkDeleteSlotsResult>('/warehouse-master/slots/bulk-delete', json('POST', { ids, preview })),
 };
+
+export interface BulkDeleteSlotsResult {
+  deleted: { id: string; code: string }[];
+  blocked: { id: string; code: string; stock: number }[];
+  notFound: string[];
+  preview: boolean;
+}

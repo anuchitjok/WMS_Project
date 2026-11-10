@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, RackType, SlotType } from '@prisma/client';
-import { ScopePrincipal, warehouseFilter, scopedWarehouseIds } from '../common/warehouse-scope';
+import { ScopePrincipal, warehouseFilter, scopedWarehouseIds, assertWarehouseAccess } from '../common/warehouse-scope';
 import {
   RackCategory, addSlots, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType,
   planCapacity, planSlotCodes, rackCategory, simulate, slotSize, SlotCounts, WarehouseSpaceSummary,
@@ -12,10 +12,26 @@ import type {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
   CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto,
 } from './warehouse-master.dto';
-import { IN_LOCATION_COUNT } from '../common/stock-presence';
+import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 
 // Stock statuses that count as "active inventory" occupying a location.
 const ACTIVE_STOCK = ['AVAILABLE', 'RESERVED', 'PICKED', 'QUARANTINE', 'PENDING_INSPECTION', 'RTV_PENDING'] as const;
+
+/** Stock in a location now (same rule as occupancy: common/stock-presence). */
+const STOCK_NOW = { status: { notIn: NOT_IN_LOCATION } } satisfies Prisma.StockItemWhereInput;
+/** A live slot with nothing in it now - the guard on every slot delete write. */
+const DELETABLE = { isDeleted: false, stockItems: { none: STOCK_NOW } } satisfies Prisma.SlotWhereInput;
+const slotDeleted = (userId: string) => ({ isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId });
+
+export interface BulkDeleteSlotsResult {
+  /** Deleted (in preview: would be deleted). */
+  deleted: { id: string; code: string }[];
+  /** Not deleted: stock is in the slot now. */
+  blocked: { id: string; code: string; stock: number }[];
+  /** Unknown or already deleted ids. */
+  notFound: string[];
+  preview: boolean;
+}
 
 const SIZE_KEYS = ['lengthCm', 'widthCm', 'heightCm'] as const;
 const trimOrNull = (v: string | null | undefined) => (v == null ? null : v.trim() || null);
@@ -104,8 +120,9 @@ export class WarehouseMasterService {
           where: { isDeleted: false },
           include: {
             rackTypeMaster: true,
-            slots: { where: { isDeleted: false }, include: { _count: { select: { stockItems: true } } }, orderBy: [{ level: 'asc' }, { column: 'asc' }] },
-            _count: { select: { slots: true, stockItems: true } },
+            // Slot stock = stock in the slot now (shipped / consumed history does not count).
+            slots: { where: { isDeleted: false }, include: { _count: { select: { stockItems: IN_LOCATION_COUNT } } }, orderBy: [{ level: 'asc' }, { column: 'asc' }] },
+            _count: { select: { slots: { where: { isDeleted: false } }, stockItems: true } },
           },
           orderBy: { code: 'asc' },
         },
@@ -156,8 +173,12 @@ export class WarehouseMasterService {
     }
     const slot = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
     if (!slot) throw new NotFoundException('Slot not found');
-    const stock = await this.prisma.stockItem.count({ where: { slotId: id } });
-    return { entity, id, stock, canDelete: stock === 0 };
+    // G3: a slot can be deleted when nothing is in it now, even with past stock.
+    const [stock, history] = await Promise.all([
+      this.prisma.stockItem.count({ where: { slotId: id, ...STOCK_NOW } }),
+      this.prisma.stockItem.count({ where: { slotId: id } }),
+    ]);
+    return { entity, id, stock, history, canDelete: stock === 0 };
   }
 
   // ── Space summary (plan 1.5) — scoped to the caller's warehouses ─────────────
@@ -548,13 +569,56 @@ export class WarehouseMasterService {
     });
   }
 
-  async deleteSlot(id: string, userId: string) {
-    const before = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
-    if (!before) throw new NotFoundException('Slot not found');
-    const stock = await this.prisma.stockItem.count({ where: { slotId: id } });
-    if (stock > 0) throw new ConflictException(`Cannot delete: ${stock} stock item(s) occupy this slot`);
-    const after = await this.prisma.slot.update({ where: { id }, data: { isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId } });
-    await this.audit(userId, 'SLOT_DELETED', 'Slot', id, before, after);
-    return { success: true, id };
+  /**
+   * Soft delete (G3): allowed when no stock is in the slot now, even if stock
+   * passed through it before. The row stays, so stock history and reports keep
+   * the slot code; receiving / putaway refuse deleted slots (resolveLocation).
+   */
+  async deleteSlot(id: string, userId: string, scope?: ScopePrincipal) {
+    const found = await this.prisma.slot.findFirst({ where: { id, isDeleted: false }, include: { rack: { select: { warehouseId: true } } } });
+    if (!found) throw new NotFoundException('Slot not found');
+    assertWarehouseAccess(scope, found.rack.warehouseId, 'this location');
+    const { rack: _rack, ...before } = found;
+    const stock = await this.prisma.stockItem.count({ where: { slotId: id, ...STOCK_NOW } });
+    if (stock > 0) throw new ConflictException(`Cannot delete: ${stock} stock item(s) are in this slot now`);
+    return this.prisma.$transaction(async (tx) => {
+      // Guarded write: stock that arrived after the check above makes it a no-op.
+      const data = slotDeleted(userId);
+      const res = await tx.slot.updateMany({ where: { id, ...DELETABLE }, data });
+      if (res.count !== 1) throw new ConflictException('Stock was put in this slot meanwhile - nothing deleted');
+      await this.audit(userId, 'SLOT_DELETED', 'Slot', id, before, { ...before, ...data }, tx);
+      return { success: true, id };
+    });
+  }
+
+  /**
+   * Delete many slots at once (G3). Slots with stock in them now are skipped and
+   * listed with the reason; the rest are soft deleted in one transaction with
+   * one audit entry. `preview` only reports what would happen.
+   */
+  async bulkDeleteSlots(ids: string[], userId: string, preview = false, scope?: ScopePrincipal): Promise<BulkDeleteSlotsResult> {
+    const unique = [...new Set(ids)];
+    const run = async (db: Prisma.TransactionClient): Promise<BulkDeleteSlotsResult> => {
+      const slots = await db.slot.findMany({
+        where: { id: { in: unique }, isDeleted: false },
+        select: { id: true, code: true, rackId: true, rack: { select: { warehouseId: true } }, _count: { select: { stockItems: IN_LOCATION_COUNT } } },
+      });
+      // One slot outside the caller's warehouses refuses the whole request.
+      for (const s of slots) assertWarehouseAccess(scope, s.rack.warehouseId, `location ${s.code}`);
+      const found = new Set(slots.map((s) => s.id));
+      const notFound = unique.filter((id) => !found.has(id));
+      const blocked = slots.filter((s) => s._count.stockItems > 0).map((s) => ({ id: s.id, code: s.code, stock: s._count.stockItems }));
+      const deletable = slots.filter((s) => s._count.stockItems === 0).map((s) => ({ id: s.id, code: s.code }));
+      if (preview || !deletable.length) return { deleted: preview ? deletable : [], blocked, notFound, preview };
+      const res = await db.slot.updateMany({ where: { id: { in: deletable.map((d) => d.id) }, ...DELETABLE }, data: slotDeleted(userId) });
+      // Stock put away between the read and the write: undo everything (rollback).
+      if (res.count !== deletable.length) throw new ConflictException('Stock was put in some of these slots meanwhile - nothing deleted, please try again');
+      await this.audit(userId, 'SLOTS_BULK_DELETED', 'Slot', deletable[0].id, null, {
+        ids: deletable.map((d) => d.id), codes: deletable.map((d) => d.code),
+        rackIds: [...new Set(slots.map((s) => s.rackId))], blocked, notFound,
+      }, db);
+      return { deleted: deletable, blocked, notFound, preview };
+    };
+    return preview ? run(this.prisma as unknown as Prisma.TransactionClient) : this.prisma.$transaction(run);
   }
 }

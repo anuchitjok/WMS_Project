@@ -110,6 +110,11 @@ export class BulkUpdateSlotsDto {
   @ApiProperty({ type: BulkSlotChangesDto }) @ValidateNested() @Type(() => BulkSlotChangesDto) changes: BulkSlotChangesDto;
 }
 
+export class BulkDeleteSlotsDto {
+  @ApiProperty({ type: [String] }) @IsArray() @ArrayMinSize(1) @ArrayMaxSize(MAX_GRID * MAX_GRID) @IsString({ each: true }) ids: string[];
+  @ApiPropertyOptional({ description: 'true = only report what would be deleted' }) @IsOptional() @IsBoolean() preview?: boolean;
+}
+
 export class GenerateSlotsDto {
   @ApiProperty() @IsInt() @Min(1) @Max(MAX_GRID) levels: number;
   @ApiProperty() @IsInt() @Min(1) @Max(MAX_GRID) columns: number;
