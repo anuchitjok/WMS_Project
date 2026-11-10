@@ -82,7 +82,7 @@ const noRaycast = () => null;
  * hide what is in focus. Each instance lives in exactly one of the two meshes
  * (a near-zero scale hides it in the other).
  */
-function BoxInstances({ items, color, colors, ghost, onClick, onHover, roughness = 0.85, metalness = 0, opacity, hit }: {
+function BoxInstances({ items, color, colors, ghost, onClick, onHover, roughness = 0.85, metalness = 0, opacity, hit, castShadow = false, receiveShadow = false }: {
   items: BoxItem[]; color: string;
   /** Per-instance colour (same length as items). */
   colors?: string[];
@@ -93,6 +93,9 @@ function BoxInstances({ items, color, colors, ghost, onClick, onHover, roughness
   roughness?: number; metalness?: number; opacity?: number;
   /** Invisible pick target: raycastable, draws nothing. */
   hit?: boolean;
+  /** Drop a sun shadow (racks, pallets, cartons) / show shadows falling on it. */
+  castShadow?: boolean;
+  receiveShadow?: boolean;
 }) {
   const ref = useRef<THREE.InstancedMesh>(null);
   const ghostRef = useRef<THREE.InstancedMesh>(null);
@@ -145,6 +148,8 @@ function BoxInstances({ items, color, colors, ghost, onClick, onHover, roughness
         key={items.length}
         ref={ref}
         args={[UNIT_BOX, undefined, items.length]}
+        castShadow={castShadow && !hit && opacity == null}
+        receiveShadow={receiveShadow && !hit}
         onClick={onClick ? (e) => { e.stopPropagation(); if (e.instanceId != null) onClick(e.instanceId, e); } : undefined}
         onPointerMove={onHover ? (e) => { e.stopPropagation(); onHover(e.instanceId ?? null); } : undefined}
         onPointerOut={onHover ? () => onHover(null) : undefined}
@@ -453,12 +458,12 @@ function Areas({ areas }: { areas: AreaRect[] }) {
         const edge = 0.12;
         return (
           <group key={a.id} position={[a.cx, 0, a.cz]} rotation={[0, a.rotY, 0]}>
-            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]}>
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.004, 0]} receiveShadow>
               <planeGeometry args={[a.w, a.d]} />
               <meshStandardMaterial color={AREA_TINT[a.type]} roughness={0.95} />
             </mesh>
             {[[0, -hd, a.w, edge], [0, hd, a.w, edge], [-hw, 0, edge, a.d], [hw, 0, edge, a.d]].map(([x, z, sx, sz], i) => (
-              <mesh key={i} position={[x, 0.008, z]}>
+              <mesh key={i} position={[x, 0.008, z]} receiveShadow>
                 <boxGeometry args={[sx, 0.006, sz]} />
                 <meshStandardMaterial color={COLORS.line} roughness={0.7} />
               </mesh>
@@ -837,6 +842,43 @@ function LabelProjector({ labels, els, racks }: { labels: Label3D[]; els: RefObj
   return null;
 }
 
+// ─── Sun shadows ───────────────────────────────────────────────────────────────
+
+// Same sun as the mock-up: high and opposite the default camera, so shadows fall
+// beside the racks where they can be seen (not hidden behind them).
+const SUN_DIR = new THREE.Vector3(18, 30, 14).normalize();
+
+/**
+ * Key light that casts the real shadows of racks and stock on the floor (as in
+ * the design mock-up). The shadow box is fitted to the floor so shadows stay sharp
+ * on small floors and still cover big ones; the shadow map only re-renders with
+ * the scene (frameloop "demand").
+ */
+function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number; d: number }; maxY: number }) {
+  const ref = useRef<THREE.DirectionalLight>(null);
+  const r = Math.hypot(floor.w, floor.d) / 2 + 2;
+  const dist = r + Math.max(maxY, 6) + 20;
+  const mapSize = r > 60 ? 4096 : 2048;
+  useLayoutEffect(() => {
+    const l = ref.current;
+    if (!l) return;
+    l.target.position.set(floor.cx, 0, floor.cz);
+    l.target.updateMatrixWorld();
+    const cam = l.shadow.camera;
+    cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+    cam.near = 1; cam.far = dist + r + Math.max(maxY, 6);
+    cam.updateProjectionMatrix();
+    l.shadow.needsUpdate = true;
+  }, [floor.cx, floor.cz, r, dist, maxY]);
+  return (
+    <directionalLight ref={ref} castShadow intensity={1.7}
+      position={[floor.cx + SUN_DIR.x * dist, SUN_DIR.y * dist, floor.cz + SUN_DIR.z * dist]}
+      shadow-mapSize={[mapSize, mapSize]} shadow-bias={-0.0005} shadow-normalBias={0.02} shadow-radius={3}>
+      <object3D attach="target" />
+    </directionalLight>
+  );
+}
+
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
 function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, topInset = 0, selectedSlotId, onSelectSlot, apiRef, onCamera, onUserCamera, labels, labelEls, zoneNames }: Scene3DProps & {
@@ -928,63 +970,71 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
       <color attach="background" args={[bg]} />
       {/* Light fog: far parts of a big floor fade into the background. */}
       <fog attach="fog" args={[bg, span * 1.6 + 20, span * 4 + 60]} />
-      <hemisphereLight args={['#ffffff', '#c7ccd1', 1.05]} />
-      <directionalLight position={[f.cx - 30, 45, f.cz + 35]} intensity={1.5} />
-      <directionalLight position={[f.cx + 30, 25, f.cz - 25]} intensity={0.45} />
+      <hemisphereLight args={['#ffffff', '#c7ccd1', 0.85]} />
+      <SunLight floor={f} maxY={scene.bounds.maxY} />
+      {/* Soft fill from the camera side so rack faces in the sun's shade stay readable */}
+      <directionalLight position={[f.cx - 30, 25, f.cz + 30]} intensity={0.4} />
 
       {showFloor ? (
         <>
           {/* Polished concrete floor (slab joints are in the texture) */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.005, f.cz]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.005, f.cz]} receiveShadow>
             <planeGeometry args={[f.w, f.d]} />
             <meshStandardMaterial map={concrete} color={concrete ? '#ffffff' : COLORS.floor} roughness={0.55} metalness={0.05} />
           </mesh>
           {/* Floor edge = the real warehouse boundary when it is measured */}
-          <BoxInstances items={edge} color="#46504c" roughness={0.9} />
+          <BoxInstances items={edge} color="#46504c" roughness={0.9} receiveShadow />
           <Dimensions floor={f} />
 
           {/* Operational areas from the 2D plan */}
           <Areas areas={scene.areas} />
 
           {/* Zones: solid yellow line round each zone, zone name painted in front */}
-          <BoxInstances items={zLines} color={COLORS.line} roughness={0.5} />
+          <BoxInstances items={zLines} color={COLORS.line} roughness={0.5} receiveShadow />
           <ZoneFloorText zones={scene.zones} names={zoneNames} />
           {/* Main cross aisles from the layout: yellow edges, dashed white centre, crossing */}
-          <BoxInstances items={aisles.yellow} color={COLORS.line} roughness={0.5} />
-          <BoxInstances items={aisles.white} color="#f4f6f5" roughness={0.5} />
+          <BoxInstances items={aisles.yellow} color={COLORS.line} roughness={0.5} receiveShadow />
+          <BoxInstances items={aisles.white} color="#f4f6f5" roughness={0.5} receiveShadow />
 
           {/* Yellow aisle markings (floor paint stays solid, even outside a focus) */}
-          <BoxInstances items={rs.aisleLines} color={COLORS.line} roughness={0.7} />
+          <BoxInstances items={rs.aisleLines} color={COLORS.line} roughness={0.7} receiveShadow />
 
           {envMode === 'full' && <Building floor={f} height={buildingH} roof={roof} />}
         </>
       ) : (
+        <>
+        {/* Racks-only mode: an invisible floor that only shows the shadows */}
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.002, f.cz]} receiveShadow>
+          <planeGeometry args={[f.w, f.d]} />
+          <shadowMaterial opacity={0.18} />
+        </mesh>
         <gridHelper args={[Math.ceil(Math.max(f.w, f.d) / 2) * 2, Math.ceil(Math.max(f.w, f.d) / 2), '#cbd5e1', '#e2e8f0']} position={[f.cx, 0, f.cz]} />
+        </>
       )}
 
       {/* Pallet-on-floor markings belong to the rack, so they show in every mode */}
-      <BoxInstances items={rs.floorLines} ghost={rg.floorLines} color={COLORS.line} roughness={0.7} />
+      <BoxInstances items={rs.floorLines} ghost={rg.floorLines} color={COLORS.line} roughness={0.7} receiveShadow />
 
       {/* Soft shadows under racks and stock (rendered once per data change) */}
       <ContactShadows key={`${scene.slots.length}:${scene.racks.length}`}
         position={[f.cx, 0.003, f.cz]} scale={[f.w, f.d]} width={f.w} height={f.d}
-        opacity={0.4} blur={2.2} far={5} resolution={1024} frames={1} color="#1f2937" />
+        opacity={0.3} blur={2.2} far={5} resolution={1024} frames={1} color="#1f2937" />
 
       {/* Racks */}
-      <BoxInstances items={rs.uprights} ghost={rg.uprights} color={COLORS.upright} metalness={0.3} roughness={0.5} />
-      <BoxInstances items={rs.braces} ghost={rg.braces} color={COLORS.upright} metalness={0.3} roughness={0.5} />
-      <BoxInstances items={rs.beams} ghost={rg.beams} color={COLORS.beam} metalness={0.2} roughness={0.5} />
-      <BoxInstances items={rs.signs} ghost={rg.signs} color={COLORS.sign} roughness={0.6} />
-      <BoxInstances items={rs.hangers} ghost={rg.hangers} color="#64748b" metalness={0.4} roughness={0.5} />
+      <BoxInstances items={rs.uprights} ghost={rg.uprights} color={COLORS.upright} metalness={0.3} roughness={0.5} castShadow receiveShadow />
+      <BoxInstances items={rs.braces} ghost={rg.braces} color={COLORS.upright} metalness={0.3} roughness={0.5} castShadow receiveShadow />
+      <BoxInstances items={rs.beams} ghost={rg.beams} color={COLORS.beam} metalness={0.2} roughness={0.5} castShadow receiveShadow />
+      <BoxInstances items={rs.signs} ghost={rg.signs} color={COLORS.sign} roughness={0.6} castShadow receiveShadow />
+      <BoxInstances items={rs.hangers} ghost={rg.hangers} color="#64748b" metalness={0.4} roughness={0.5} castShadow receiveShadow />
 
       {/* Slot contents */}
-      <BoxInstances items={geo.decks} ghost={sg.decks} colors={sc.decks} color={COLORS.deck} metalness={0.15} roughness={0.6} />
+      <BoxInstances items={geo.decks} ghost={sg.decks} colors={sc.decks} color={COLORS.deck} metalness={0.15} roughness={0.6} castShadow receiveShadow />
       {colorMode === 'status' && <BoxInstances items={geo.strips} ghost={sg.strips} colors={sc.strips} color={STATE_3D.inUse.color} roughness={0.5} />}
       {!hideBoxes && (
         <>
-          <BoxInstances items={geo.runners} ghost={sg.runners} color={COLORS.pallet} roughness={0.95} />
-          <BoxInstances items={geo.boards} ghost={sg.boards} color={COLORS.pallet} roughness={0.95} />
-          <BoxInstances items={geo.cartons} ghost={sg.cartons} colors={sc.cartons} color={COLORS.carton} roughness={0.9} />
+          <BoxInstances items={geo.runners} ghost={sg.runners} color={COLORS.pallet} roughness={0.95} castShadow receiveShadow />
+          <BoxInstances items={geo.boards} ghost={sg.boards} color={COLORS.pallet} roughness={0.95} castShadow receiveShadow />
+          <BoxInstances items={geo.cartons} ghost={sg.cartons} colors={sc.cartons} color={COLORS.carton} roughness={0.9} castShadow receiveShadow />
           <BoxInstances items={geo.tapes} ghost={sg.tapes} color="#ffffff" opacity={0.4} />
         </>
       )}
@@ -1073,7 +1123,7 @@ export default function WarehouseScene3D(props: Scene3DProps) {
 
   return (
     <div className="absolute inset-0">
-      <Canvas frameloop="demand" dpr={[1, 2]} camera={{ fov: FOV, near: 0.1, far: 3000, position: [-20, 30, 30] }}
+      <Canvas frameloop="demand" dpr={[1, 2]} shadows="percentage" camera={{ fov: FOV, near: 0.1, far: 3000, position: [-20, 30, 30] }}
         gl={{ antialias: true }} className="touch-none">
         <SceneContent {...props} labels={labels} labelEls={labelEls} zoneNames={zoneNames} />
       </Canvas>
