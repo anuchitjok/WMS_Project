@@ -13,6 +13,12 @@ export interface SlotData {
   id: string; code: string; name?: string; level: number; column: number;
   status: SlotStatus; slotType: string; capacity: number;
   _count?: { stockItems: number }; updatedAt?: string;
+  /**
+   * 3D view only (PR8 Phase 3): stock rows / quantity in this slot reserved for
+   * orders (StockItem status RESERVED), from the existing /inventory list.
+   * Undefined when not loaded; the 2D tabs never set it.
+   */
+  reservedRows?: number; reservedQty?: number;
 }
 export interface RackData {
   id: string; code: string; name?: string; zone?: string; rackType: string;

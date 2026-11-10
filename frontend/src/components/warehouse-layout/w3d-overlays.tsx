@@ -185,11 +185,15 @@ function Swatch({ color, label, count }: { color: string; label: string; count?:
   );
 }
 
-export function Legend({ mode, onMode, counts, ageState, onRetryAge, hideBoxes, onHideBoxes }: {
+export function Legend({ mode, onMode, counts, ageState, onRetryAge, reservedState, reservedPartial, onRetryReserved, hideBoxes, onHideBoxes }: {
   mode: ViewMode; onMode: (m: ViewMode) => void;
   counts: Record<SlotState3D, number>;
   ageState: 'idle' | 'loading' | 'error' | 'ready';
   onRetryAge: () => void;
+  /** Reserved stock (status mode): loading / error / no access are said in the legend, never guessed. */
+  reservedState?: 'loading' | 'ready' | 'error' | 'denied';
+  reservedPartial?: boolean;
+  onRetryReserved?: () => void;
   /** Status mode: hide pallets / cartons so the status colours read on their own. */
   hideBoxes?: boolean;
   onHideBoxes?: (v: boolean) => void;
@@ -202,6 +206,15 @@ export function Legend({ mode, onMode, counts, ageState, onRetryAge, hideBoxes, 
     body = (
       <>
         {STATE_ORDER.map((k) => <Swatch key={k} color={STATE_3D[k].color} label={W.status[k]} count={counts[k]} />)}
+        {reservedState === 'loading' && (
+          <span className="flex items-center gap-1 text-xs text-slate-400"><Loader2 className="h-3 w-3 animate-spin" /> {L.reservedLoading}</span>
+        )}
+        {reservedState === 'error' && (
+          <span className="flex items-center gap-2 text-xs text-red-600">{L.reservedError}
+            {onRetryReserved && <button type="button" onClick={onRetryReserved} className="font-medium underline">{L.retry}</button>}</span>
+        )}
+        {reservedState === 'denied' && <span className="text-xs text-slate-500">{L.reservedDenied}</span>}
+        {reservedState === 'ready' && reservedPartial && <span className="text-xs text-amber-700">{L.reservedPartial}</span>}
         {onHideBoxes && (
           <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs text-slate-600">
             <input type="checkbox" checked={!!hideBoxes} onChange={(e) => onHideBoxes(e.target.checked)} className="h-3.5 w-3.5 accent-emerald-700" />

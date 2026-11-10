@@ -30,7 +30,7 @@ import {
   buildScene, slotState3D, slotColor, zoneOf, ageDays, fillBucket, NO_ZONE,
 } from './scene-geometry';
 import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
-import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock } from './use-w3d-data';
+import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock, useReservedStock, type ReservedSlot } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
   FilterBar, LocationDetails, BottomSummary, summarizeSlot,
@@ -96,9 +96,24 @@ function SlotTag({ slot }: { slot: SlotData }) {
   );
 }
 
+/** Copy of the warehouse with each slot's reserved stock (3D only; the tree itself is untouched). */
+function withReserved(wh: WarehouseData | null, bySlot: Map<string, ReservedSlot> | null): WarehouseData | null {
+  if (!wh || !bySlot?.size) return wh;
+  return {
+    ...wh,
+    racks: wh.racks.map((r) => ({
+      ...r,
+      slots: (r.slots ?? []).map((s) => {
+        const x = bySlot.get(s.id);
+        return x ? { ...s, reservedRows: x.rows, reservedQty: x.qty } : s;
+      }),
+    })),
+  };
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
-export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onReload, onViewStock }: {
+export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading, onReload, onViewStock }: {
   warehouses: WarehouseData[];
   wh: WarehouseData | null;
   onSelectWarehouse: (id: string) => void;
@@ -108,10 +123,12 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
 }) {
   const { m, t } = useT();
   const V = m.layout3d.view, W = m.layout3d.w3d;
-  const warehouseId = wh?.id ?? '';
+  const warehouseId = whTree?.id ?? '';
   const objects = useLayoutObjects(warehouseId);
   const age = useStockAge(warehouseId);
   const tower = useTowerData(warehouseId);
+  const reserved = useReservedStock(warehouseId);
+  const wh = useMemo(() => withReserved(whTree, reserved.bySlot), [whTree, reserved.bySlot]);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [colorMode, setColorMode] = useState<ViewMode>('status');
@@ -143,7 +160,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   // One refresh signal for everything on this tab: server events, a 60 s poll while
   // the browser tab is visible, and coming back to the tab (debounced together).
   // No duplicates: skipped while a refresh is still running or within 3 s of the last one.
-  const { reload: reloadAge } = age, { reload: reloadTower } = tower;
+  const { reload: reloadAge } = age, { reload: reloadTower } = tower, { reload: reloadReserved } = reserved;
   const lastRefresh = useRef(0);
   const refreshing = useRef(false);
   const refreshAll = useCallback(() => {
@@ -152,8 +169,8 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
     lastRefresh.current = now;
     refreshing.current = true;
     reloadAge();
-    void Promise.allSettled([onReload(), reloadTower()]).finally(() => { refreshing.current = false; });
-  }, [onReload, reloadAge, reloadTower]);
+    void Promise.allSettled([onReload(), reloadTower(), reloadReserved()]).finally(() => { refreshing.current = false; });
+  }, [onReload, reloadAge, reloadTower, reloadReserved]);
   useRealtime(['inventory:update', 'request:update'], refreshAll, { enabled: !!warehouseId });
 
   const scene = useMemo(() => buildScene(wh, objects ?? []), [wh, objects]);
@@ -229,11 +246,11 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
   }, [slotOn, scene, zoneRacks, filters]);
 
   const counts = useMemo(() => {
-    const c: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, blocked: 0 };
+    const c: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, reserved: 0, blocked: 0 };
     scene.slots.forEach((s, i) => { if (!slotOn || slotOn[i]) c[s.state]++; });
     return c;
   }, [scene, slotOn]);
-  const inFilter = counts.empty + counts.inUse + counts.full + counts.blocked;
+  const inFilter = counts.empty + counts.inUse + counts.full + counts.reserved + counts.blocked;
 
   const slotIndex = useMemo(() => {
     const out = new Map<string, { slot: SlotData; rack: RackData; i: number }>();
@@ -354,7 +371,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
 
   const header = (
     <>
-      <TowerHeader wh={wh} system={tower.system} updatedAt={tower.updatedAt} refreshing={tower.refreshing} failed={tower.failed}
+      <TowerHeader wh={wh} system={tower.system} updatedAt={tower.updatedAt} refreshing={tower.refreshing} failed={tower.failed || reserved.stale}
         onRefresh={refreshAll} mode={envMode} onMode={setEnvMode} />
       <TowerKpis metrics={metrics} stock={tower.stock} tasks={tower.tasks} />
       <SetupHealthCard wh={wh} onRack={focusRackFromCard} />
@@ -434,6 +451,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
               <Minimap scene={scene} active={active} camera={camera} selected={selPos ? [selPos[0], selPos[2]] : null}
                 expanded={miniOpen} onToggle={() => setMiniOpen((v) => !v)} onPick={(x, z) => { setPreset(null); api.current?.focus(x, z); }} />
               <Legend mode={colorMode} onMode={setColorMode} counts={counts} ageState={age.state} onRetryAge={age.reload}
+                reservedState={reserved.state} reservedPartial={reserved.partial} onRetryReserved={() => void reserved.reload()}
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
               {filtered && inFilter === 0 && (
                 <div style={{ top: overlayTop + 52 }} className="pointer-events-none absolute inset-x-0 z-30 mx-auto w-fit rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-md ring-1 ring-slate-200">

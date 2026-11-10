@@ -28,10 +28,10 @@ export function RackPanel({ rack, onClose, onZoom, onShowAll, onPickSlot }: {
   const R = m.layout3d.w3d.rackPanel, D = m.layout3d.w3d.details, W = m.layout3d.w3d;
   const slots = rack.slots ?? [];
 
-  const counts: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, blocked: 0 };
+  const counts: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, reserved: 0, blocked: 0 };
   let rows = 0;
   for (const s of slots) { counts[slotState3D(s)]++; rows += slotItems(s); }
-  const used = counts.inUse + counts.full;
+  const used = counts.inUse + counts.full + counts.reserved; // reserved slots hold stock too
   const usedPct = slots.length ? Math.round((used / slots.length) * 100) : 0;
 
   const size = sizeOf(rack);

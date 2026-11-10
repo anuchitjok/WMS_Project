@@ -464,6 +464,9 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
             <DRow k={D.product} v={s.first?.product?.name ?? dash} />
             <DRow k={D.stockQty} v={loading ? '…' : `${s.qty.toLocaleString()}${more ? '+' : ''} ${s.first?.product?.unit ?? D.pcs}`} />
             <DRow k={D.capacity} v={t(D.capacityValue, { rows, capacity: slot.capacity })} />
+            {(slot.reservedRows ?? 0) > 0 && (
+              <DRow k={D.reserved} v={<span className="text-violet-700">{t(D.reservedValue, { rows: slot.reservedRows ?? 0, qty: (slot.reservedQty ?? 0).toLocaleString() })}</span>} />
+            )}
             <DRow k={D.occupancy} v={<span className="block"><span className="tabular-nums">{util}%</span><span className="mt-1 block"><Meter value={util} tone={util >= 90 ? 'orange' : 'green'} /></span></span>} />
             <DRow k={D.stockAge} v={age ? t(D.ageDays, { days: age.days }) : ageState === 'loading' ? D.ageLoading : '—'} />
             <DRow k={D.lastMove} v={s.lastMove ? formatDate(s.lastMove) : dash} />
