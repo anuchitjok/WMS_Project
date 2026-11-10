@@ -15,7 +15,7 @@
 // while one is still running is skipped, so there are never two at once.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { dashboardApi, fulfillmentApi, healthApi, type HealthStatus } from '@/lib/api';
+import { dashboardApi, fulfillmentApi, healthApi, inventoryApi, type HealthStatus } from '@/lib/api';
 
 /** loading = first load; ok = has data (maybe stale); error / denied = no data. */
 export type SourceState = 'loading' | 'ok' | 'error' | 'denied';
@@ -24,6 +24,19 @@ export interface Source<T> { data: T | null; state: SourceState; stale: boolean 
 export interface StockFigures { available: number; reserved: number; pendingPutaway: number }
 export interface TaskFigures { picking: number; allocated: number; awaitingShipment: number }
 export type SystemStatus = 'ok' | 'degraded' | 'down' | null;
+
+/** One line of a fulfilment task (as /fulfillment/board returns it). */
+export interface TaskLine {
+  id: string; stockItemId: string | null; qtyRequested: number; qtyPicked: number;
+  binLocation: string | null; product?: { code?: string; name?: string; unit?: string } | null;
+}
+/** Open fulfilment task of this warehouse (shipped / delivered ones are left out). */
+export interface OpenTask {
+  id: string; refNumber: string; requestRef: string; status: string; updatedAt: string;
+  deliveryMethod?: 'SHIP' | 'COLLECT'; items: TaskLine[];
+}
+/** PR8 Phase 4 flow strip: stock steps in stock rows, order steps in tasks. */
+export interface FlowFigures { receive: number; available: number }
 
 const start = <T,>(): Source<T> => ({ data: null, state: 'loading', stale: false });
 
@@ -42,6 +55,13 @@ function settle<T>(prev: Source<T>, r: PromiseSettledResult<T>): Source<T> {
 type Task = { status: string };
 type Board = Record<string, Task[] | undefined>;
 
+const DONE = new Set(['SHIPPED', 'DELIVERED', 'CLOSED', 'CANCELLED', 'RETURNED']);
+/** Every open task on the board, oldest change first (the board's own order). */
+export function openTasks(board: Board): OpenTask[] {
+  return Object.values(board).flatMap((v) => (Array.isArray(v) ? v : []))
+    .filter((t) => !DONE.has(t.status)) as unknown as OpenTask[];
+}
+
 /** Counts by status from the board (all open tasks of the warehouse). */
 export function taskFigures(board: Board): TaskFigures {
   const all = Object.values(board).flatMap((v) => (Array.isArray(v) ? v : []));
@@ -56,6 +76,8 @@ export function taskFigures(board: Board): TaskFigures {
 export function useTowerData(warehouseId: string) {
   const [stock, setStock] = useState<Source<StockFigures>>(start);
   const [tasks, setTasks] = useState<Source<TaskFigures>>(start);
+  const [open, setOpen] = useState<Source<OpenTask[]>>(start);
+  const [flow, setFlow] = useState<Source<FlowFigures>>(start);
   const [system, setSystem] = useState<SystemStatus>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,11 +90,15 @@ export function useTowerData(warehouseId: string) {
     busy.current = true;
     setRefreshing(true);
     try {
-      const [k, h, b, hl] = await Promise.allSettled([
+      // Rows only: `total` is all that is read (limit 1).
+      const rows = (status: string) => inventoryApi.list({ warehouseId, status, limit: 1 }).then((r) => r.total ?? 0);
+      const [k, h, b, hl, rc, av] = await Promise.allSettled([
         dashboardApi.kpis(warehouseId),
         dashboardApi.inventoryHealth(warehouseId),
         fulfillmentApi.board(warehouseId) as Promise<Board>,
         healthApi.get(),
+        rows('PENDING_RECEIVING'),
+        rows('AVAILABLE'),
       ]);
       if (!alive.current) return;
       // Stock needs both calls; if either fails the card keeps its last figures.
@@ -82,11 +108,16 @@ export function useTowerData(warehouseId: string) {
           : { status: 'rejected', reason: k.status === 'rejected' ? k.reason : (h as PromiseRejectedResult).reason };
       setStock((p) => settle(p, both));
       setTasks((p) => settle(p, b.status === 'fulfilled' ? { status: 'fulfilled', value: taskFigures(b.value) } : b));
+      setOpen((p) => settle(p, b.status === 'fulfilled' ? { status: 'fulfilled', value: openTasks(b.value) } : b));
+      const fl: PromiseSettledResult<FlowFigures> = rc.status === 'fulfilled' && av.status === 'fulfilled'
+        ? { status: 'fulfilled', value: { receive: rc.value, available: av.value } }
+        : { status: 'rejected', reason: rc.status === 'rejected' ? rc.reason : (av as PromiseRejectedResult).reason };
+      setFlow((p) => settle(p, fl));
       setSystem(hl.status === 'fulfilled' ? statusOf(hl.value) : 'down');
       // "Updated hh:mm" only moves when every figure the user may see was refreshed
       // (a 403 is fine: that card says "No access" and has nothing to refresh).
       const ok = (r: PromiseSettledResult<unknown>) => r.status === 'fulfilled' || isDenied(r.reason);
-      if (ok(k) && ok(h) && ok(b)) setUpdatedAt(new Date());
+      if (ok(k) && ok(h) && ok(b) && ok(rc) && ok(av)) setUpdatedAt(new Date());
     } finally {
       busy.current = false;
       if (alive.current) setRefreshing(false);
@@ -96,8 +127,8 @@ export function useTowerData(warehouseId: string) {
   useEffect(() => { void reload(); }, [reload]);
 
   // Something did not refresh (and is not just "no access").
-  const failed = stock.stale || tasks.stale || stock.state === 'error' || tasks.state === 'error';
-  return { stock, tasks, system, updatedAt, refreshing, failed, reload };
+  const failed = stock.stale || tasks.stale || flow.stale || stock.state === 'error' || tasks.state === 'error' || flow.state === 'error';
+  return { stock, tasks, open, flow, system, updatedAt, refreshing, failed, reload };
 }
 
 function statusOf(h: HealthStatus): SystemStatus {

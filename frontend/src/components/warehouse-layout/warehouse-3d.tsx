@@ -37,6 +37,8 @@ import {
 } from './w3d-panels';
 import { TowerHeader, TowerKpis } from './w3d-tower';
 import { RackPanel } from './w3d-rack-panel';
+import { TaskPanel, PICK_STAGE, lineLeft, type TaskTab } from './w3d-tasks';
+import type { TaskLine } from './use-tower-data';
 import { useTowerData } from './use-tower-data';
 import { SetupHealthCard } from './setup-health-card';
 import { setupHealth } from './setup-health';
@@ -142,6 +144,9 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   const [gl, setGl] = useState<boolean | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [hideBoxes, setHideBoxes] = useState(false);
+  const [taskTab, setTaskTab] = useState<TaskTab>('now');
+  // PR8 Phase 4: the task whose lines are shown (its slots still to pick light up in 3D).
+  const [pickTaskId, setPickTaskId] = useState<string | null>(null);
   const api = useRef<SceneApi | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageW, setStageW] = useState(0);
@@ -174,6 +179,38 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   useRealtime(['inventory:update', 'request:update'], refreshAll, { enabled: !!warehouseId });
 
   const scene = useMemo(() => buildScene(wh, objects ?? []), [wh, objects]);
+
+  // ── Pick task → slots (PR8 Phase 4) ──
+  // Where a line's stock is now: its reserved stock row (live), else the location
+  // saved on the line at allocation ("WH|RACK|SLOT"), else unknown.
+  const slotByCode = useMemo(() => {
+    const out = new Map<string, { id: string; code: string }>();
+    for (const s of scene.slots) out.set(`${s.rack.code}|${s.slot.code}`, { id: s.slot.id, code: s.slot.code });
+    return out;
+  }, [scene]);
+  const slotCodeById = useMemo(() => new Map(scene.slots.map((s) => [s.slot.id, s.slot.code])), [scene]);
+  const slotOfStock = reserved.slotOfStock;
+  const locate = useCallback((l: TaskLine) => {
+    const sid = l.stockItemId ? slotOfStock?.get(l.stockItemId) : undefined;
+    if (sid && slotCodeById.has(sid)) return { slotId: sid, code: slotCodeById.get(sid)! };
+    const parts = (l.binLocation ?? '').split('|');
+    if (parts.length >= 2) {
+      const hit = slotByCode.get(`${parts[parts.length - 2]}|${parts[parts.length - 1]}`);
+      if (hit) return { slotId: hit.id, code: hit.code };
+    }
+    return null;
+  }, [slotOfStock, slotCodeById, slotByCode]);
+  const pickTask = pickTaskId ? (tower.open.data ?? []).find((t) => t.id === pickTaskId) ?? null : null;
+  const pickSlots = useMemo(() => {
+    if (!pickTask || !PICK_STAGE.has(pickTask.status)) return [];
+    const out: { slotId: string; n: number }[] = [];
+    (pickTask.items ?? []).forEach((l, i) => {
+      const at = lineLeft(l) > 0 ? locate(l) : null;
+      if (at) out.push({ slotId: at.slotId, n: i + 1 });
+    });
+    return out;
+  }, [pickTask, locate]);
+  const pickSet = useMemo(() => (pickSlots.length ? new Set(pickSlots.map((p) => p.slotId)) : null), [pickSlots]);
 
   // Track the stage width whenever the stage mounts (it appears once loading is over and there are racks).
   const stageObs = useRef<ResizeObserver | null>(null);
@@ -234,16 +271,20 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   ), [filters]);
 
   // Per scene slot: in the filter or not (null = no filter).
-  const slotOn = useMemo(() => (filtered ? scene.slots.map((s) => matches(s.slot, s.rack)) : null), [filtered, scene, matches]);
+  // A pick task on show replaces the filter: only its slots stay lit and the camera frames them.
+  const slotOn = useMemo(() => (
+    pickSet ? scene.slots.map((s) => pickSet.has(s.slot.id))
+      : filtered ? scene.slots.map((s) => matches(s.slot, s.rack)) : null
+  ), [pickSet, filtered, scene, matches]);
   // Racks that keep at least one slot in the filter (frame the camera on them).
   const active = useMemo(() => {
     if (!slotOn) return null;
     const set = new Set<string>();
     scene.slots.forEach((s, i) => { if (slotOn[i]) set.add(s.rack.id); });
     // A rack with no slots yet still shows when it is picked by zone/rack.
-    for (const r of zoneRacks) if (!(r.slots ?? []).length && (filters.rackId === ALL || r.id === filters.rackId) && filters.status === ALL && filters.fill === ALL) set.add(r.id);
+    if (!pickSet) for (const r of zoneRacks) if (!(r.slots ?? []).length && (filters.rackId === ALL || r.id === filters.rackId) && filters.status === ALL && filters.fill === ALL) set.add(r.id);
     return set;
-  }, [slotOn, scene, zoneRacks, filters]);
+  }, [slotOn, scene, zoneRacks, filters, pickSet]);
 
   const counts = useMemo(() => {
     const c: Record<SlotState3D, number> = { empty: 0, inUse: 0, full: 0, reserved: 0, blocked: 0 };
@@ -332,15 +373,22 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
     setTimeout(() => api.current?.focusRack(id), 80);
   }, [allRacks]);
 
+  const chooseTask = useCallback((id: string | null) => {
+    setPickTaskId(id);
+    setSelectedSlotId(null);
+    setPreset(null);
+  }, []);
+
   const pickPreset = (p: CameraPreset) => { setPreset(p); api.current?.preset(p); };
   // ⟲ in the scene: back to the start view and out of any rack / zone focus (other filters stay).
   const resetView = () => {
+    setPickTaskId(null);
     setFilters((f) => ({ ...f, zone: ALL, rackId: ALL }));
     setPreset('iso');
     // After the focus change has re-framed the camera, so the start view wins.
     setTimeout(() => api.current?.reset(), 80);
   };
-  const resetAll = () => { setFilters(NO_FILTERS); setPreset('iso'); api.current?.reset(); };
+  const resetAll = () => { setPickTaskId(null); setFilters(NO_FILTERS); setPreset('iso'); api.current?.reset(); };
   const toggleFullscreen = () => {
     const el = stageRef.current;
     if (!el) return;
@@ -424,7 +472,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 flagged={flagged}
                 topInset={topInset}
                 selectedSlotId={selectedSlotId}
-                focusRackId={filters.rackId !== ALL ? filters.rackId : null}
+                focusRackId={!pickSet && filters.rackId !== ALL ? filters.rackId : null}
+                pickSlots={pickSlots}
                 onSelectSlot={selectSlot}
                 onSelectRack={openRack}
                 onSelectZone={selectZone}
@@ -453,7 +502,14 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
               <Legend mode={colorMode} onMode={setColorMode} counts={counts} ageState={age.state} onRetryAge={age.reload}
                 reservedState={reserved.state} reservedPartial={reserved.partial} onRetryReserved={() => void reserved.reload()}
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
-              {filtered && inFilter === 0 && (
+              {pickTask && PICK_STAGE.has(pickTask.status) && (
+                <div style={{ top: overlayTop + 52 }} className="absolute inset-x-0 z-30 mx-auto flex w-fit max-w-[calc(100%-1.5rem)] items-center gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
+                  <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-cyan-500" />
+                  <span className="truncate">{t(W.tasks.showing, { ref: pickTask.refNumber, n: pickSlots.length })}</span>
+                  <button type="button" onClick={() => chooseTask(null)} className="flex-shrink-0 text-xs font-medium text-cyan-700 underline">{W.tasks.clear}</button>
+                </div>
+              )}
+              {!pickSet && filtered && inFilter === 0 && (
                 <div style={{ top: overlayTop + 52 }} className="pointer-events-none absolute inset-x-0 z-30 mx-auto w-fit rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-md ring-1 ring-slate-200">
                   {W.filters.noMatch}
                 </div>
@@ -496,6 +552,9 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
           )}
         </div>
       </div>
+
+      <TaskPanel open={tower.open} flow={tower.flow} stock={tower.stock} tab={taskTab} onTab={setTaskTab}
+        selectedTaskId={pickTaskId} onSelectTask={chooseTask} locate={locate} onGoSlot={goToSlot} />
 
       <BottomSummary rack={selected?.rack ?? null} slot={selected?.slot ?? null} detail={slotDetail.detail}
         detailLoading={slotDetail.state === 'loading' && !slotDetail.detail} />

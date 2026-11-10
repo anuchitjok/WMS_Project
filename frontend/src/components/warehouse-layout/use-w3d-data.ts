@@ -42,17 +42,23 @@ const RESERVED_MAX_PAGES = 20; // 10,000 reserved rows; more is reported as part
  * (GET /inventory?status=RESERVED&warehouseId=…), paged. A failed refresh keeps
  * the last figures; 403 = "denied" (the view then shows no Reserved colour).
  */
-type ReservedGot = { whId: string; state: ReservedState; bySlot: Map<string, ReservedSlot> | null; partial: boolean; stale: boolean };
+type ReservedGot = {
+  whId: string; state: ReservedState; bySlot: Map<string, ReservedSlot> | null;
+  /** Reserved stock row id → the slot it sits in now (PR8 Phase 4: where to pick). */
+  slotOfStock: Map<string, string> | null;
+  partial: boolean; stale: boolean;
+};
 
 export function useReservedStock(warehouseId: string) {
   // Figures are kept with the warehouse they belong to, so a switch never shows another warehouse's.
-  const [got, setGot] = useState<ReservedGot>({ whId: warehouseId, state: 'loading', bySlot: null, partial: false, stale: false });
+  const [got, setGot] = useState<ReservedGot>({ whId: warehouseId, state: 'loading', bySlot: null, slotOfStock: null, partial: false, stale: false });
   const req = useRef(0);
   const load = useCallback(async () => {
     if (!warehouseId) return;
     const n = ++req.current;
     try {
       const bySlot = new Map<string, ReservedSlot>();
+      const slotOfStock = new Map<string, string>();
       let page = 1, pages = 1;
       do {
         const res = await inventoryApi.list({ warehouseId, status: 'RESERVED', limit: RESERVED_PAGE, page });
@@ -62,19 +68,20 @@ export function useReservedStock(warehouseId: string) {
           a.rows += 1;
           a.qty += Number(it.quantity) || 0;
           bySlot.set(it.slotId, a);
+          slotOfStock.set(it.id, it.slotId);
         }
         pages = res.totalPages ?? Math.ceil((res.total ?? 0) / RESERVED_PAGE);
         page += 1;
       } while (page <= pages && page <= RESERVED_MAX_PAGES);
-      if (n === req.current) setGot({ whId: warehouseId, state: 'ready', bySlot, partial: pages > RESERVED_MAX_PAGES, stale: false });
+      if (n === req.current) setGot({ whId: warehouseId, state: 'ready', bySlot, slotOfStock, partial: pages > RESERVED_MAX_PAGES, stale: false });
     } catch (e) {
       if (n !== req.current) return;
       const denied = (e as { status?: number })?.status === 403;
       setGot((g) => {
-        if (denied) return { whId: warehouseId, state: 'denied', bySlot: null, partial: false, stale: false };
+        if (denied) return { whId: warehouseId, state: 'denied', bySlot: null, slotOfStock: null, partial: false, stale: false };
         // A failed refresh keeps this warehouse's last figures and says they are stale.
         const keep = g.whId === warehouseId && g.bySlot;
-        return keep ? { ...g, stale: true } : { whId: warehouseId, state: 'error', bySlot: null, partial: false, stale: false };
+        return keep ? { ...g, stale: true } : { whId: warehouseId, state: 'error', bySlot: null, slotOfStock: null, partial: false, stale: false };
       });
     }
   }, [warehouseId]);
@@ -83,6 +90,7 @@ export function useReservedStock(warehouseId: string) {
   return {
     state: mine ? got.state : ('loading' as ReservedState),
     bySlot: mine ? got.bySlot : null,
+    slotOfStock: mine ? got.slotOfStock : null,
     partial: mine && got.partial,
     stale: mine && got.stale,
     reload: load,

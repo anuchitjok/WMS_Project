@@ -1013,7 +1013,7 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
   onHoverSlot?: (i: number | null) => void;
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
@@ -1103,6 +1103,11 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
   };
   const rackOf = useMemo(() => (id: string) => rackById.get(id) ?? null, [rackById]);
   const focusRack = focusRackId ? rackById.get(focusRackId) : undefined;
+  const picks = useMemo(() => {
+    if (!pickSlots?.length) return [];
+    const ids = new Set(pickSlots.map((p) => p.slotId));
+    return scene.slots.filter((s) => ids.has(s.slot.id) && s.slot.id !== selectedSlotId);
+  }, [pickSlots, scene, selectedSlotId]);
   useEffect(() => () => { document.body.style.cursor = ''; }, []);
 
   return (
@@ -1194,6 +1199,7 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
 
       {hovered && hovered.slot.id !== selectedSlotId && <Outline s={hovered} color="#334155" />}
       {selected && <Highlight s={selected} />}
+      {picks.map((s) => <Highlight key={s.slot.id} s={s} />)}
       {focusRack && <RackHighlight p={focusRack} />}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
@@ -1241,6 +1247,8 @@ export interface Scene3DProps {
   selectedSlotId: string | null;
   /** Rack in focus (one rack picked): drawn with a cyan-blue outline. */
   focusRackId?: string | null;
+  /** PR8 Phase 4: slots of the chosen pick task, in pick order (cyan + a number tag each). */
+  pickSlots?: { slotId: string; n: number }[];
   onSelectSlot: (slotId: string) => void;
   onSelectRack: (rackId: string) => void;
   /** A zone name on the floor was clicked: focus every rack in that zone. */
@@ -1254,7 +1262,7 @@ export interface Scene3DProps {
 }
 
 export default function WarehouseScene3D(props: Scene3DProps) {
-  const { scene, active, envMode, selectedSlotId, onSelectRack, onSelectZone, tooltip } = props;
+  const { scene, active, envMode, selectedSlotId, pickSlots, onSelectRack, onSelectZone, tooltip } = props;
   const { m, t, fmt } = useT();
   const L = m.layout3d.view, A = m.layout3d.w3d.area;
   const labelEls = useRef(new Map<string, HTMLElement>());
@@ -1265,6 +1273,13 @@ export default function WarehouseScene3D(props: Scene3DProps) {
   const hovered = hoverRaw && hoverRaw.slot.id !== selectedSlotId ? hoverRaw : undefined;
   const showFloor = envMode !== 'rack';
   const dims = showFloor ? dimensionSpots(scene.floor) : null;
+  // Pick order tags: one per slot (a slot holding two lines shows "1, 3").
+  const pickTags = useMemo(() => {
+    if (!pickSlots?.length) return [];
+    const byId = new Map<string, number[]>();
+    for (const p of pickSlots) byId.set(p.slotId, [...(byId.get(p.slotId) ?? []), p.n]);
+    return scene.slots.filter((s) => byId.has(s.slot.id)).map((s) => ({ s, ns: byId.get(s.slot.id)! }));
+  }, [pickSlots, scene]);
   // A zone is "on" while at least one of its racks is in the focus / filter.
   const zoneOn = (zone: string) => !active || scene.racks.some((p) => p.zone === zone && active.has(p.rack.id));
 
@@ -1287,8 +1302,9 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     }
     if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
     if (hovered) out.push({ key: 'hov', pos: [hovered.pos[0], hovered.pos[1] + hovered.size[1] * 0.55, hovered.pos[2]] });
+    for (const { s } of pickTags) out.push({ key: `pk:${s.slot.id}`, pos: [s.pos[0], s.pos[1] + s.size[1] * 0.5, s.pos[2]], keep: true });
     return out;
-  }, [scene, selected, hovered, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, selected, hovered, pickTags, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) labelEls.current.set(key, el); else labelEls.current.delete(key);
@@ -1347,6 +1363,13 @@ export default function WarehouseScene3D(props: Scene3DProps) {
             {tooltip}
           </div>
         )}
+        {pickTags.map(({ s, ns }) => (
+          <div key={s.slot.id} ref={reg(`pk:${s.slot.id}`)} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-1`}>
+            <span className="grid min-w-6 place-items-center rounded-full bg-cyan-500 px-1.5 py-0.5 text-xs font-bold tabular-nums text-white shadow-md ring-2 ring-white">
+              {ns.join(', ')}
+            </span>
+          </div>
+        ))}
         {hovered && (
           <div ref={reg('hov')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`} role="tooltip">
             <HoverTag slot={hovered.slot} rack={hovered.rack} />
