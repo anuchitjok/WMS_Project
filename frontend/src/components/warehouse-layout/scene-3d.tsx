@@ -32,6 +32,7 @@ import {
   cartonGrid, cartonCount, cartonLayout, rackCorners,
 } from './scene-geometry';
 import { isOccupied, isBlocked } from './occupancy';
+import { intersectSpans, pointInPolygon, spansAt } from './floor-geometry';
 
 export type CameraPreset = 'iso' | 'top' | 'front';
 
@@ -337,7 +338,7 @@ function mainAisles(scene: Scene3D): { yellow: BoxItem[]; white: BoxItem[] } {
   const yellow: BoxItem[] = [], white: BoxItem[] = [];
   const f = scene.floor, b = scene.bounds;
   if (!scene.racks.length) return { yellow, white };
-  const x0 = f.cx - f.w / 2 + 1, x1 = f.cx + f.w / 2 - 1, fz0 = f.cz - f.d / 2, fz1 = f.cz + f.d / 2;
+  const fz0 = f.cz - f.d / 2, fz1 = f.cz + f.d / 2;
   const ZONE_PAD = 1.2, HALF = 1.3, MIN_FREE = 2 * HALF + 1;
   const front = Math.min(fz1, ...scene.areas.filter((a) => a.minZ >= b.maxZ).map((a) => a.minZ));
   const back = Math.max(fz0, ...scene.areas.filter((a) => a.maxZ <= b.minZ).map((a) => a.maxZ));
@@ -345,12 +346,22 @@ function mainAisles(scene: Scene3D): { yellow: BoxItem[]; white: BoxItem[] } {
   if (front - (b.maxZ + ZONE_PAD) >= MIN_FREE) lanes.push((b.maxZ + ZONE_PAD + front) / 2);
   if ((b.minZ - ZONE_PAD) - back >= MIN_FREE) lanes.push((b.minZ - ZONE_PAD + back) / 2);
   for (const z of lanes) {
-    for (const e of [z - HALF, z + HALF]) yellow.push({ pos: [(x0 + x1) / 2, 0.012, e], scale: [x1 - x0, 0.006, 0.1], rotY: 0 });
-    for (let x = x0 + 1; x + 1.2 < x1 - 1; x += 2.4) white.push({ pos: [x + 0.6, 0.012, z], scale: [1.2, 0.006, 0.12], rotY: 0 });
-    for (let i = -3; i <= 3; i++) white.push({ pos: [f.cx + i * 0.6, 0.014, z], scale: [0.35, 0.006, 2.2], rotY: 0 });
+    // Shaped floor: only paint where the whole lane width is on the floor.
+    const spans = f.outline
+      ? intersectSpans(intersectSpans(spansAt(f.outline, z - HALF), spansAt(f.outline, z)), spansAt(f.outline, z + HALF))
+      : [[f.cx - f.w / 2, f.cx + f.w / 2] as [number, number]];
+    for (const [s0, s1] of spans) {
+      const x0 = s0 + 1, x1 = s1 - 1;
+      if (x1 - x0 < 4) continue;
+      for (const e of [z - HALF, z + HALF]) yellow.push({ pos: [(x0 + x1) / 2, 0.012, e], scale: [x1 - x0, 0.006, 0.1], rotY: 0 });
+      for (let x = x0 + 1; x + 1.2 < x1 - 1; x += 2.4) white.push({ pos: [x + 0.6, 0.012, z], scale: [1.2, 0.006, 0.12], rotY: 0 });
+      const mid = f.cx > x0 + 2 && f.cx < x1 - 2 ? f.cx : (x0 + x1) / 2;
+      for (let i = -3; i <= 3; i++) white.push({ pos: [mid + i * 0.6, 0.014, z], scale: [0.35, 0.006, 2.2], rotY: 0 });
+    }
   }
   return { yellow, white };
 }
+
 
 /** Polished concrete: light grey with fine grain, soft patches and a slab joint every 6 m. */
 function concreteTexture(w: number, d: number) {
@@ -411,8 +422,49 @@ function ZoneFloorText({ zones, names }: { zones: Scene3D['zones']; names: Recor
   );
 }
 
+type XZ = [number, number];
+
+/**
+ * Flat floor in the shape of the outline. Built in X / -Z (the mesh is turned flat
+ * with -90 deg about X), with UVs over the outer box so the concrete texture matches
+ * the rectangle floor.
+ */
+function shapeGeometry(f: Scene3D['floor']): THREE.ShapeGeometry | null {
+  if (!f.outline) return null;
+  const shape = new THREE.Shape(f.outline.map(([x, z]) => new THREE.Vector2(x, -z)));
+  const g = new THREE.ShapeGeometry(shape);
+  const x0 = f.cx - f.w / 2, z0 = f.cz - f.d / 2;
+  const pos = g.getAttribute('position'), uv = g.getAttribute('uv');
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) - x0) / f.w, (-pos.getY(i) - z0) / f.d);
+  uv.needsUpdate = true;
+  return g;
+}
+
+/** Sides of a shaped floor: ends, length, unit direction and the normal pointing OUT of the floor. */
+function outlineSides(pts: XZ[]) {
+  return pts.map((a, i) => {
+    const b = pts[(i + 1) % pts.length];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const ux = (b[0] - a[0]) / len, uz = (b[1] - a[1]) / len;
+    const mid: XZ = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    // left-hand normal; flip it when a small step that way lands inside the floor
+    let nx = -uz, nz = ux;
+    if (pointInPolygon([mid[0] + nx * 0.05, mid[1] + nz * 0.05], pts)) { nx = -nx; nz = -nz; }
+    return { a, b, len, ux, uz, nx, nz, mid };
+  });
+}
+
 /** Dark band round the floor edge (the warehouse boundary). */
 function edgeBand(f: Scene3D['floor']): BoxItem[] {
+  if (f.outline) {
+    const b = 0.3;
+    // each band sits just inside its side; ends overlap at corners so there are no gaps
+    return outlineSides(f.outline).map((sd) => ({
+      pos: [sd.mid[0] - sd.nx * b / 2, 0.004, sd.mid[1] - sd.nz * b / 2],
+      scale: [sd.len + b, 0.006, b],
+      rotY: -Math.atan2(sd.uz, sd.ux),
+    }));
+  }
   const x0 = f.cx - f.w / 2, x1 = f.cx + f.w / 2, z0 = f.cz - f.d / 2, z1 = f.cz + f.d / 2, b = 0.3;
   return [
     { pos: [f.cx, 0.004, z0 + b / 2], scale: [f.w, 0.006, b], rotY: 0 }, { pos: [f.cx, 0.004, z1 - b / 2], scale: [f.w, 0.006, b], rotY: 0 },
@@ -425,6 +477,20 @@ const DIM_GAP = 1.4; // dimension lines sit this far outside the floor edge (m)
 /** Real-size dimension lines along the front and left floor edges (only when the warehouse is measured). */
 function Dimensions({ floor }: { floor: Scene3D['floor'] }) {
   if (!floor.real) return null;
+  if (floor.outline) {
+    // Shaped floor: a dimension line outside every side long enough to label.
+    const y = 0.02, t = 0.5, g = DIM_GAP * 0.6;
+    const segs: [number, number, number][][] = [];
+    for (const sd of outlineSides(floor.outline)) {
+      if (sd.len < MIN_DIM_SIDE) continue;
+      const p0: [number, number, number] = [sd.a[0] + sd.nx * g, y, sd.a[1] + sd.nz * g];
+      const p1: [number, number, number] = [sd.b[0] + sd.nx * g, y, sd.b[1] + sd.nz * g];
+      segs.push([p0, p1],
+        [[p0[0] - sd.nx * t, y, p0[2] - sd.nz * t], [p0[0] + sd.nx * t, y, p0[2] + sd.nz * t]],
+        [[p1[0] - sd.nx * t, y, p1[2] - sd.nz * t], [p1[0] + sd.nx * t, y, p1[2] + sd.nz * t]]);
+    }
+    return <>{segs.map((p, i) => <Line key={i} points={p} color="#64748b" lineWidth={1.2} />)}</>;
+  }
   const x0 = floor.cx - floor.w / 2, x1 = floor.cx + floor.w / 2, z0 = floor.cz - floor.d / 2, z1 = floor.cz + floor.d / 2;
   const y = 0.02, zf = z1 + DIM_GAP, xl = x0 - DIM_GAP, t = 0.5;
   const segs: [number, number, number][][] = [
@@ -434,13 +500,23 @@ function Dimensions({ floor }: { floor: Scene3D['floor'] }) {
   return <>{segs.map((p, i) => <Line key={i} points={p} color="#64748b" lineWidth={1.2} />)}</>;
 }
 
-/** Where the dimension labels sit (world space). */
-export function dimensionSpots(floor: Scene3D['floor']) {
+const MIN_DIM_SIDE = 1; // shaped floors: sides shorter than this (m) get no dimension
+
+export interface DimSpot { key: string; pos: [number, number, number]; value: number }
+
+/** Where the dimension labels sit (world space) and the length they show (m). */
+export function dimensionSpots(floor: Scene3D['floor']): DimSpot[] | null {
   if (!floor.real) return null;
-  return {
-    w: [floor.cx, 0.03, floor.cz + floor.d / 2 + DIM_GAP] as [number, number, number],
-    d: [floor.cx - floor.w / 2 - DIM_GAP, 0.03, floor.cz] as [number, number, number],
-  };
+  if (floor.outline) {
+    const g = DIM_GAP * 0.6 + 0.9; // just outside the dimension line
+    return outlineSides(floor.outline)
+      .map((sd, i) => ({ key: `dim:${i}`, pos: [sd.mid[0] + sd.nx * g, 0.03, sd.mid[1] + sd.nz * g] as [number, number, number], value: sd.len }))
+      .filter((d) => d.value >= MIN_DIM_SIDE);
+  }
+  return [
+    { key: 'dim:w', pos: [floor.cx, 0.03, floor.cz + floor.d / 2 + DIM_GAP], value: floor.real.w },
+    { key: 'dim:d', pos: [floor.cx - floor.w / 2 - DIM_GAP, 0.03, floor.cz], value: floor.real.d },
+  ];
 }
 
 // ─── Environment: operational areas, building structure (no walls) ────────────
@@ -482,6 +558,11 @@ function Areas({ areas }: { areas: AreaRect[] }) {
 function Building({ floor, height, roof }: { floor: Scene3D['floor']; height: number; roof: boolean }) {
   const items = useMemo(() => {
     const cols: BoxItem[] = [], truss: BoxItem[] = [];
+    if (floor.outline) {
+      // Shaped floor (D6): a column at every corner, no roof frame for now.
+      for (const [x, z] of floor.outline) cols.push({ pos: [x, height / 2, z], scale: [0.2, height, 0.2], rotY: 0 });
+      return { cols, truss };
+    }
     const x0 = floor.cx - floor.w / 2, x1 = floor.cx + floor.w / 2, z0 = floor.cz - floor.d / 2, z1 = floor.cz + floor.d / 2;
     const alongX = floor.w >= floor.d;
     const col = (x: number, z: number) => cols.push({ pos: [x, height / 2, z], scale: [0.2, height, 0.2], rotY: 0 });
@@ -495,7 +576,7 @@ function Building({ floor, height, roof }: { floor: Scene3D['floor']; height: nu
   return (
     <>
       <BoxInstances items={items.cols} color="#b8c2ca" metalness={0.2} roughness={0.6} />
-      {roof && (
+      {roof && !floor.outline && (
         <>
           <BoxInstances items={items.truss} color="#b8c2ca" metalness={0.2} roughness={0.6} />
           <mesh position={[floor.cx, height + 0.2, floor.cz]}>
@@ -919,6 +1000,8 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
   const zLines = useMemo(() => zoneLines(scene.zones), [scene]);
   const aisles = useMemo(() => mainAisles(scene), [scene]);
   const edge = useMemo(() => edgeBand(scene.floor), [scene]);
+  const floorShape = useMemo(() => shapeGeometry(scene.floor), [scene]);
+  useEffect(() => () => floorShape?.dispose(), [floorShape]);
   const flags = useMemo(() => flagOutline(scene.racks, flagged), [scene, flagged]);
 
   // Focus / filter: racks and stock outside it turn see-through (never grey, never hiding the focus).
@@ -1002,10 +1085,16 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
       {showFloor ? (
         <>
           {/* Polished concrete floor (slab joints are in the texture) */}
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.005, f.cz]} receiveShadow>
-            <planeGeometry args={[f.w, f.d]} />
-            <meshStandardMaterial map={concrete} color={concrete ? '#ffffff' : COLORS.floor} roughness={0.55} metalness={0.05} />
-          </mesh>
+          {floorShape ? (
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.005, 0]} geometry={floorShape} receiveShadow>
+              <meshStandardMaterial map={concrete} color={concrete ? '#ffffff' : COLORS.floor} roughness={0.55} metalness={0.05} />
+            </mesh>
+          ) : (
+            <mesh rotation={[-Math.PI / 2, 0, 0]} position={[f.cx, -0.005, f.cz]} receiveShadow>
+              <planeGeometry args={[f.w, f.d]} />
+              <meshStandardMaterial map={concrete} color={concrete ? '#ffffff' : COLORS.floor} roughness={0.55} metalness={0.05} />
+            </mesh>
+          )}
           {/* Floor edge = the real warehouse boundary when it is measured */}
           <BoxInstances items={edge} color="#46504c" roughness={0.9} receiveShadow />
           <Dimensions floor={f} />
@@ -1132,7 +1221,7 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     const out: Label3D[] = [];
     // Floor areas and dimensions first: labels placed later steer around them.
     if (showFloor) for (const a of scene.areas) out.push({ key: `a:${a.id}`, pos: [a.cx, 0.02, a.cz] });
-    if (dims) { out.push({ key: 'dim:w', pos: dims.w }, { key: 'dim:d', pos: dims.d }); }
+    if (dims) for (const d of dims) out.push({ key: d.key, pos: d.pos });
     // Zone names: small tags just outside the zone outline, never over a rack, only when
     // zoomed out (rack signs take over when zoomed in).
     for (const z of scene.zones) out.push({ key: `z:${z.zone}`, pos: [z.minX, 0, z.minZ], lod: 'far', around: z });
@@ -1143,7 +1232,7 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     }
     if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
     return out;
-  }, [scene, selected, showFloor, active, dims?.w[0], dims?.w[2], dims?.d[0], dims?.d[2]]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, selected, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) labelEls.current.set(key, el); else labelEls.current.delete(key);
@@ -1171,10 +1260,10 @@ export default function WarehouseScene3D(props: Scene3DProps) {
             </button>
           );
         })}
-        {dims && (['w', 'd'] as const).map((k) => (
-          <span key={k} ref={reg(`dim:${k}`)}
+        {dims?.map((d) => (
+          <span key={d.key} ref={reg(d.key)}
             className={`${place} whitespace-nowrap rounded bg-slate-50/90 px-1.5 text-xs font-semibold tabular-nums text-slate-600`}>
-            {t(L.metres, { value: fmt.number(k === 'w' ? scene.floor.real!.w : scene.floor.real!.d, 1) })}
+            {t(L.metres, { value: fmt.number(d.value, 1) })}
           </span>
         ))}
         {showFloor && scene.areas.map((a) => (

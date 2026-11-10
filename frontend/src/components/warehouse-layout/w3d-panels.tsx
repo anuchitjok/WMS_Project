@@ -18,6 +18,7 @@ import { getT, labelOf, useT } from '@/i18n';
 import { type WarehouseData, type RackData, type SlotData, type Metrics, slotItems, slotUtil } from './occupancy';
 import { type SlotState3D, type EnvMode, STATE_3D, STATE_ORDER, slotState3D, NO_ZONE } from './scene-geometry';
 import { NOT_IN_LOCATION, type HistoryEntry, type RelatedSlot, type LoadState } from './use-w3d-data';
+import { floorAreaM2 } from './floor-geometry';
 
 export const ALL = '__all';
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -76,12 +77,15 @@ export function KpiCards({ metrics }: { metrics: Metrics }) {
 
 // ─── Warehouse area card (real size from Warehouse Master) ─────────────────────
 
-/** Floor area from Warehouse Master (same formula as its form): L × W, usable = area × usable %. */
-export function warehouseArea(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'usableAreaPct'>) {
+/**
+ * Floor area from Warehouse Master (same formula as its form): the real floor shape
+ * when one is saved (D3), otherwise L × W; usable = area × usable %.
+ */
+export function warehouseArea(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'usableAreaPct' | 'floorOutline'>) {
   const l = wh.lengthCm, w = wh.widthCm;
   if (!(typeof l === 'number' && l > 0 && typeof w === 'number' && w > 0)) return null;
   const pct = typeof wh.usableAreaPct === 'number' && wh.usableAreaPct > 0 ? Math.min(100, wh.usableAreaPct) : 100;
-  const area = (l * w) / 10_000;
+  const area = floorAreaM2(wh) ?? (l * w) / 10_000;
   return { lengthM: l / 100, widthM: w / 100, areaM2: area, usableM2: (area * pct) / 100, pct };
 }
 

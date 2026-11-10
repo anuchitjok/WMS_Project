@@ -355,3 +355,26 @@ export function floorAreaM2(wh: { floorOutline?: unknown; lengthCm?: number | nu
   const pts = outlineOf(wh);
   return pts ? polygonArea(pts) : null;
 }
+
+/** X ranges where the line Z = z crosses the inside of the floor outline (even-odd rule). */
+export function spansAt(pts: Pt[], z: number): [number, number][] {
+  const xs: number[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+    if ((az > z) !== (bz > z)) xs.push(ax + ((z - az) / (bz - az)) * (bx - ax));
+  }
+  xs.sort((a, b) => a - b);
+  const out: [number, number][] = [];
+  for (let i = 0; i + 1 < xs.length; i += 2) out.push([xs[i], xs[i + 1]]);
+  return out;
+}
+
+/** Overlap of two sets of X ranges. */
+export function intersectSpans(a: [number, number][], b: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [a0, a1] of a) for (const [b0, b1] of b) {
+    const lo = Math.max(a0, b0), hi = Math.min(a1, b1);
+    if (hi > lo) out.push([lo, hi]);
+  }
+  return out;
+}

@@ -389,7 +389,8 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
                 </div>
               )}
               <CameraPresets active={preset} onPick={pickPreset} top={overlayTop}>
-                {envMode === 'full' && (
+                {/* Shaped floors have no roof frame yet (D6), so no roof switch either */}
+                {envMode === 'full' && !scene.floor.outline && (
                   <label className="flex items-center gap-2 rounded-lg bg-white/95 px-3 py-1.5 text-xs text-slate-700 shadow-md ring-1 ring-slate-200">
                     <input type="checkbox" checked={roof} onChange={(e) => setRoof(e.target.checked)} className="h-3.5 w-3.5 accent-emerald-700" />
                     {W.viewMode.roof}

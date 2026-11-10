@@ -33,6 +33,8 @@ export interface WarehouseData {
   lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null;
   /** % of the floor usable after aisles (Warehouse Master); null/undefined = 100. */
   usableAreaPct?: number | null;
+  /** Floor shape (migration 33); null/undefined = rectangle from length × width. */
+  floorOutline?: unknown;
   racks: RackData[];
   _count?: { racks: number; stockItems: number };
 }
