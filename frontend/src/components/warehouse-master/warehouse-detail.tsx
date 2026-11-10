@@ -10,6 +10,7 @@ import { getT, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Fact, Pill, rackCategoryOf, selectClass } from './shared';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
+import { SetupHealthCard } from '@/components/warehouse-layout/setup-health-card';
 
 export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditLayout, onEdit, onToggleActive, onAddRack, onSelectRack }: {
   warehouse: any;
@@ -57,6 +58,9 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
             )}
           </div>
         </div>
+
+        {/* Missing / wrong master data (same check as the 3D page); a code opens the rack */}
+        <div className="mt-4 empty:hidden"><SetupHealthCard wh={w} onRack={onSelectRack} showMasterLink={false} /></div>
 
         {/* Size */}
         <div className="mt-4 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3">

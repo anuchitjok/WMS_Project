@@ -85,50 +85,6 @@ export function warehouseArea(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | '
   return { lengthM: l / 100, widthM: w / 100, areaM2: area, usableM2: (area * pct) / 100, pct };
 }
 
-/**
- * What is still missing for this warehouse's 3D layout and floor space:
- * warehouse size, and active racks without size / zone / slots. Hidden when
- * nothing is missing.
- */
-export function SetupChecklist({ wh }: { wh: WarehouseData }) {
-  const { m, t } = useT();
-  const S = m.layout3d.w3d.setup;
-  const active = wh.racks.filter((r) => r.isActive !== false);
-  const codes = (list: RackData[]) => list.slice(0, 3).map((r) => r.code).join(', ') + (list.length > 3 ? ', …' : '');
-  const gaps: { key: string; text: string; ex?: string }[] = [];
-  if (!(wh.lengthCm && wh.widthCm)) gaps.push({ key: 'wh', text: S.whSize });
-  const noSize = active.filter((r) => !(r.lengthCm && r.widthCm));
-  const noZone = active.filter((r) => !r.zone?.trim());
-  const noSlots = active.filter((r) => !(r.slots?.length));
-  if (noSize.length) gaps.push({ key: 'size', text: t(S.rackSize, { n: noSize.length }), ex: codes(noSize) });
-  if (noZone.length) gaps.push({ key: 'zone', text: t(S.rackZone, { n: noZone.length }), ex: codes(noZone) });
-  if (noSlots.length) gaps.push({ key: 'slots', text: t(S.rackSlots, { n: noSlots.length }), ex: codes(noSlots) });
-  if (!gaps.length) return null;
-  return (
-    <div className="rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 items-start gap-2">
-          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-amber-900">{t(S.title, { code: wh.code })}</p>
-            <p className="text-xs text-amber-800/80">{S.hint}</p>
-          </div>
-        </div>
-        <Link href="/warehouse-master" className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 underline-offset-2 hover:underline">
-          {S.open} <ExternalLink className="h-3 w-3" />
-        </Link>
-      </div>
-      <ul className="mt-2 grid gap-x-6 gap-y-1 pl-6 text-xs text-amber-900 sm:grid-cols-2">
-        {gaps.map((g) => (
-          <li key={g.key} className="min-w-0 list-disc break-words">
-            {g.text}{g.ex && <span className="text-amber-800/70"> · {t(S.examples, { codes: g.ex })}</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 export function WarehouseAreaCard({ wh }: { wh: WarehouseData }) {
   const { m, t, fmt } = useT();
   const K = m.layout3d.w3d.kpi;

@@ -31,8 +31,10 @@ import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
 import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
-  KpiCards, WarehouseAreaCard, SetupChecklist, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
+  KpiCards, WarehouseAreaCard, ViewModeCard, FilterBar, LocationDetails, BottomSummary, summarizeSlot,
 } from './w3d-panels';
+import { SetupHealthCard } from './setup-health-card';
+import { setupHealth } from './setup-health';
 import { CameraPresets, ViewControls, Minimap, Legend } from './w3d-overlays';
 
 const WarehouseScene3D = dynamic(() => import('./scene-3d'), {
@@ -252,6 +254,12 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
     setFilters((f) => ({ ...f, zone: f.zone !== ALL && zoneOf(r) !== f.zone ? zoneOf(r) : f.zone, rackId: id }));
     setPreset(null);
   }, [allRacks]);
+  // Setup health: racks whose master data looks wrong get a red outline; a code in the card zooms to its rack.
+  const flagged = useMemo(() => (wh ? setupHealth(wh).flagged : undefined), [wh]);
+  const focusRackFromCard = useCallback((id: string) => {
+    selectRack(id);
+    stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [selectRack]);
   // Clicking a slot in the scene selects it and focuses its rack: the other racks fade out.
   const selectSlot = useCallback((slotId: string) => {
     setSelectedSlotId(slotId);
@@ -318,7 +326,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
         <div className="col-span-2 lg:col-span-1"><WarehouseAreaCard wh={wh} /></div>
         <div className="col-span-2 lg:col-span-5 xl:col-span-1"><ViewModeCard mode={envMode} onChange={setEnvMode} /></div>
       </div>
-      <SetupChecklist wh={wh} />
+      <SetupHealthCard wh={wh} onRack={focusRackFromCard} />
     </>
   );
 
@@ -364,6 +372,7 @@ export function Warehouse3D({ warehouses, wh, onSelectWarehouse, loading, onRelo
                 envMode={envMode}
                 roof={roof}
                 hideBoxes={colorMode === 'status' && hideBoxes}
+                flagged={flagged}
                 topInset={topInset}
                 selectedSlotId={selectedSlotId}
                 onSelectSlot={selectSlot}

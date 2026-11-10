@@ -200,6 +200,7 @@ function WarehouseMasterInner() {
       {modal?.kind === 'wh' && <WarehouseForm mode={modal.mode} data={modal.data} onClose={() => setModal(null)} onSaved={afterSave} />}
       {modal?.kind === 'rack' && (
         <RackForm mode={modal.mode} warehouseId={modal.warehouseId} data={modal.data} rackTypes={rackTypes} prefillTemplateId={modal.templateId}
+          warehouse={tree.find((w) => w.id === (modal.warehouseId ?? modal.data?.warehouseId)) ?? null}
           onClose={() => setModal(null)} onSaved={afterSave} />
       )}
       {modal?.kind === 'deleteRack' && (

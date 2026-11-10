@@ -12,6 +12,8 @@ import { warehouseSpaceApi, RACK_CATEGORIES, type RackCategory, type RackTypeMas
 import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Field, ModalWrap, Pill, isPos, optNum } from './shared';
+import { SizeWarnings } from './forms';
+import { rackSizeWarnings } from './size-rules';
 
 export function RackTypesTab({ rackTypes, loading, isAdmin, onChanged }: { rackTypes: RackTypeMaster[]; loading: boolean; isAdmin: boolean; onChanged: () => void }) {
   const { m, fmt } = useT();
@@ -142,10 +144,11 @@ function RackTypeForm({ mode, data, onClose, onSaved }: { mode: 'create' | 'edit
           <Field label={`${rt.name} *`} className={mode === 'create' ? '' : 'col-span-2'}><Input value={form.name} onChange={F('name')} /></Field>
         </div>
         <div className="grid grid-cols-3 gap-3">
-          <Field label={`${f.length} *`}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
-          <Field label={`${f.width} *`}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
-          <Field label={`${f.height} *`}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
+          <Field label={`${f.lengthCm} *`}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
+          <Field label={`${f.widthCm} *`}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
+          <Field label={`${f.heightCm} *`}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
         </div>
+        <SizeWarnings warnings={rackSizeWarnings({ lengthCm: optNum(form.lengthCm), widthCm: optNum(form.widthCm), heightCm: optNum(form.heightCm) })} />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Field label={f.levels}><Input type="number" min={1} max={99} value={pallet ? '1' : form.levels} disabled={pallet} onChange={F('levels')} /></Field>
           <Field label={f.columns}><Input type="number" min={1} max={99} value={form.columns} onChange={F('columns')} /></Field>

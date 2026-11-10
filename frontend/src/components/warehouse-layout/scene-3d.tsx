@@ -842,6 +842,29 @@ function LabelProjector({ labels, els, racks }: { labels: Label3D[]; els: RefObj
   return null;
 }
 
+// ─── Rack data warnings ────────────────────────────────────────────────────────
+
+const FLAG_COLOR = '#dc2626';
+const FLAG_MARGIN = 0.25; // m around the rack footprint
+const FLAG_W = 0.14;      // line width on the floor
+
+/** Red line round the floor footprint of each flagged rack (rack data looks wrong). */
+function flagOutline(racks: PlacedRack[], flagged: Set<string> | undefined): BoxItem[] {
+  if (!flagged?.size) return [];
+  const out: BoxItem[] = [];
+  for (const p of racks) {
+    if (!flagged.has(p.rack.id)) continue;
+    const grown: PlacedRack = { ...p, length: p.length + FLAG_MARGIN * 2, depth: p.depth + FLAG_MARGIN * 2 };
+    const c = rackCorners(grown);
+    for (let i = 0; i < 4; i++) {
+      const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
+      const len = Math.hypot(x1 - x0, z1 - z0) + FLAG_W;
+      out.push({ pos: [(x0 + x1) / 2, 0.012, (z0 + z1) / 2], scale: [len, 0.012, FLAG_W], rotY: -Math.atan2(z1 - z0, x1 - x0) });
+    }
+  }
+  return out;
+}
+
 // ─── Sun shadows ───────────────────────────────────────────────────────────────
 
 // Same sun as the mock-up: high and opposite the default camera, so shadows fall
@@ -881,7 +904,7 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, topInset = 0, selectedSlotId, onSelectSlot, apiRef, onCamera, onUserCamera, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, onSelectSlot, apiRef, onCamera, onUserCamera, labels, labelEls, zoneNames }: Scene3DProps & {
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -896,6 +919,7 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
   const zLines = useMemo(() => zoneLines(scene.zones), [scene]);
   const aisles = useMemo(() => mainAisles(scene), [scene]);
   const edge = useMemo(() => edgeBand(scene.floor), [scene]);
+  const flags = useMemo(() => flagOutline(scene.racks, flagged), [scene, flagged]);
 
   // Focus / filter: racks and stock outside it turn see-through (never grey, never hiding the focus).
   const rg = useMemo(() => ({
@@ -1012,6 +1036,9 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
         </>
       )}
 
+      {/* Racks whose master data looks wrong (setup health) */}
+      <BoxInstances items={flags} color={FLAG_COLOR} roughness={0.6} />
+
       {/* Pallet-on-floor markings belong to the rack, so they show in every mode */}
       <BoxInstances items={rs.floorLines} ghost={rg.floorLines} color={COLORS.line} roughness={0.7} receiveShadow />
 
@@ -1069,6 +1096,8 @@ export interface Scene3DProps {
   roof: boolean;
   /** Hide pallets and cartons so the status decks / strips read on their own. */
   hideBoxes?: boolean;
+  /** Rack ids to outline in red on the floor (master data looks wrong). */
+  flagged?: Set<string>;
   /** Pixels at the top of the stage covered by floating overlays (filter bar, presets). */
   topInset?: number;
   selectedSlotId: string | null;

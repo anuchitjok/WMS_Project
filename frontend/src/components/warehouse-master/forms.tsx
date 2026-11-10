@@ -12,12 +12,29 @@ import { warehouseSpaceApi, RACK_CATEGORIES, type RackCategory, type RackTypeMas
 import { labelOf, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Field, ModalWrap, isPos, optNum, rackCategoryOf, selectClass } from './shared';
+import { type SizeCm, type SizeWarning, rackSizeWarnings, warehouseSizeWarnings, rackBiggerThanWarehouse } from './size-rules';
 
 const str = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(v));
 /** cm (stored) → metres text for the warehouse form. */
 const cmToMStr = (v: number | null | undefined) => (v === null || v === undefined ? '' : String(Math.round(v) / 100));
 /** metres typed → cm to store (2 decimals, no float noise). */
 const mToCm = (v: number | undefined) => (v === undefined ? undefined : Math.round(v * 100 * 100) / 100);
+
+/** Yellow notes under the size fields. Warn only: the form still saves (decision G4). */
+export function SizeWarnings({ warnings, bigger }: { warnings: SizeWarning[]; bigger?: { l: number; w: number } | null }) {
+  const { m, t, fmt } = useT();
+  const W = m.warehouseMaster.form.warn;
+  if (!warnings.length && !bigger) return null;
+  return (
+    <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900" role="status">
+      <ul className="list-disc space-y-0.5 pl-4">
+        {warnings.map((x) => <li key={x.key}>{t(W[x.key as Exclude<SizeWarning['key'], 'rackBiggerThanWarehouse' | 'slotTooSmall'>], { limit: x.limit })}</li>)}
+        {bigger && <li>{t(W.rackBiggerThanWarehouse, { l: fmt.number(bigger.l, 1), w: fmt.number(bigger.w, 1) })}</li>}
+      </ul>
+      <p className="mt-1 text-amber-800/80">{W.canSave}</p>
+    </div>
+  );
+}
 
 // ─── Warehouse ────────────────────────────────────────────────────────────────
 export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create' | 'edit'; data?: any; onClose: () => void; onSaved: () => void }) {
@@ -66,10 +83,11 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{w.sizeSectionM}</p>
           <p className="mb-2 text-xs text-slate-400">{w.sizeSectionMHint}</p>
           <div className="grid grid-cols-3 gap-3">
-            <Field label={w.length}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="40" value={form.lengthM} onChange={F('lengthM')} /></Field>
-            <Field label={w.width}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="25" value={form.widthM} onChange={F('widthM')} /></Field>
-            <Field label={w.height}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="8" value={form.heightM} onChange={F('heightM')} /></Field>
+            <Field label={w.lengthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="40" value={form.lengthM} onChange={F('lengthM')} /></Field>
+            <Field label={w.widthM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="25" value={form.widthM} onChange={F('widthM')} /></Field>
+            <Field label={w.heightM}><Input type="number" min={0} step="any" inputMode="decimal" placeholder="8" value={form.heightM} onChange={F('heightM')} /></Field>
           </div>
+          <SizeWarnings warnings={warehouseSizeWarnings({ lengthCm: mToCm(L), widthCm: mToCm(W), heightCm: mToCm(H) })} />
         </div>
         <Field label={w.usablePct} hint={w.usablePctHint}>
           <Input type="number" min={1} max={100} step="any" inputMode="decimal" value={form.usableAreaPct} onChange={F('usableAreaPct')} className="max-w-[140px]" />
@@ -85,8 +103,10 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
 }
 
 // ─── Rack ─────────────────────────────────────────────────────────────────────
-export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId, onClose, onSaved }: {
+export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId, warehouse, onClose, onSaved }: {
   mode: 'create' | 'edit'; warehouseId?: string; data?: any; rackTypes: RackTypeMaster[]; prefillTemplateId?: string;
+  /** The rack's warehouse size, to warn when the rack would not fit. */
+  warehouse?: SizeCm | null;
   onClose: () => void; onSaved: () => void;
 }) {
   const { m, t, fmt } = useT();
@@ -108,6 +128,9 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   const options = useMemo(() => rackTypes.filter((r) => r.isActive || r.id === form.rackTypeId), [rackTypes, form.rackTypeId]);
   const preview = rackPreview(form, form.category === 'PALLET_ON_FLOOR');
   const template = rackTypes.find((r) => r.id === form.rackTypeId);
+  const sizeNow: SizeCm = { lengthCm: optNum(form.lengthCm), widthCm: optNum(form.widthCm), heightCm: optNum(form.heightCm) };
+  const bigger = warehouse && rackBiggerThanWarehouse(sizeNow, warehouse) && warehouse.lengthCm && warehouse.widthCm
+    ? { l: warehouse.lengthCm / 100, w: warehouse.widthCm / 100 } : null;
 
   function chooseTemplate(id: string) {
     setTypeTouched(true);
@@ -175,10 +198,11 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{w.sizeSection}</p>
           <div className="grid grid-cols-3 gap-3">
-            <Field label={w.length}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
-            <Field label={w.width}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
-            <Field label={w.height}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
+            <Field label={w.lengthCm}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
+            <Field label={w.widthCm}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
+            <Field label={w.heightCm}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
           </div>
+          <SizeWarnings warnings={rackSizeWarnings(sizeNow)} bigger={bigger} />
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label={w.levels}><Input type="number" min={1} max={99} value={form.levels} onChange={F('levels')} /></Field>
