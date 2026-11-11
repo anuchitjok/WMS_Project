@@ -39,10 +39,11 @@ export function CameraPresets({ active, onPick, top = 12, children }: {
     <div className="absolute left-3 z-40 flex flex-col items-start gap-2" style={{ top }}>
       <div className="flex flex-wrap gap-1.5">
         {PRESETS.map((p) => (
-          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={active === p.id}
-            className={cn('inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium shadow-md ring-1 transition-colors',
+          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={active === p.id} aria-label={C[p.id]} title={C[p.id]}
+            className={cn('inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium shadow-md ring-1 transition-colors sm:px-3',
               active === p.id ? 'bg-emerald-700 text-white ring-emerald-700' : 'bg-white/95 text-slate-700 ring-slate-200 hover:bg-white')}>
-            <p.icon className="h-4 w-4" /> {C[p.id]}
+            {/* Phones: icon only, so the presets stay on one row (the overlays below assume one row). */}
+            <p.icon className="h-4 w-4" /> <span className="hidden sm:inline">{C[p.id]}</span>
           </button>
         ))}
       </div>

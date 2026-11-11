@@ -126,57 +126,67 @@ export function nearestFree(g: WalkGrid, pt: Pt, maxR = Math.max(g.nx, g.nz)): n
 
 // ─── Shortest paths (8-way Dijkstra, no corner cutting) ──────────────────────
 
-const STEPS: [number, number, number][] = [
-  [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
-  [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
-];
+const STEP_DI = [1, -1, 0, 0, 1, 1, -1, -1];
+const STEP_DJ = [0, 0, 1, -1, 1, -1, 1, -1];
+const STEP_W = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2];
 
-/** Walking distance (cells) from `src` to every cell, plus the previous cell on each path. */
-export function distanceField(g: WalkGrid, src: number): { dist: Float64Array; prev: Int32Array } {
-  const n = g.nx * g.nz;
+/**
+ * Walking distance (cells) from `src` to every cell, plus the previous cell on each
+ * path. With `targets`, stops as soon as every target is settled (their distances and
+ * paths are final; cells farther away are left at Infinity).
+ */
+export function distanceField(g: WalkGrid, src: number, targets?: number[]): { dist: Float64Array; prev: Int32Array } {
+  const n = g.nx * g.nz, nx = g.nx, nz = g.nz, free = g.free;
   const dist = new Float64Array(n).fill(Infinity);
   const prev = new Int32Array(n).fill(-1);
-  if (src < 0 || !g.free[src]) return { dist, prev };
-  // Binary heap of [cost, cell].
-  const hc: number[] = [], hk: number[] = [];
+  if (src < 0 || !free[src]) return { dist, prev };
+  let want = -1;
+  const isTarget = targets ? new Uint8Array(n) : null;
+  if (isTarget) { want = 0; for (const t of targets!) if (t >= 0 && !isTarget[t]) { isTarget[t] = 1; want++; } }
+  // Binary min-heap of (cost, cell) in two growable typed arrays; no per-step allocation.
+  let cap = 1024, size = 0;
+  let hc = new Float64Array(cap), hk = new Int32Array(cap);
   const push = (c: number, k: number) => {
-    let i = hc.length; hc.push(c); hk.push(k);
+    if (size === cap) {
+      cap *= 2;
+      const nc = new Float64Array(cap); nc.set(hc); hc = nc;
+      const nk = new Int32Array(cap); nk.set(hk); hk = nk;
+    }
+    let i = size++;
     while (i > 0) {
       const p = (i - 1) >> 1;
-      if (hc[p] <= hc[i]) break;
-      [hc[p], hc[i]] = [hc[i], hc[p]]; [hk[p], hk[i]] = [hk[i], hk[p]]; i = p;
+      if (hc[p] <= c) break;
+      hc[i] = hc[p]; hk[i] = hk[p]; i = p;
     }
-  };
-  const pop = (): [number, number] => {
-    const top: [number, number] = [hc[0], hk[0]];
-    const lc = hc.pop()!, lk = hk.pop()!;
-    if (hc.length) {
-      hc[0] = lc; hk[0] = lk;
-      let i = 0;
-      for (;;) {
-        const l = 2 * i + 1, r = l + 1;
-        let m = i;
-        if (l < hc.length && hc[l] < hc[m]) m = l;
-        if (r < hc.length && hc[r] < hc[m]) m = r;
-        if (m === i) break;
-        [hc[m], hc[i]] = [hc[i], hc[m]]; [hk[m], hk[i]] = [hk[i], hk[m]]; i = m;
-      }
-    }
-    return top;
+    hc[i] = c; hk[i] = k;
   };
   dist[src] = 0; push(0, src);
-  while (hc.length) {
-    const [d, k] = pop();
+  while (size) {
+    const d = hc[0], k = hk[0];
+    // Pop: move the last item down from the root.
+    const lc = hc[--size], lk = hk[size];
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1;
+      if (l >= size) break;
+      const m = l + 1 < size && hc[l + 1] < hc[l] ? l + 1 : l;
+      if (hc[m] >= lc) break;
+      hc[i] = hc[m]; hk[i] = hk[m]; i = m;
+    }
+    hc[i] = lc; hk[i] = lk;
+
     if (d > dist[k]) continue;
-    const i = k % g.nx, j = (k - i) / g.nx;
-    for (const [di, dj, w] of STEPS) {
-      const a = i + di, b = j + dj;
-      if (a < 0 || b < 0 || a >= g.nx || b >= g.nz) continue;
-      const nk = idx(g, a, b);
-      if (!g.free[nk]) continue;
+    if (isTarget && isTarget[k]) { isTarget[k] = 0; if (--want === 0) break; }
+    const ci = k % nx, cj = (k - ci) / nx;
+    for (let s = 0; s < 8; s++) {
+      const di = STEP_DI[s], dj = STEP_DJ[s];
+      const a = ci + di, b = cj + dj;
+      if (a < 0 || b < 0 || a >= nx || b >= nz) continue;
+      const nk = b * nx + a;
+      if (!free[nk]) continue;
       // Diagonal only when both side cells are open (never squeeze past a rack corner).
-      if (di && dj && (!g.free[idx(g, i + di, j)] || !g.free[idx(g, i, j + dj)])) continue;
-      const nd = d + w;
+      if (di && dj && (!free[cj * nx + a] || !free[b * nx + ci])) continue;
+      const nd = d + STEP_W[s];
       if (nd < dist[nk]) { dist[nk] = nd; prev[nk] = k; push(nd, nk); }
     }
   }
@@ -302,7 +312,8 @@ export function pickRoute(scene: Scene3D, picks: PickStopIn[]): PickRoute | null
 
   const okIdx = slots.map((_, i) => i).filter((i) => stand[i] >= 0);
   const nodes = [startCell, ...okIdx.map((i) => stand[i])];
-  const fields = [fromStart, ...okIdx.map((i) => distanceField(g, stand[i]))];
+  // From each stop, search only until every other node is reached.
+  const fields = [fromStart, ...okIdx.map((i) => distanceField(g, stand[i], nodes))];
   const d = nodes.map((_, a) => nodes.map((k) => fields[a].dist[k]));
   const tour = okIdx.length ? orderStops(d) : [0];
 

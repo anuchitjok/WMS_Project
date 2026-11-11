@@ -18,7 +18,7 @@
 // Split: w3d-panels.tsx (UI around the scene), w3d-overlays.tsx (UI on the scene),
 // use-w3d-data.ts (data), scene-geometry.ts (pure layout), scene-3d.tsx (WebGL).
 
-import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { Box, AlertTriangle, Loader2, Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -139,7 +139,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   const [roof, setRoof] = useState(false);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [tab, setTab] = useState<DetailTab>('stock');
-  const [camera, setCamera] = useState<CameraInfo | null>(null);
+  // Camera position for the minimap only (see cameraStore): moving the camera must not re-render the page.
+  const [camStore] = useState(cameraStore);
   const [preset, setPreset] = useState<CameraPreset | null>('iso');
   const [miniOpen, setMiniOpen] = useState(false);
   const [gl, setGl] = useState<boolean | null>(null);
@@ -489,7 +490,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 onSelectRack={openRack}
                 onSelectZone={selectZone}
                 apiRef={api}
-                onCamera={setCamera}
+                onCamera={camStore.set}
                 onUserCamera={() => setPreset(null)}
                 tooltip={selected ? <SlotTag slot={selected.slot} /> : null}
               />
@@ -508,13 +509,13 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 )}
               </CameraPresets>
               <ViewControls api={api} onReset={resetView} hasSelection={!!selected} fullscreen={fullscreen} onFullscreen={toggleFullscreen} top={overlayTop} />
-              <Minimap scene={scene} active={active} camera={camera} selected={selPos ? [selPos[0], selPos[2]] : null}
+              <LiveMinimap store={camStore} scene={scene} active={active} selected={selPos ? [selPos[0], selPos[2]] : null}
                 expanded={miniOpen} onToggle={() => setMiniOpen((v) => !v)} onPick={(x, z) => { setPreset(null); api.current?.focus(x, z); }} />
               <Legend mode={colorMode} onMode={setColorMode} counts={counts} ageState={age.state} onRetryAge={age.reload}
                 reservedState={reserved.state} reservedPartial={reserved.partial} onRetryReserved={() => void reserved.reload()}
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
               {pickTask && PICK_STAGE.has(pickTask.status) && (
-                <div style={{ top: overlayTop + 52 }} className="absolute inset-x-0 z-30 mx-auto flex w-fit max-w-[calc(100%-1.5rem)] items-start gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
+                <div style={{ top: overlayTop + 52 }} className="absolute z-30 flex left-3 right-24 w-auto sm:inset-x-0 sm:mx-auto sm:w-fit max-w-[calc(100%-1.5rem)] items-start gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
                   <span className="mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full bg-cyan-500" />
                   <span className="min-w-0">
                     <span className="block truncate">{t(W.tasks.showing, { ref: pickTask.refNumber, n: pickSlots.length })}</span>
@@ -531,7 +532,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 </div>
               )}
               {!pickSet && filtered && inFilter === 0 && (
-                <div style={{ top: overlayTop + 52 }} className="pointer-events-none absolute inset-x-0 z-30 mx-auto w-fit rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-md ring-1 ring-slate-200">
+                <div style={{ top: overlayTop + 52 }} className="pointer-events-none absolute z-30 left-3 right-24 w-auto sm:inset-x-0 sm:mx-auto sm:w-fit rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-md ring-1 ring-slate-200">
                   {W.filters.noMatch}
                 </div>
               )}
@@ -588,4 +589,24 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
       </p>
     </div>
   );
+}
+
+/**
+ * PR8 Phase 6: the camera reports its position every 80 ms while it moves. Kept in this
+ * tiny store instead of page state, so only the minimap re-renders, not the whole
+ * page (on a 3,840-slot warehouse a page re-render per report made dragging stutter).
+ */
+interface CameraStore { get: () => CameraInfo | null; set: (c: CameraInfo) => void; subscribe: (fn: () => void) => () => void }
+function cameraStore(): CameraStore {
+  let value: CameraInfo | null = null;
+  const subs = new Set<() => void>();
+  return {
+    get: () => value,
+    set: (c) => { value = c; subs.forEach((fn) => fn()); },
+    subscribe: (fn) => { subs.add(fn); return () => { subs.delete(fn); }; },
+  };
+}
+function LiveMinimap({ store, ...rest }: Omit<ComponentProps<typeof Minimap>, 'camera'> & { store: CameraStore }) {
+  const camera = useSyncExternalStore(store.subscribe, store.get, () => null);
+  return <Minimap {...rest} camera={camera} />;
 }

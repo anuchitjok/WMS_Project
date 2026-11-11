@@ -91,9 +91,10 @@ export function TowerHeader({ wh, system, updatedAt, refreshing, failed, onRefre
       <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5" role="radiogroup" aria-label={V.aria}>
         {ENV_MODES.map((x) => (
           <button key={x.id} type="button" role="radio" aria-checked={mode === x.id} onClick={() => onMode(x.id)}
-            className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs transition-colors',
+            className={cn('flex items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1 text-xs transition-colors sm:px-2.5',
               mode === x.id ? 'bg-white font-semibold text-emerald-700 shadow-sm ring-1 ring-slate-200' : 'text-slate-600 hover:text-slate-900')}>
-            <x.icon className={cn('h-3.5 w-3.5', mode === x.id ? 'text-emerald-600' : 'text-slate-400')} /> {V[x.id]}
+            {/* Phones: text only, so the three modes fit on one line. */}
+            <x.icon className={cn('hidden h-3.5 w-3.5 sm:block', mode === x.id ? 'text-emerald-600' : 'text-slate-400')} /> {V[x.id]}
           </button>
         ))}
       </div>
