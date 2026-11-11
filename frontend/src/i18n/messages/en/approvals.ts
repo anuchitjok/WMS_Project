@@ -66,12 +66,12 @@ export const approvals = {
   },
   // PR6: choose pick locations at approval
   pick: {
-    open: 'Choose locations',
+    open: 'Pick',
     openTitle: 'Approve and choose which rack / slot each item is picked from',
     title: 'Approve {ref} — pick locations',
     intro: 'For each item, keep FIFO (oldest stock first) or choose the locations yourself. Chosen stock is reserved now, and the pick list will use exactly these locations.',
-    fifo: 'FIFO (automatic)',
-    choose: 'Choose locations',
+    fifo: 'FIFO',
+    choose: 'Manual',
     need: 'Approve {qty}',
     chosen: 'Chosen {n} of {qty}',
     fifoBadge: 'FIFO',

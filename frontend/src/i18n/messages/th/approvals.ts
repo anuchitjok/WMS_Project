@@ -68,12 +68,12 @@ export const approvals: Messages['approvals'] = {
   },
   // PR6: choose pick locations at approval
   pick: {
-    open: 'เลือกตำแหน่ง',
+    open: 'เลือกที่หยิบ',
     openTitle: 'อนุมัติและเลือกว่าจะหยิบสินค้าแต่ละรายการจาก rack / slot ไหน',
     title: 'อนุมัติ {ref} — เลือกตำแหน่งหยิบ',
     intro: 'แต่ละรายการเลือกได้ว่าจะหยิบตาม FIFO (ของเก่าก่อน) หรือเลือกตำแหน่งเอง สต็อกที่เลือกจะถูกจองทันที และใบหยิบจะใช้ตำแหน่งนี้ตรงตามที่เลือก',
-    fifo: 'FIFO (อัตโนมัติ)',
-    choose: 'เลือกตำแหน่งเอง',
+    fifo: 'FIFO',
+    choose: 'เลือกเอง',
     need: 'อนุมัติ {qty}',
     chosen: 'เลือกแล้ว {n} จาก {qty}',
     fifoBadge: 'FIFO',

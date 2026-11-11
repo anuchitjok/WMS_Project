@@ -68,12 +68,12 @@ export const approvals: Messages['approvals'] = {
   },
   // PR6: choose pick locations at approval
   pick: {
-    open: '选择库位',
+    open: '选库位',
     openTitle: '批准并选择每个物料从哪个货架 / 货位拣货',
     title: '批准 {ref} — 拣货库位',
     intro: '每个物料可保留 FIFO（先进先出）或自行选择库位。所选库存会立即预留，拣货单将严格使用这些库位。',
-    fifo: 'FIFO（自动）',
-    choose: '自选库位',
+    fifo: 'FIFO',
+    choose: '手动',
     need: '批准 {qty}',
     chosen: '已选 {n} / {qty}',
     fifoBadge: 'FIFO',
