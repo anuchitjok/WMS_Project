@@ -21,7 +21,7 @@
 
 import type { LayoutObject } from '@/lib/api';
 import { sizeOf } from './setup-health';
-import { bbox, isRectilinear, outlineOf } from './floor-geometry';
+import { type Pt, type FloorRect as GeoRect, bbox, isRectilinear, outlineOf, pointInPolygon, polygonArea, rectInPolygon, rectsOverlap } from './floor-geometry';
 import {
   type RackData, type SlotData, type WarehouseData,
   isBlocked, isOccupied, slotUtil,
@@ -166,7 +166,15 @@ export interface Scene3D {
   areas: AreaRect[];
   bounds: { minX: number; minZ: number; maxX: number; maxZ: number; maxY: number };
   floor: FloorRect;
+  /** F4/F5: rack positions that look wrong (rack ids). */
+  placement: Placement;
 }
+
+/**
+ * F4: racks outside the warehouse floor or overlapping another rack; F5: racks the
+ * shape-aware auto-layout could not fit (drawn in a row below the floor).
+ */
+export interface Placement { outside: string[]; overlap: string[]; unplaced: string[] }
 
 export const NO_ZONE = '—';
 export const zoneOf = (r: RackData) => (r.zone && r.zone.trim()) || NO_ZONE;
@@ -276,22 +284,8 @@ export interface AutoPlacement { rack: RackData; zone: string; center: [number, 
 const byCode = (a: RackData, b: RackData) => a.code.localeCompare(b.code, undefined, { numeric: true });
 const ratioMiss = (w: number, d: number, target: number) => Math.abs(Math.log(Math.max(w, 0.1) / Math.max(d, 0.1) / target));
 
-/**
- * Automatic rack layout (racks not drawn on the floor plan):
- *  - one block per zone (No zone last); racks sorted by code, left→right then
- *    row by row, every row facing an aisle sized to the rack depth;
- *  - each block wraps into as many columns as keeps it roughly square;
- *  - blocks are packed into rows of zones, choosing the arrangement whose overall
- *    shape best matches the warehouse (length × width when recorded) and that
- *    fits inside it when possible.
- * Racks are centred in their grid cell, so racks of a zone line up.
- */
-export function autoLayout(
-  racks: RackData[],
-  wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm'> | null,
-  startZ = 0,
-): AutoPlacement[] {
-  if (!racks.length) return [];
+/** Step 1 of the auto layout: one block per zone, racks on a grid facing aisles. */
+function zoneBlocks(racks: RackData[]) {
   const byZone = new Map<string, RackData[]>();
   for (const r of racks) {
     const z = zoneOf(r);
@@ -321,6 +315,27 @@ export function autoLayout(
     });
     return { zone, w: best.w, d: best.d, items };
   });
+
+  return blocks;
+}
+
+/**
+ * Automatic rack layout (racks not drawn on the floor plan):
+ *  - one block per zone (No zone last); racks sorted by code, left→right then
+ *    row by row, every row facing an aisle sized to the rack depth;
+ *  - each block wraps into as many columns as keeps it roughly square;
+ *  - blocks are packed into rows of zones, choosing the arrangement whose overall
+ *    shape best matches the warehouse (length × width when recorded) and that
+ *    fits inside it when possible.
+ * Racks are centred in their grid cell, so racks of a zone line up.
+ */
+export function autoLayout(
+  racks: RackData[],
+  wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm'> | null,
+  startZ = 0,
+): AutoPlacement[] {
+  if (!racks.length) return [];
+  const blocks = zoneBlocks(racks);
 
   // 2) Pack zone blocks into rows of `perRow` zones; pick the best shape.
   const realW = cmToM(wh?.lengthCm), realD = cmToM(wh?.widthCm);
@@ -353,6 +368,139 @@ export function autoLayout(
   return out;
 }
 
+// ─── F5: auto layout inside a shaped floor (L / U / T / custom) ────────────────
+
+const WALL_GAP = 1;     // m kept free along the walls by the auto layout
+const SCAN_MAX = 160;   // candidate positions per axis (the step grows on big floors)
+const UNPLACED_GAP = 3; // unplaced racks sit in a row this far below the floor
+
+const geo = (center: [number, number], length: number, depth: number, rotY = 0): GeoRect => ({ center, length, depth, rotY });
+
+/**
+ * Auto layout for a non-rectangular floor, in the floor's own coordinates (m).
+ * Zone blocks are built like the rectangle layout; each block takes the first
+ * free spot (top-left first) where it sits fully on the floor with WALL_GAP to
+ * the walls and a main aisle to other blocks. A block that does not fit is
+ * regridded (a few shapes), then halved, down to single racks; racks that fit nowhere are
+ * returned as `unplaced` (nothing is dropped silently).
+ * Rectangular warehouses never come here: they keep autoLayout unchanged.
+ */
+export function autoLayoutInShape(racks: RackData[], poly: Pt[]): { placed: AutoPlacement[]; unplaced: RackData[] } {
+  const placed: AutoPlacement[] = [];
+  const unplaced: RackData[] = [];
+  if (!racks.length) return { placed, unplaced };
+  const bb = bbox(poly);
+  const step = Math.max(0.5, Math.max(bb.length, bb.width) / SCAN_MAX);
+  const taken: GeoRect[] = [];
+  // Space only ever fills up, so a size that found no spot never will: skip it
+  // (and anything at least as big) without scanning again.
+  const failed: [number, number, number][] = [];
+  let free = polygonArea(poly);
+
+  const spot = (w: number, d: number, gap: number): [number, number] | null => {
+    if (w * d > free + 1e-9) return null;
+    if (failed.some(([fw, fd, fg]) => w >= fw - 1e-9 && d >= fd - 1e-9 && gap >= fg - 1e-9)) return null;
+    const found = scan(w, d, gap);
+    if (!found) failed.push([w, d, gap]);
+    return found;
+  };
+  const scan = (w: number, d: number, gap: number): [number, number] | null => {
+    for (let z = bb.minZ + WALL_GAP + d / 2; z + d / 2 + WALL_GAP <= bb.maxZ + 1e-9; z += step) {
+      const x0 = bb.minX + WALL_GAP + w / 2;
+      for (let x = x0; x + w / 2 + WALL_GAP <= bb.maxX + 1e-9; x += step) {
+        // Blocks are never rotated here, so a plain box test is exact (gap = aisle
+        // between them). On a hit, jump past that block (back onto the step grid).
+        const hit = taken.find((t) => Math.abs(t.center[0] - x) * 2 < t.length + w + 2 * gap - 1e-7
+          && Math.abs(t.center[1] - z) * 2 < t.depth + d + 2 * gap - 1e-7);
+        if (hit) {
+          const past = hit.center[0] + hit.length / 2 + gap + w / 2;
+          x = x0 + Math.ceil((past - x0) / step - 1e-9) * step - step;
+          continue;
+        }
+        if (!pointInPolygon([x, z], poly)) continue;
+        if (!rectInPolygon(geo([x, z], w + 2 * WALL_GAP, d + 2 * WALL_GAP), poly)) continue;
+        return [x, z];
+      }
+    }
+    return null;
+  };
+
+  // `list` (one zone) on a grid with `cols` columns: block size + rack offsets.
+  const grid = (list: RackData[], cols: number) => {
+    const sizes = list.map(rackSize);
+    const L = Math.max(...sizes.map((s) => s.length)), D = Math.max(...sizes.map((s) => s.depth));
+    const aisle = aisleFor(D);
+    const rows = Math.ceil(list.length / cols);
+    return {
+      w: cols * L + (cols - 1) * aisle, d: rows * D + (rows - 1) * aisle,
+      items: list.map((rack, i) => ({ rack, x: (i % cols) * (L + aisle) + L / 2, z: Math.floor(i / cols) * (D + aisle) + D / 2 })),
+    };
+  };
+
+  const put = (zone: string, list: RackData[], preferCols: number): void => {
+    const n = list.length;
+    // A few grid shapes: the zone's own, one row, one column, and in between.
+    const tries = [...new Set([preferCols, n, 1, Math.ceil(n / 2), Math.max(1, Math.round(Math.sqrt(n)))])];
+    for (const cols of tries) {
+      const g = grid(list, cols);
+      const at = spot(g.w, g.d, AUTO_ZONE_GAP);
+      if (!at) continue;
+      const ox = at[0] - g.w / 2, oz = at[1] - g.d / 2;
+      taken.push(geo(at, g.w, g.d));
+      free -= g.w * g.d;
+      for (const it of g.items) placed.push({ rack: it.rack, zone, center: [ox + it.x, oz + it.z] });
+      return;
+    }
+    if (n === 1) { unplaced.push(list[0]); return; }
+    const half = Math.ceil(n / 2);
+    put(zone, list.slice(0, half), Math.max(1, Math.round(Math.sqrt(half))));
+    put(zone, list.slice(half), Math.max(1, Math.round(Math.sqrt(n - half))));
+  };
+
+  for (const b of zoneBlocks(racks)) {
+    const list = b.items.map((it) => it.rack);
+    const cols = b.items.filter((it) => it.z === b.items[0].z).length;
+    put(b.zone, list, cols);
+  }
+  return { placed, unplaced };
+}
+
+/** Non-rectangular floor outline of a warehouse (its own coordinates), else null. */
+function shapedPoints(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'floorOutline'> | null | undefined): Pt[] | null {
+  if (!wh?.floorOutline) return null;
+  const pts = outlineOf(wh);
+  return pts && !(pts.length === 4 && isRectilinear(pts)) ? pts : null;
+}
+
+/**
+ * The automatic layout rule shared by 3D and the setup wizard preview: a shaped
+ * floor uses autoLayoutInShape (own coordinates); anything else keeps autoLayout.
+ */
+export function autoPlace(racks: RackData[], wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'floorOutline'> | null | undefined) {
+  const outline = shapedPoints(wh);
+  if (!outline) return { placed: autoLayout(racks, wh), unplaced: [] as RackData[], outline: null };
+  return { ...autoLayoutInShape(racks, outline), outline };
+}
+
+/** F4: racks outside the floor polygon, and racks overlapping each other (touching is fine). */
+export function placementIssues(racks: PlacedRack[], floorPoly: Pt[] | null): { outside: string[]; overlap: string[] } {
+  const g = racks.map((p) => geo(p.center, p.length, p.depth, p.rotY));
+  const box = racks.map((p) => {
+    const c = rackCorners(p);
+    return { minX: Math.min(...c.map((q) => q[0])), maxX: Math.max(...c.map((q) => q[0])), minZ: Math.min(...c.map((q) => q[1])), maxZ: Math.max(...c.map((q) => q[1])) };
+  });
+  const outside = floorPoly ? racks.filter((_, i) => !rectInPolygon(g[i], floorPoly)).map((p) => p.rack.id) : [];
+  const over = new Set<string>();
+  for (let i = 0; i < racks.length; i++) {
+    for (let j = i + 1; j < racks.length; j++) {
+      const a = box[i], b = box[j];
+      if (a.maxX <= b.minX || b.maxX <= a.minX || a.maxZ <= b.minZ || b.maxZ <= a.minZ) continue;
+      if (rectsOverlap(g[i], g[j])) { over.add(racks[i].rack.id); over.add(racks[j].rack.id); }
+    }
+  }
+  return { outside, overlap: racks.filter((p) => over.has(p.rack.id)).map((p) => p.rack.id) };
+}
+
 export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject[] = []): Scene3D {
   const racks = (wh?.racks ?? []).filter((r) => r.isActive !== false);
   const placed: PlacedRack[] = [];
@@ -383,8 +531,25 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
 
   // 2) Everything else: automatic layout, below the floor-plan racks if any.
   const rest = racks.filter((r) => !drawn.has(r.id));
-  const startZ = Number.isFinite(linkedMaxZ) ? linkedMaxZ + ZONE_GAP : 0;
-  for (const a of autoLayout(rest, wh, startZ)) placed.push(place(a.rack, a.center, 0, a.zone));
+  // F5: a shaped warehouse with no plan-drawn racks lays out inside its real shape,
+  // in the outline's own coordinates (the floor is then anchored, not centred).
+  const shape = linked.length ? null : shapedPoints(wh);
+  const unplaced: RackData[] = [];
+  if (shape) {
+    const res = autoLayoutInShape(rest, shape);
+    for (const a of res.placed) placed.push(place(a.rack, a.center, 0, a.zone));
+    const bb = bbox(shape);
+    let x = bb.minX;
+    for (const r of res.unplaced) {
+      const sz = rackSize(r);
+      placed.push(place(r, [x + sz.length / 2, bb.maxZ + UNPLACED_GAP + sz.depth / 2], 0, zoneOf(r)));
+      x += sz.length + 1;
+      unplaced.push(r);
+    }
+  } else {
+    const startZ = Number.isFinite(linkedMaxZ) ? linkedMaxZ + ZONE_GAP : 0;
+    for (const a of autoLayout(rest, wh, startZ)) placed.push(place(a.rack, a.center, 0, a.zone));
+  }
 
   // Slots
   const slots: PlacedSlot[] = [];
@@ -435,7 +600,25 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
   // `bounds` = racks only (camera framing); the floor also covers the areas.
   const bounds = { minX, minZ, maxX, maxZ, maxY };
 
-  return { racks: placed, slots, zones, areas, bounds, floor: floorRect(all, wh) };
+  let floor: FloorRect;
+  if (shape) {
+    const bb = bbox(shape);
+    floor = { cx: bb.minX + bb.length / 2, cz: bb.minZ + bb.width / 2, w: bb.length, d: bb.width, real: { w: bb.length, d: bb.width }, outline: shape };
+  } else {
+    floor = floorRect(all, wh);
+  }
+
+  // F4: check every placed rack against the real floor (not the slab grown round racks).
+  const unplacedIds = new Set(unplaced.map((r) => r.id));
+  const fr = floor.real;
+  const floorPoly: Pt[] | null = floor.outline ?? (fr
+    ? [[floor.cx - fr.w / 2, floor.cz - fr.d / 2], [floor.cx + fr.w / 2, floor.cz - fr.d / 2],
+      [floor.cx + fr.w / 2, floor.cz + fr.d / 2], [floor.cx - fr.w / 2, floor.cz + fr.d / 2]]
+    : null);
+  const issues = placementIssues(placed.filter((p) => !unplacedIds.has(p.rack.id)), floorPoly);
+  const placement: Placement = { ...issues, unplaced: unplaced.map((r) => r.id) };
+
+  return { racks: placed, slots, zones, areas, bounds, floor, placement };
 }
 
 /** Bounds of a subset of racks (used to frame the camera on a filter). */

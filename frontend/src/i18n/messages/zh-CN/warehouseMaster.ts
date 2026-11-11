@@ -211,6 +211,7 @@ export const warehouseMaster: Messages['warehouseMaster'] = {
     legendNew: '新建',
     legendExisting: '已有',
     previewNote: '自动排列，与 3D 视图相同；之后可以移动货架。',
+    previewUnplaced: '有 {n} 个货架无法放入仓库形状：{codes}',
     back: '上一步',
     next: '下一步',
     create: '创建 {racks} 个货架',

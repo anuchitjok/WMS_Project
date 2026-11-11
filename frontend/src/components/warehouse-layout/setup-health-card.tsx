@@ -8,19 +8,21 @@ import { useMemo } from 'react';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
 import { useT } from '@/i18n';
 import { SIZE_WARN } from '../warehouse-master/size-rules';
-import { type HealthWarehouse, type HealthItem, setupHealth } from './setup-health';
+import { type HealthWarehouse, type HealthItem, type PlacementIds, setupHealth } from './setup-health';
 
 const MAX_CODES = 6;
 
-export function SetupHealthCard({ wh, onRack, showMasterLink = true }: {
+export function SetupHealthCard({ wh, placement, onRack, showMasterLink = true }: {
   wh: HealthWarehouse;
+  /** 3D only: rack position problems from the placed scene (F4/F5). */
+  placement?: PlacementIds | null;
   /** Click on a rack code (3D: zoom to it; Warehouse Master: open it). */
   onRack?: (rackId: string) => void;
   showMasterLink?: boolean;
 }) {
   const { m, t } = useT();
   const S = m.layout3d.w3d.setup;
-  const h = useMemo(() => setupHealth(wh), [wh]);
+  const h = useMemo(() => setupHealth(wh, placement), [wh, placement]);
   if (h.ok) return null;
 
   const text = (key: string, n: number) => {
@@ -32,6 +34,9 @@ export function SetupHealthCard({ wh, onRack, showMasterLink = true }: {
       case 'rackTooBig': return t(S.rackTooBig, { n, l: SIZE_WARN.rackLengthM, d: SIZE_WARN.rackDepthM, h: SIZE_WARN.rackHeightM });
       case 'rackBiggerThanWh': return t(S.rackBiggerThanWh, { n });
       case 'slotsOverGrid': return t(S.slotsOverGrid, { n });
+      case 'rackOutside': return t(S.rackOutside, { n });
+      case 'rackOverlap': return t(S.rackOverlap, { n });
+      case 'rackUnplaced': return t(S.rackUnplaced, { n });
       default: return t(S.slotTooSmall, { n, cm: SIZE_WARN.slotMinCm });
     }
   };

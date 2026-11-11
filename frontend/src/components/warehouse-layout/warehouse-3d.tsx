@@ -347,7 +347,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   }, [selectRack]);
   const focusedRack = filters.rackId !== ALL ? allRacks.find((r) => r.id === filters.rackId) ?? null : null;
   // Setup health: racks whose master data looks wrong get a red outline; a code in the card zooms to its rack.
-  const flagged = useMemo(() => (wh ? setupHealth(wh).flagged : undefined), [wh]);
+  const flagged = useMemo(() => (wh ? setupHealth(wh, scene.placement).flagged : undefined), [wh, scene.placement]);
   const focusRackFromCard = useCallback((id: string) => {
     openRack(id);
     stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -433,7 +433,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
       <TowerHeader wh={wh} system={tower.system} updatedAt={tower.updatedAt} refreshing={tower.refreshing} failed={tower.failed || reserved.stale}
         onRefresh={refreshAll} mode={envMode} onMode={setEnvMode} />
       <TowerKpis metrics={metrics} stock={tower.stock} tasks={tower.tasks} />
-      <SetupHealthCard wh={wh} onRack={focusRackFromCard} />
+      <SetupHealthCard wh={wh} placement={scene.placement} onRack={focusRackFromCard} />
     </>
   );
 
