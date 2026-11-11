@@ -12,6 +12,7 @@ import { approvals } from './approvals';
 import { reports } from './reports';
 import { inventory } from './inventory';
 import { scrap } from './scrap';
+import { relocation } from './relocation';
 import { shared } from './shared';
 import { rtv } from './rtv';
 import { returns } from './returns';
@@ -43,6 +44,7 @@ export const en = {
   rtv,
   shared,
   scrap,
+  relocation,
   reports,
   inventory,
   approvals,

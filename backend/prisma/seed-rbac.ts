@@ -28,6 +28,8 @@ const PERMISSIONS: { code: string; module: string; action: string; description: 
   { code: 'report.read', module: 'report', action: 'read', description: 'View reports' },
   { code: 'audit.read', module: 'audit', action: 'read', description: 'View audit trail' },
   { code: 'dataio.manage', module: 'dataio', action: 'manage', description: 'Import/export data' },
+  { code: 'relocation.request', module: 'relocation', action: 'request', description: 'Create relocation requests and confirm approved moves' },
+  { code: 'relocation.approve', module: 'relocation', action: 'approve', description: 'Approve or reject relocation requests' },
 ];
 
 const ALL = PERMISSIONS.map((p) => p.code);
@@ -42,11 +44,11 @@ const ROLES: { key: string; name: string; description: string; permissions: stri
     permissions: ['inventory.read', 'inventory.create', 'inventory.adjust', 'inventory.transfer',
       'request.read', 'request.approve', 'request.cancel', 'receiving.manage', 'putaway.manage',
       'fulfillment.manage', 'rma.manage', 'rtv.manage', 'product.manage', 'warehouse.manage',
-      'report.read', 'audit.read', 'dataio.manage'],
+      'report.read', 'audit.read', 'dataio.manage', 'relocation.request', 'relocation.approve'],
   },
   {
     key: 'PICKER', name: 'Picker / Warehouse Staff', description: 'Execute pick/pack/putaway',
-    permissions: ['inventory.read', 'request.read', 'putaway.manage', 'fulfillment.manage', 'receiving.manage'],
+    permissions: ['inventory.read', 'request.read', 'putaway.manage', 'fulfillment.manage', 'receiving.manage', 'relocation.request'],
   },
   {
     key: 'REQUESTER', name: 'Requester', description: 'Create and track requests',

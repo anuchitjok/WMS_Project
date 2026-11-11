@@ -7,9 +7,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Box, Warehouse as WarehouseIcon, Columns3, Search, X, MapPin, Package, Loader2,
-  RotateCcw, Clock, Gauge, Crosshair, ExternalLink, History, Link2, AlertTriangle,
+  RotateCcw, Clock, Gauge, Crosshair, ExternalLink, History, Link2, AlertTriangle, ArrowRightLeft,
 } from 'lucide-react';
+import Link from 'next/link';
 import { inventoryApi } from '@/lib/api';
+import { useAuthStore } from '@/store/auth.store';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn, formatDate } from '@/lib/utils';
@@ -302,6 +304,9 @@ export function summarizeSlot(slot: SlotData, detail: any): SlotStock {
   return { qty: items.reduce((a, it) => a + (Number(it.quantity) || 0), 0), skus, first, items, lastMove: first?.updatedAt ?? null };
 }
 
+/** Same legacy roles as the backend rule relocationRequest (operators). */
+const RELOCATE_ROLES: string[] = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'WAREHOUSE_STAFF'];
+
 export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageState, tab, onTab, history, related, slotCode,
   onRetry, onClose, onFocusSlot, onFocusRack, onViewStock, onGoSlot, onOpenRack }: {
   wh: WarehouseData; rack: RackData | null; slot: SlotData | null;
@@ -318,6 +323,8 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
 }) {
   const { m, t } = useT();
   const D = m.layout3d.w3d.details;
+  const role = useAuthStore((x) => x.user?.role);
+  const canRelocate = !!role && RELOCATE_ROLES.includes(role);
 
   if (!slot) {
     return (
@@ -491,6 +498,13 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
         <Button className="col-span-2 h-10 gap-2 bg-emerald-700 text-white hover:bg-emerald-800" onClick={() => onViewStock(slot.id)}>
           <ExternalLink className="h-4 w-4" /> {D.viewStock}
         </Button>
+        {/* PR7: start a relocation request for stock in this slot (operators only; the API enforces the permission). */}
+        {rows > 0 && canRelocate && (
+          <Link href={`/relocation?new=1&warehouseId=${encodeURIComponent(wh.id)}&slotId=${encodeURIComponent(slot.id)}`}
+            className="col-span-2 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50">
+            <ArrowRightLeft className="h-4 w-4" /> {m.relocation.requestMove}
+          </Link>
+        )}
       </div>
     </div>
   );

@@ -42,6 +42,7 @@ export const nav: Messages['nav'] = {
     doa: 'DOA / 故障品',
     rtvCases: 'RTV 案例',
     scrap: '报废管理',
+    relocation: '库位移位',
     approvalWorkspace: '审批工作台',
     importExport: '导入 / 导出',
     notifications: '通知',

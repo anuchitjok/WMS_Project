@@ -102,4 +102,11 @@ export const ACCESS = {
   // ── Warranty
   warrantyView:     { permissions: ['warranty.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, WAREHOUSE_SUPERVISOR, RMA_TEAM, RTV_OFFICER] },
   warrantyManage:   { permissions: ['warranty.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+
+  // ── PR7 Location Relocation Request (new codes from 34_location_relocation.sql)
+  relocationRead:    { permissions: ['relocation.request', 'relocation.approve', 'inventory.read'], legacyRoles: [...OPERATORS, AUDITOR] },
+  relocationRequest: { permissions: ['relocation.request'], legacyRoles: OPERATORS },
+  relocationApprove: { permissions: ['relocation.approve'], legacyRoles: SUPERVISORS },
+  /** Confirm the move / cancel: staff who raise requests, and approvers. */
+  relocationMove:    { permissions: ['relocation.request', 'relocation.approve'], legacyRoles: OPERATORS },
 } satisfies Record<string, AccessRule>;

@@ -86,6 +86,13 @@ export const status = {
     REJECTED: 'Rejected',
     CANCELLED: 'Cancelled',
   },
+  relocation: {
+    PENDING_APPROVAL: 'Pending Approval',
+    APPROVED: 'Approved',
+    COMPLETED: 'Completed',
+    REJECTED: 'Rejected',
+    CANCELLED: 'Cancelled',
+  },
   priority: {
     LOW: 'Low',
     NORMAL: 'Normal',

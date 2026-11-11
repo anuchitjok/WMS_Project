@@ -131,6 +131,15 @@ enum ScrapStatus {
   CANCELLED
 }
 
+/// PR7 Location Relocation Request: PENDING_APPROVAL → APPROVED → COMPLETED (stock moves on COMPLETED only).
+enum RelocationStatus {
+  PENDING_APPROVAL
+  APPROVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
 enum OwnershipType {
   CONSIGNMENT
   OWN
@@ -180,6 +189,9 @@ model User {
   rtvCases           RTVCase[]
   scrapRequested     ScrapCase[]      @relation("ScrapRequested")
   scrapApproved      ScrapCase[]      @relation("ScrapApproved")
+  relocationsRequested RelocationRequest[] @relation("RelocationRequested")
+  relocationsApproved  RelocationRequest[] @relation("RelocationApproved")
+  relocationsCompleted RelocationRequest[] @relation("RelocationCompleted")
   auditLogs          AuditLog[]
   goodsReceivings    GoodsReceiving[]
 
@@ -321,6 +333,7 @@ model Vendor {
 }
 
 model Warehouse {
+  relocations RelocationRequest[] // PR7 Location Relocation Request
   id         String      @id @default(cuid())
   code       String      @unique
   name       String
@@ -399,6 +412,8 @@ model RackTypeMaster {
 }
 
 model Slot {
+  relocationsFrom RelocationLine[] @relation("RelocationFrom") // PR7
+  relocationsTo   RelocationLine[] @relation("RelocationTo")
   id         String     @id @default(cuid())
   rackId     String
   code       String
@@ -439,6 +454,7 @@ enum ProductStatus {
 }
 
 model Product {
+  relocationLines RelocationLine[] // PR7
   id               String        @id @default(cuid())
   code             String        @unique
   name             String
@@ -511,6 +527,7 @@ model StockItem {
   rtvCases               RTVCase[]               @relation("RTVStockItem")
   rtvReplacements        RTVCase[]               @relation("RTVReplacement")
   scrapCases             ScrapCase[]
+  relocationLines        RelocationLine[]
   goodsReceivingItems    GoodsReceivingItem[]
 
   @@index([serialNumber])
@@ -1091,6 +1108,55 @@ model ScrapCase {
   approvedBy  User?     @relation("ScrapApproved", fields: [approvedById], references: [id])
 
   @@index([status])
+}
+
+/// PR7: move stock between slots of ONE warehouse with approval (maker ≠ checker).
+/// The stock row's location changes only when an approved request is completed.
+model RelocationRequest {
+  id            String           @id @default(cuid())
+  refNumber     String           @unique
+  warehouseId   String
+  status        RelocationStatus @default(PENDING_APPROVAL)
+  reason        String?
+  requestedById String
+  approvedById  String?
+  approvedAt    DateTime?
+  rejectReason  String?
+  completedById String?
+  completedAt   DateTime?
+  cancelledAt   DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  requestedBy User             @relation("RelocationRequested", fields: [requestedById], references: [id])
+  approvedBy  User?            @relation("RelocationApproved", fields: [approvedById], references: [id])
+  completedBy User?            @relation("RelocationCompleted", fields: [completedById], references: [id])
+  lines       RelocationLine[]
+
+  @@index([warehouseId, status])
+  @@index([status])
+}
+
+model RelocationLine {
+  id          String @id @default(cuid())
+  requestId   String
+  stockItemId String
+  productId   String
+  fromSlotId  String
+  toSlotId    String
+  quantity    Float
+  /// Remainder row left in the source slot when only part of the row moved (set on completion).
+  remainderStockItemId String?
+
+  request   RelocationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  stockItem StockItem         @relation(fields: [stockItemId], references: [id])
+  product   Product           @relation(fields: [productId], references: [id])
+  fromSlot  Slot              @relation("RelocationFrom", fields: [fromSlotId], references: [id])
+  toSlot    Slot              @relation("RelocationTo", fields: [toSlotId], references: [id])
+
+  @@index([requestId])
+  @@index([stockItemId])
 }
 
 model ApprovalInstance {
