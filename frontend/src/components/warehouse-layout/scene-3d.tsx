@@ -844,6 +844,56 @@ const FOCUS_MARGIN = 0.5; // m around the rack footprint
 const FOCUS_W = 0.18;     // band width on the floor
 
 /** Selected slot: translucent cyan volume with a bright edge (the 3D accent colour). */
+/**
+ * PR8 Phase 5: estimated pick route painted on the floor — a cyan line through the
+ * aisles, small arrows every few metres showing the walking direction, and a ring
+ * where it starts (and ends). Drawn over the floor markings, under the racks.
+ */
+const ROUTE_Y = 0.06;
+const ROUTE_ARROW_EVERY = 4; // m
+const ARROW_GEOM = (() => {
+  const g = new THREE.BufferGeometry();
+  // Flat chevron pointing along +X, lying on the floor.
+  g.setAttribute('position', new THREE.Float32BufferAttribute([0.35, 0, 0, -0.25, 0, -0.3, -0.25, 0, 0.3], 3));
+  g.setIndex([0, 1, 2]);
+  g.computeVertexNormals();
+  return g;
+})();
+function RouteLine({ path, start }: { path: [number, number][]; start: [number, number] }) {
+  const points = useMemo(() => path.map(([x, z]) => new THREE.Vector3(x, ROUTE_Y, z)), [path]);
+  const arrows = useMemo(() => {
+    const out: { pos: [number, number, number]; rotY: number }[] = [];
+    let carry = ROUTE_ARROW_EVERY / 2;
+    for (let i = 0; i + 1 < path.length; i++) {
+      const [ax, az] = path[i], [bx, bz] = path[i + 1];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 1e-6) continue;
+      const rotY = -Math.atan2(bz - az, bx - ax);
+      for (let d = carry; d < len; d += ROUTE_ARROW_EVERY) {
+        const t = d / len;
+        out.push({ pos: [ax + (bx - ax) * t, ROUTE_Y + 0.01, az + (bz - az) * t], rotY });
+      }
+      carry = (carry - len) % ROUTE_ARROW_EVERY;
+      if (carry < 0) carry += ROUTE_ARROW_EVERY;
+    }
+    return out;
+  }, [path]);
+  return (
+    <group renderOrder={1}>
+      <Line points={points} color="#0891b2" lineWidth={4} transparent opacity={0.9} depthWrite={false} />
+      {arrows.map((a, i) => (
+        <mesh key={i} geometry={ARROW_GEOM} position={a.pos} rotation={[0, a.rotY, 0]}>
+          <meshBasicMaterial color="#0e7490" side={THREE.DoubleSide} depthWrite={false} />
+        </mesh>
+      ))}
+      <mesh position={[start[0], ROUTE_Y, start[1]]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.45, 0.7, 32]} />
+        <meshBasicMaterial color="#0891b2" side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
 function Highlight({ s }: { s: PlacedSlot }) {
   return (
     <group position={s.pos} rotation={[0, s.rotY, 0]} scale={[s.size[0] * 1.02, s.size[1] * 0.98, s.size[2] * 1.06]}>
@@ -1013,7 +1063,7 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, route, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
   onHoverSlot?: (i: number | null) => void;
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
@@ -1066,8 +1116,17 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
     return b;
   }, [scene]);
   const activeRacks = useMemo(() => (active ? scene.racks.filter((p) => active.has(p.rack.id)) : scene.racks), [scene, active]);
-  const fitBounds = useMemo(() => (active && activeRacks.length ? boundsOf(activeRacks) : homeBounds), [active, activeRacks, homeBounds]);
-  const fitKey = useMemo(() => activeRacks.map((p) => p.rack.id).join(','), [activeRacks]);
+  const fitBounds = useMemo(() => {
+    const b = active && activeRacks.length ? boundsOf(activeRacks) : homeBounds;
+    if (!route?.path.length) return b;
+    // PR8 Phase 5: frame the whole route, start point included.
+    const r = { ...b };
+    for (const [x, z] of route.path) {
+      r.minX = Math.min(r.minX, x); r.maxX = Math.max(r.maxX, x); r.minZ = Math.min(r.minZ, z); r.maxZ = Math.max(r.maxZ, z);
+    }
+    return r;
+  }, [active, activeRacks, homeBounds, route]);
+  const fitKey = useMemo(() => activeRacks.map((p) => p.rack.id).join(',') + (route ? `|${route.start.join()}` : ''), [activeRacks, route]);
   const slotIdx = useMemo(() => new Map(scene.slots.map((s, i) => [s.slot.id, i])), [scene]);
   const slotPos = useMemo(() => (id: string) => {
     const i = slotIdx.get(id);
@@ -1200,6 +1259,7 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
       {hovered && hovered.slot.id !== selectedSlotId && <Outline s={hovered} color="#334155" />}
       {selected && <Highlight s={selected} />}
       {picks.map((s) => <Highlight key={s.slot.id} s={s} />)}
+      {route && route.path.length > 1 && <RouteLine path={route.path} start={route.start} />}
       {focusRack && <RackHighlight p={focusRack} />}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
@@ -1249,6 +1309,8 @@ export interface Scene3DProps {
   focusRackId?: string | null;
   /** PR8 Phase 4: slots of the chosen pick task, in pick order (cyan + a number tag each). */
   pickSlots?: { slotId: string; n: number }[];
+  /** PR8 Phase 5: estimated walking route (floor x, z) and where it starts. */
+  route?: { path: [number, number][]; start: [number, number]; startLabel: string } | null;
   onSelectSlot: (slotId: string) => void;
   onSelectRack: (rackId: string) => void;
   /** A zone name on the floor was clicked: focus every rack in that zone. */
@@ -1262,7 +1324,7 @@ export interface Scene3DProps {
 }
 
 export default function WarehouseScene3D(props: Scene3DProps) {
-  const { scene, active, envMode, selectedSlotId, pickSlots, onSelectRack, onSelectZone, tooltip } = props;
+  const { scene, active, envMode, selectedSlotId, pickSlots, route, onSelectRack, onSelectZone, tooltip } = props;
   const { m, t, fmt } = useT();
   const L = m.layout3d.view, A = m.layout3d.w3d.area;
   const labelEls = useRef(new Map<string, HTMLElement>());
@@ -1303,8 +1365,9 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
     if (hovered) out.push({ key: 'hov', pos: [hovered.pos[0], hovered.pos[1] + hovered.size[1] * 0.55, hovered.pos[2]] });
     for (const { s } of pickTags) out.push({ key: `pk:${s.slot.id}`, pos: [s.pos[0], s.pos[1] + s.size[1] * 0.5, s.pos[2]], keep: true });
+    if (route) out.push({ key: 'pk-start', pos: [route.start[0], 0.1, route.start[1]], keep: true });
     return out;
-  }, [scene, selected, hovered, pickTags, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, selected, hovered, pickTags, route, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) labelEls.current.set(key, el); else labelEls.current.delete(key);
@@ -1370,6 +1433,13 @@ export default function WarehouseScene3D(props: Scene3DProps) {
             </span>
           </div>
         ))}
+        {route && (
+          <div ref={reg('pk-start')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-1`}>
+            <span className="whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-cyan-800 shadow-md ring-1 ring-cyan-300">
+              {route.startLabel}
+            </span>
+          </div>
+        )}
         {hovered && (
           <div ref={reg('hov')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`} role="tooltip">
             <HoverTag slot={hovered.slot} rack={hovered.rack} />

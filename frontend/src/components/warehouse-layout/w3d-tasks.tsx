@@ -38,7 +38,7 @@ const TONE: Record<string, string> = {
 
 export const lineLeft = (l: TaskLine) => Math.max(0, (Number(l.qtyRequested) || 0) - (Number(l.qtyPicked) || 0));
 
-export function TaskPanel({ open, flow, stock, tab, onTab, selectedTaskId, onSelectTask, locate, onGoSlot }: {
+export function TaskPanel({ open, flow, stock, tab, onTab, selectedTaskId, onSelectTask, locate, onGoSlot, stopOf }: {
   open: Source<OpenTask[]>;
   flow: Source<FlowFigures>;
   stock: Source<StockFigures>;
@@ -48,6 +48,8 @@ export function TaskPanel({ open, flow, stock, tab, onTab, selectedTaskId, onSel
   /** Where a line's stock sits now (null = not known). */
   locate: (l: TaskLine) => { slotId: string; code: string } | null;
   onGoSlot: (slotId: string) => void;
+  /** PR8 Phase 5: walking order per slot of the task on show (null = no route). */
+  stopOf?: Map<string, { order: number; reachable: boolean }> | null;
 }) {
   const { m, t } = useT();
   const T = m.layout3d.w3d.tasks;
@@ -76,7 +78,7 @@ export function TaskPanel({ open, flow, stock, tab, onTab, selectedTaskId, onSel
       <ul className="space-y-1.5">
         {list.map((t) => (
           <TaskRow key={t.id} t={t} open={t.id === selectedTaskId} onToggle={() => onSelectTask(t.id === selectedTaskId ? null : t.id)}
-            locate={locate} onGoSlot={onGoSlot} />
+            locate={locate} onGoSlot={onGoSlot} stopOf={t.id === selectedTaskId ? stopOf : null} />
         ))}
         {tab === 'pending' && putaway > 0 && (
           <li className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2 text-sm">
@@ -116,10 +118,11 @@ export function TaskPanel({ open, flow, stock, tab, onTab, selectedTaskId, onSel
   );
 }
 
-function TaskRow({ t, open, onToggle, locate, onGoSlot }: {
+function TaskRow({ t, open, onToggle, locate, onGoSlot, stopOf }: {
   t: OpenTask; open: boolean; onToggle: () => void;
   locate: (l: TaskLine) => { slotId: string; code: string } | null;
   onGoSlot: (slotId: string) => void;
+  stopOf?: Map<string, { order: number; reachable: boolean }> | null;
 }) {
   const { m, t: tr } = useT();
   const T = m.layout3d.w3d.tasks;
@@ -148,6 +151,7 @@ function TaskRow({ t, open, onToggle, locate, onGoSlot }: {
           {lines.map((l, i) => {
             const left = lineLeft(l);
             const at = left > 0 ? locate(l) : null;
+            const stop = at ? stopOf?.get(at.slotId) : undefined;
             return (
               <li key={l.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-sm">
                 <span className={cn('grid h-5 min-w-5 place-items-center rounded-full px-1 text-[11px] font-bold tabular-nums',
@@ -163,6 +167,11 @@ function TaskRow({ t, open, onToggle, locate, onGoSlot }: {
                 ) : (
                   <span className="text-xs text-amber-700">{l.stockItemId ? T.noLocation : T.notAllocated}</span>
                 )}
+                {stop && (stop.reachable ? (
+                  <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-semibold text-cyan-800">{tr(T.stop, { n: stop.order })}</span>
+                ) : (
+                  <span className="text-xs text-amber-700">{T.noAisle}</span>
+                ))}
               </li>
             );
           })}

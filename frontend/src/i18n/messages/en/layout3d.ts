@@ -195,6 +195,13 @@ export const layout3d = {
       openFulfillment: 'Open in Fulfillment',
       showing: 'Pick task {ref} · {n} slot(s) to pick',
       clear: 'Clear',
+      stop: 'Stop {n}',
+      routeLen: 'Estimated route ≈ {m} m',
+      routeNote: 'Follows the 3D layout, not measured aisles.',
+      startShip: 'Start · Shipping',
+      startEntrance: 'Start · Front edge',
+      unreachable: '{n} slot(s) not reachable from an aisle',
+      noAisle: 'No aisle reaches this slot',
       flow: {
         step: {
           receive: 'Receive',

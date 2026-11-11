@@ -194,6 +194,13 @@ export const layout3d: Messages['layout3d'] = {
       openFulfillment: '在履约页面打开',
       showing: '拣货任务 {ref} · 需拣 {n} 个库位',
       clear: '清除',
+      stop: '第 {n} 站',
+      routeLen: '预估路线 ≈ {m} 米',
+      routeNote: '按 3D 布局估算，非实测通道。',
+      startShip: '起点 · 发货区',
+      startEntrance: '起点 · 前侧边缘',
+      unreachable: '{n} 个库位无法从通道到达',
+      noAisle: '没有通道可到达此库位',
       flow: {
         step: {
           receive: '收货',

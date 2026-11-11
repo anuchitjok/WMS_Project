@@ -39,6 +39,7 @@ import { TowerHeader, TowerKpis } from './w3d-tower';
 import { RackPanel } from './w3d-rack-panel';
 import { TaskPanel, PICK_STAGE, lineLeft, type TaskTab } from './w3d-tasks';
 import type { TaskLine } from './use-tower-data';
+import { pickRoute } from './pick-route';
 import { useTowerData } from './use-tower-data';
 import { SetupHealthCard } from './setup-health-card';
 import { setupHealth } from './setup-health';
@@ -201,7 +202,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
     return null;
   }, [slotOfStock, slotCodeById, slotByCode]);
   const pickTask = pickTaskId ? (tower.open.data ?? []).find((t) => t.id === pickTaskId) ?? null : null;
-  const pickSlots = useMemo(() => {
+  // Lines still to pick, with their order line number.
+  const lineSlots = useMemo(() => {
     if (!pickTask || !PICK_STAGE.has(pickTask.status)) return [];
     const out: { slotId: string; n: number }[] = [];
     (pickTask.items ?? []).forEach((l, i) => {
@@ -210,6 +212,14 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
     });
     return out;
   }, [pickTask, locate]);
+  // PR8 Phase 5: estimated walking route; stops are numbered in walking order.
+  const route = useMemo(() => (lineSlots.length ? pickRoute(scene, lineSlots) : null), [scene, lineSlots]);
+  const pickSlots = useMemo(() => (route ? route.stops.map((st) => ({ slotId: st.slotId, n: st.order })) : []), [route]);
+  const stopOf = useMemo(() => (route ? new Map(route.stops.map((st) => [st.slotId, { order: st.order, reachable: !!st.at }])) : null), [route]);
+  const routeDraw = useMemo(() => (route && route.path.length > 1 ? {
+    path: route.path, start: route.start,
+    startLabel: route.startKind === 'shipping' ? W.tasks.startShip : W.tasks.startEntrance,
+  } : null), [route, W.tasks.startShip, W.tasks.startEntrance]);
   const pickSet = useMemo(() => (pickSlots.length ? new Set(pickSlots.map((p) => p.slotId)) : null), [pickSlots]);
 
   // Track the stage width whenever the stage mounts (it appears once loading is over and there are racks).
@@ -474,6 +484,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 selectedSlotId={selectedSlotId}
                 focusRackId={!pickSet && filters.rackId !== ALL ? filters.rackId : null}
                 pickSlots={pickSlots}
+                route={routeDraw}
                 onSelectSlot={selectSlot}
                 onSelectRack={openRack}
                 onSelectZone={selectZone}
@@ -503,10 +514,20 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 reservedState={reserved.state} reservedPartial={reserved.partial} onRetryReserved={() => void reserved.reload()}
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
               {pickTask && PICK_STAGE.has(pickTask.status) && (
-                <div style={{ top: overlayTop + 52 }} className="absolute inset-x-0 z-30 mx-auto flex w-fit max-w-[calc(100%-1.5rem)] items-center gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
-                  <span className="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-cyan-500" />
-                  <span className="truncate">{t(W.tasks.showing, { ref: pickTask.refNumber, n: pickSlots.length })}</span>
-                  <button type="button" onClick={() => chooseTask(null)} className="flex-shrink-0 text-xs font-medium text-cyan-700 underline">{W.tasks.clear}</button>
+                <div style={{ top: overlayTop + 52 }} className="absolute inset-x-0 z-30 mx-auto flex w-fit max-w-[calc(100%-1.5rem)] items-start gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
+                  <span className="mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full bg-cyan-500" />
+                  <span className="min-w-0">
+                    <span className="block truncate">{t(W.tasks.showing, { ref: pickTask.refNumber, n: pickSlots.length })}</span>
+                    {route && route.lengthM > 0 && (
+                      <span className="block truncate text-xs text-slate-500">
+                        {t(W.tasks.routeLen, { m: Math.round(route.lengthM).toLocaleString() })} · {W.tasks.routeNote}
+                      </span>
+                    )}
+                    {route && route.unreachable.length > 0 && (
+                      <span className="block truncate text-xs text-amber-700">{t(W.tasks.unreachable, { n: route.unreachable.length })}</span>
+                    )}
+                  </span>
+                  <button type="button" onClick={() => chooseTask(null)} className="mt-0.5 flex-shrink-0 text-xs font-medium text-cyan-700 underline">{W.tasks.clear}</button>
                 </div>
               )}
               {!pickSet && filtered && inFilter === 0 && (
@@ -554,7 +575,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
       </div>
 
       <TaskPanel open={tower.open} flow={tower.flow} stock={tower.stock} tab={taskTab} onTab={setTaskTab}
-        selectedTaskId={pickTaskId} onSelectTask={chooseTask} locate={locate} onGoSlot={goToSlot} />
+        selectedTaskId={pickTaskId} onSelectTask={chooseTask} locate={locate} onGoSlot={goToSlot} stopOf={stopOf} />
 
       <BottomSummary rack={selected?.rack ?? null} slot={selected?.slot ?? null} detail={slotDetail.detail}
         detailLoading={slotDetail.state === 'loading' && !slotDetail.detail} />

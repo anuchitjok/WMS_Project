@@ -194,6 +194,13 @@ export const layout3d: Messages['layout3d'] = {
       openFulfillment: 'เปิดในหน้า Fulfillment',
       showing: 'งานหยิบ {ref} · ต้องหยิบ {n} ช่อง',
       clear: 'ล้าง',
+      stop: 'จุดที่ {n}',
+      routeLen: 'เส้นทางโดยประมาณ ≈ {m} ม.',
+      routeNote: 'อิงตามผัง 3D ไม่ใช่ทางเดินที่วัดจริง',
+      startShip: 'เริ่ม · พื้นที่ส่งของ',
+      startEntrance: 'เริ่ม · ขอบด้านหน้า',
+      unreachable: '{n} ช่องเข้าถึงจากทางเดินไม่ได้',
+      noAisle: 'ไม่มีทางเดินเข้าถึงช่องนี้',
       flow: {
         step: {
           receive: 'รับเข้า',
