@@ -182,8 +182,9 @@ export function PickLocationDialog({ requestId, refNumber, onClose, onApproved }
   return (
     <Dialog open={!!requestId} onOpenChange={(o) => { if (!o && !busy) onClose(); }}>
       <DialogContent className="max-w-3xl p-0">
-        <DialogHeader className="border-b border-slate-200 px-5 py-3">
-          <DialogTitle>{t(P.title, { ref: refNumber ?? '' })}</DialogTitle>
+        {/* pr-12 keeps the title clear of the close button (absolute, top-right); long titles wrap. */}
+        <DialogHeader className="border-b border-slate-200 py-3 pl-5 pr-12">
+          <DialogTitle className="break-words leading-snug">{t(P.title, { ref: refNumber ?? '' })}</DialogTitle>
         </DialogHeader>
 
         <div className="max-h-[68vh] space-y-4 overflow-y-auto px-4 py-4 sm:px-5">
