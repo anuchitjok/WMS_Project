@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { WarehouseLayoutService } from './warehouse-layout.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -9,7 +9,7 @@ import { UserRole } from '@prisma/client';
 import type { LayoutScope } from './warehouse-layout.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
-  BatchSaveDto, DuplicateObjectDto, LinkObjectDto,
+  BatchSaveDto, DuplicateObjectDto, LinkObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
 } from './dto/layout.dto';
 
 // Write access: SYSTEM_ADMIN + WAREHOUSE_MANAGER — identical to warehouse-master.
@@ -76,6 +76,19 @@ export class WarehouseLayoutController {
   @ApiOperation({ summary: 'Live per-bin rollup derived from StockItem. Reads only — never writes inventory.' })
   occupancy(@Param('warehouseId') warehouseId: string, @CurrentUser() user: any) {
     return this.service.occupancy(warehouseId, scopeOf(user));
+  }
+
+  // F6: racks arranged in the 3D view → RACK drawings on the Floor Plan (drawings only).
+  @Put(':warehouseId/rack-positions') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Save every active rack position from the 3D view onto the Floor Plan (metres; drawings only)' })
+  saveRackPositions(@Param('warehouseId') warehouseId: string, @Body() dto: SaveRackPositionsDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.saveRackPositions(warehouseId, dto, userId, scopeOf(user));
+  }
+
+  @Post(':warehouseId/rack-positions/reset') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Back to auto layout: remove the rack drawings the 3D view created (hand-drawn racks stay)' })
+  resetRackPositions(@Param('warehouseId') warehouseId: string, @Body() dto: ResetRackPositionsDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.resetRackPositions(warehouseId, dto, userId, scopeOf(user));
   }
 
   @Get(':warehouseId')

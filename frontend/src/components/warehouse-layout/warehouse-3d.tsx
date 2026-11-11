@@ -20,17 +20,24 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Box, AlertTriangle, Loader2, Info } from 'lucide-react';
+import { Box, AlertTriangle, Loader2, Info, Move } from 'lucide-react';
+import { toast } from 'sonner';
+import { layoutApi, localizeError } from '@/lib/api';
+import { useAuthStore } from '@/store/auth.store';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useRealtime } from '@/hooks/use-realtime';
 import { useT } from '@/i18n';
 import { type WarehouseData, type RackData, type SlotData, slotItems, slotUtil, whMetrics, withRate, isOccupied } from './occupancy';
 import {
   type ViewMode, type EnvMode, type SlotState3D,
+  type RackPose,
   buildScene, slotState3D, slotColor, zoneOf, ageDays, fillBucket, NO_ZONE,
+  arrangeIssues, moveFits, rotatePoses, poseDeg, floorPolygonOf,
 } from './scene-geometry';
-import type { SceneApi, CameraInfo, CameraPreset } from './scene-3d';
-import { useLayoutObjects, useStockAge, useSlotDetail, useStockHistory, useRelatedStock, useReservedStock, type ReservedSlot } from './use-w3d-data';
+import { bbox } from './floor-geometry';
+import type { SceneApi, CameraInfo, CameraPreset, ArrangeProps } from './scene-3d';
+import { ArrangeBar, ResetLayoutDialog } from './w3d-arrange';
+import { useLayoutPlan, useStockAge, useSlotDetail, useStockHistory, useRelatedStock, useReservedStock, type ReservedSlot } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
   FilterBar, LocationDetails, BottomSummary, summarizeSlot,
@@ -99,6 +106,20 @@ function SlotTag({ slot }: { slot: SlotData }) {
   );
 }
 
+/** F6: rack drag step on the floor (m). */
+const ARRANGE_SNAP = 0.5;
+/** F6: same roles as Floor Plan editing (backend WRITE_ROLES of warehouse-layout). */
+const ARRANGE_ROLES = ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'];
+
+/** F6: racks being arranged (not saved yet). */
+interface ArrangeState {
+  draft: Map<string, RackPose>;
+  /** Racks that move together. */
+  sel: string[];
+  zoneMode: boolean;
+  saving: boolean;
+}
+
 /** Copy of the warehouse with each slot's reserved stock (3D only; the tree itself is untouched). */
 function withReserved(wh: WarehouseData | null, bySlot: Map<string, ReservedSlot> | null): WarehouseData | null {
   if (!wh || !bySlot?.size) return wh;
@@ -127,7 +148,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   const { m, t } = useT();
   const V = m.layout3d.view, W = m.layout3d.w3d;
   const warehouseId = whTree?.id ?? '';
-  const objects = useLayoutObjects(warehouseId);
+  const { plan, setPlan } = useLayoutPlan(warehouseId);
+  const objects = plan ? plan.objects : null;
   const age = useStockAge(warehouseId);
   const tower = useTowerData(warehouseId);
   const reserved = useReservedStock(warehouseId);
@@ -149,6 +171,13 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   const [taskTab, setTaskTab] = useState<TaskTab>('now');
   // PR8 Phase 4: the task whose lines are shown (its slots still to pick light up in 3D).
   const [pickTaskId, setPickTaskId] = useState<string | null>(null);
+  // F6: arrange racks (drag in 3D, save to the Floor Plan).
+  const role = useAuthStore((x) => x.user?.role);
+  const canArrange = !!role && ARRANGE_ROLES.includes(role);
+  const [arr, setArr] = useState<ArrangeState | null>(null);
+  const [resetAsk, setResetAsk] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  useEffect(() => { setArr(null); setResetAsk(false); }, [warehouseId]);
   const api = useRef<SceneApi | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [stageW, setStageW] = useState(0);
@@ -180,7 +209,45 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   }, [onReload, reloadAge, reloadTower, reloadReserved]);
   useRealtime(['inventory:update', 'request:update'], refreshAll, { enabled: !!warehouseId });
 
-  const scene = useMemo(() => buildScene(wh, objects ?? []), [wh, objects]);
+  // The saved arrangement; while arranging, `scene` shows the unsaved draft instead.
+  const savedScene = useMemo(() => buildScene(wh, plan?.objects ?? [], plan?.layout ?? null), [wh, plan]);
+  const scene = useMemo(() => (arr ? buildScene(wh, plan?.objects ?? [], plan?.layout ?? null, arr.draft) : savedScene),
+    [wh, plan, arr?.draft, savedScene]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── F6: arrange racks ──
+  const issues = useMemo(() => (arr ? arrangeIssues(scene) : null), [arr, scene]);
+  const arrange = useMemo<ArrangeProps | null>(() => {
+    if (!arr) return null;
+    const groupOf = (rackId: string) => {
+      if (!arr.zoneMode) return [rackId];
+      const zone = scene.racks.find((p) => p.rack.id === rackId)?.zone;
+      return scene.racks.filter((p) => p.zone === zone).map((p) => p.rack.id);
+    };
+    return {
+      selected: new Set(arr.sel),
+      bad: new Set([...(issues?.outside ?? []), ...(issues?.overlap ?? [])]),
+      snap: ARRANGE_SNAP,
+      check: (ids, dx, dz) => moveFits(scene, ids, dx, dz),
+      onPick: (rackId) => {
+        const ids = groupOf(rackId);
+        setArr((a) => a && { ...a, sel: ids });
+        return ids;
+      },
+      onMove: (ids, dx, dz) => setArr((a) => {
+        if (!a) return a;
+        const draft = new Map(a.draft);
+        for (const id of ids) {
+          const p = draft.get(id);
+          if (p) draft.set(id, { ...p, center: [p.center[0] + dx, p.center[1] + dz] });
+        }
+        return { ...a, draft };
+      }),
+    };
+  }, [arr, issues, scene]);
+  const madeBy3d = useMemo(() => (plan?.objects ?? []).some((o) => {
+    if (o.objectType !== 'RACK' || !o.rackId || !o.metadata) return false;
+    try { return JSON.parse(o.metadata)?.source === '3d'; } catch { return false; }
+  }), [plan]);
 
   // ── Pick task → slots (PR8 Phase 4) ──
   // Where a line's stock is now: its reserved stock row (live), else the location
@@ -347,7 +414,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   }, [selectRack]);
   const focusedRack = filters.rackId !== ALL ? allRacks.find((r) => r.id === filters.rackId) ?? null : null;
   // Setup health: racks whose master data looks wrong get a red outline; a code in the card zooms to its rack.
-  const flagged = useMemo(() => (wh ? setupHealth(wh, scene.placement).flagged : undefined), [wh, scene.placement]);
+  // Saved positions only: an unsaved drag must not change the setup card (arrange mode has its own checks).
+  const flagged = useMemo(() => (wh && !arr ? setupHealth(wh, savedScene.placement).flagged : undefined), [wh, savedScene.placement, arr]);
   const focusRackFromCard = useCallback((id: string) => {
     openRack(id);
     stageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -400,6 +468,68 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
     setTimeout(() => api.current?.reset(), 80);
   };
   const resetAll = () => { setPickTaskId(null); setFilters(NO_FILTERS); setPreset('iso'); api.current?.reset(); };
+  const startArrange = () => {
+    // Facing in 90° steps (the arrange tools turn racks by 90°).
+    const draft = new Map<string, RackPose>(scene.racks.map((p) => [p.rack.id, {
+      center: [p.center[0], p.center[1]] as [number, number],
+      deg: (Math.round(poseDeg(p) / 90) * 90) % 360,
+    }]));
+    setPickTaskId(null);
+    setFilters(NO_FILTERS);
+    setSelectedSlotId(null);
+    setArr({ draft, sel: [], zoneMode: false, saving: false });
+    setPreset('top');
+    setTimeout(() => api.current?.preset('top'), 80);
+  };
+  const saveArrange = async () => {
+    if (!arr || !wh) return;
+    // A first save starts a fresh plan frame: the floor's top-left corner (or the
+    // racks', when the size is not set) becomes plan (0, 0). Otherwise the frame stays.
+    const poly = floorPolygonOf(scene.floor);
+    let origin: [number, number] | null = null;
+    if (poly) { const b = bbox(poly); origin = [b.minX, b.minZ]; }
+    let shift: [number, number] = [0, 0];
+    if (!scene.frame.planRacks) {
+      const base = origin ?? [scene.bounds.minX, scene.bounds.minZ];
+      shift = [-base[0], -base[1]];
+      if (origin) origin = [0, 0];
+    }
+    const racks = scene.racks.map((p) => ({
+      rackId: p.rack.id, cx: p.center[0] + shift[0], cz: p.center[1] + shift[1],
+      length: p.length, depth: p.depth, rotation: arr.draft.get(p.rack.id)?.deg ?? poseDeg(p),
+    }));
+    setArr((a) => a && { ...a, saving: true });
+    try {
+      const res = await layoutApi.saveRackPositions(wh.id, {
+        ...(plan?.layout ? { version: plan.layout.version } : {}),
+        metersPerUnit: scene.frame.scale,
+        ...(origin ? { floorOriginX: origin[0], floorOriginZ: origin[1] } : {}),
+        racks,
+      });
+      setPlan({ layout: res.layout, objects: res.objects });
+      setArr(null);
+      toast.success(m.layout3d.w3d.arrange.saved);
+    } catch (e) {
+      setArr((a) => a && { ...a, saving: false });
+      toast.error((e as { status?: number }).status === 409 ? m.layout3d.w3d.arrange.conflict : t(m.layout3d.w3d.arrange.failed, { msg: localizeError(e) }));
+    }
+  };
+  const resetArrange = async () => {
+    if (!wh || !plan?.layout) return;
+    setResetting(true);
+    try {
+      const res = await layoutApi.resetRackPositions(wh.id, plan.layout.version);
+      setPlan({ layout: res.layout, objects: res.objects });
+      setArr(null);
+      setResetAsk(false);
+      toast.success(m.layout3d.w3d.arrange.resetDone);
+    } catch (e) {
+      toast.error((e as { status?: number }).status === 409 ? m.layout3d.w3d.arrange.conflict : t(m.layout3d.w3d.arrange.failed, { msg: localizeError(e) }));
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const toggleFullscreen = () => {
     const el = stageRef.current;
     if (!el) return;
@@ -433,7 +563,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
       <TowerHeader wh={wh} system={tower.system} updatedAt={tower.updatedAt} refreshing={tower.refreshing} failed={tower.failed || reserved.stale}
         onRefresh={refreshAll} mode={envMode} onMode={setEnvMode} />
       <TowerKpis metrics={metrics} stock={tower.stock} tasks={tower.tasks} />
-      <SetupHealthCard wh={wh} placement={scene.placement} onRack={focusRackFromCard} />
+      <SetupHealthCard wh={wh} placement={savedScene.placement} onRack={focusRackFromCard} />
     </>
   );
 
@@ -487,8 +617,9 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 pickSlots={pickSlots}
                 route={routeDraw}
                 onSelectSlot={selectSlot}
-                onSelectRack={openRack}
-                onSelectZone={selectZone}
+                onSelectRack={arrange ? (id) => { arrange.onPick(id); } : openRack}
+                onSelectZone={arrange ? undefined : selectZone}
+                arrange={arrange}
                 apiRef={api}
                 onCamera={camStore.set}
                 onUserCamera={() => setPreset(null)}
@@ -500,6 +631,12 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 </div>
               )}
               <CameraPresets active={preset} onPick={pickPreset} top={overlayTop}>
+                {canArrange && !arr && (
+                  <button type="button" onClick={startArrange} title={W.arrange.startTitle}
+                    className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-white/95 px-2.5 text-sm font-medium text-slate-700 shadow-md ring-1 ring-slate-200 hover:bg-white sm:px-3">
+                    <Move className="h-4 w-4" /> {W.arrange.start}
+                  </button>
+                )}
                 {/* Shaped floors have no roof frame yet (D6), so no roof switch either */}
                 {envMode === 'full' && !scene.floor.outline && (
                   <label className="flex items-center gap-2 rounded-lg bg-white/95 px-3 py-1.5 text-xs text-slate-700 shadow-md ring-1 ring-slate-200">
@@ -514,6 +651,14 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
               <Legend mode={colorMode} onMode={setColorMode} counts={counts} ageState={age.state} onRetryAge={age.reload}
                 reservedState={reserved.state} reservedPartial={reserved.partial} onRetryReserved={() => void reserved.reload()}
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
+              {arr && issues && (
+                <ArrangeBar top={overlayTop + 52} snap={ARRANGE_SNAP} selected={arr.sel.length}
+                  zoneMode={arr.zoneMode} onZoneMode={(zoneMode) => setArr((a) => a && { ...a, zoneMode, sel: [] })}
+                  onRotate={() => setArr((a) => a && { ...a, draft: rotatePoses(a.draft, a.sel) })}
+                  outside={issues.outside.length} overlap={issues.overlap.length} hasFloor={!!floorPolygonOf(scene.floor)}
+                  saving={arr.saving} canReset={madeBy3d} onSave={() => void saveArrange()} onCancel={() => setArr(null)}
+                  onReset={() => setResetAsk(true)} />
+              )}
               {pickTask && PICK_STAGE.has(pickTask.status) && (
                 <div style={{ top: overlayTop + 52 }} className="absolute z-30 flex left-3 right-24 w-auto sm:inset-x-0 sm:mx-auto sm:w-fit max-w-[calc(100%-1.5rem)] items-start gap-3 rounded-lg bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-md ring-1 ring-cyan-200" role="status">
                   <span className="mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full bg-cyan-500" />
@@ -574,6 +719,8 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
           )}
         </div>
       </div>
+
+      <ResetLayoutDialog open={resetAsk} busy={resetting} onCancel={() => setResetAsk(false)} onConfirm={() => void resetArrange()} />
 
       <TaskPanel open={tower.open} flow={tower.flow} stock={tower.stock} tab={taskTab} onTab={setTaskTab}
         selectedTaskId={pickTaskId} onSelectTask={chooseTask} locate={locate} onGoSlot={goToSlot} stopOf={stopOf} />

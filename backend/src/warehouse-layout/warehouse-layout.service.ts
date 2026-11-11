@@ -6,8 +6,9 @@ import { StockStatus, LayoutObjectType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
-  BatchSaveDto, DuplicateObjectDto,
+  BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
 } from './dto/layout.dto';
+import { type Pt, type FloorRect, bbox, outlineOf, rectCorners, rectInPolygon, rectsOverlap } from '../warehouse-master/floor-geometry';
 
 // Physical Layout is the *drawing* of the warehouse floor. It never owns
 // inventory and never writes Warehouse / Rack / Slot / StockItem — this service
@@ -378,6 +379,177 @@ export class WarehouseLayoutService {
     return { version: result.version, objects: result.objects };
   }
 
+  // ─── F6: racks arranged in the 3D view ──────────────────────────────────────
+  //
+  // 3D sends every active rack's position in metres; this turns them into RACK
+  // drawings on the Floor Plan (linked by rackId). It writes LayoutObject and
+  // WarehouseLayout only — never Rack, Slot or StockItem.
+
+  private readonly sameOrder = [{ zIndex: 'asc' as const }, { displayOrder: 'asc' as const }, { createdAt: 'asc' as const }];
+
+  async saveRackPositions(warehouseId: string, dto: SaveRackPositionsDto, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const wh = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, isDeleted: false },
+      select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
+    });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    // Every active rack, once — 3D pins them all, so none is left to the auto layout.
+    const racks = await this.prisma.rack.findMany({
+      where: { warehouseId, isDeleted: false, isActive: true },
+      select: { id: true, code: true },
+    });
+    const rackOf = new Map(racks.map((r) => [r.id, r]));
+    const seen = new Set<string>();
+    for (const p of dto.racks) {
+      const r = rackOf.get(p.rackId);
+      if (!r) throw new BadRequestException(`Rack ${p.rackId} is not an active rack of this warehouse`);
+      if (seen.has(p.rackId)) throw new BadRequestException(`Rack ${r.code} is listed twice`);
+      seen.add(p.rackId);
+    }
+    const missing = racks.filter((r) => !seen.has(r.id));
+    if (missing.length) {
+      throw new BadRequestException(`Every active rack must be placed; missing: ${codeList(missing.map((r) => r.code))}`);
+    }
+
+    const layout = await this.prisma.warehouseLayout.findUnique({ where: { warehouseId } });
+    const live = layout && !layout.isDeleted ? layout : null;
+    if (live ? live.version !== dto.version : dto.version !== undefined && dto.version !== null) {
+      throw new ConflictException('This layout changed elsewhere. Reload before saving.');
+    }
+
+    // The scale is recorded once; after that the stored one wins (metres convert either way).
+    // The floor anchor only means something while racks are drawn against it: with no
+    // rack drawing left, 3D starts a fresh frame and its anchor replaces the old one.
+    const mpu = layout?.metersPerUnit ?? dto.metersPerUnit;
+    const drawnNow = layout
+      ? await this.prisma.layoutObject.findMany({
+          where: { layoutId: layout.id, isDeleted: false, objectType: LayoutObjectType.RACK, rackId: { in: racks.map((r) => r.id) } },
+          select: { id: true },
+        })
+      : [];
+    const keepAnchor = drawnNow.length > 0 && layout?.floorOriginX != null && layout?.floorOriginZ != null;
+    const origin: Pt | null = keepAnchor
+      ? [layout.floorOriginX!, layout.floorOriginZ!]
+      : dto.floorOriginX != null && dto.floorOriginZ != null ? [dto.floorOriginX, dto.floorOriginZ] : null;
+    const poly = floorPolygon(wh, origin);
+
+    const issues = rackPositionIssues(dto.racks, poly);
+    if (issues.outside.length || issues.overlap.length) {
+      const code = (id: string) => rackOf.get(id)!.code;
+      const parts = [
+        issues.outside.length ? `outside the warehouse: ${codeList(issues.outside.map(code))}` : '',
+        issues.overlap.length ? `overlapping: ${codeList(issues.overlap.map(code))}` : '',
+      ].filter(Boolean);
+      throw new BadRequestException(`Racks cannot be saved here (${parts.join('; ')})`);
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const lay = live
+        ?? (layout
+          ? await tx.warehouseLayout.update({ where: { id: layout.id }, data: { isDeleted: false, deletedAt: null, deletedBy: null } })
+          : await tx.warehouseLayout.create({ data: { warehouseId } }));
+      const all = await tx.layoutObject.findMany({ where: { layoutId: lay.id, isDeleted: false }, orderBy: this.sameOrder });
+      // Same pick as 3D: the last RACK drawing linked to a rack is the one shown.
+      const drawnOf = new Map<string, (typeof all)[number]>();
+      for (const o of all) if (o.objectType === LayoutObjectType.RACK && o.rackId) drawnOf.set(o.rackId, o);
+      const kids = new Map<string, (typeof all)[number][]>();
+      for (const o of all) if (o.parentObjectId) kids.set(o.parentObjectId, [...(kids.get(o.parentObjectId) ?? []), o]);
+
+      let created = 0, updated = 0, childrenMoved = 0;
+      let maxX = 0, maxY = 0;
+      for (const p of dto.racks) {
+        const g = planGeometry(p, mpu);
+        const reach = Math.max(g.width, g.height);
+        maxX = Math.max(maxX, g.x + reach); maxY = Math.max(maxY, g.y + reach);
+        const o = drawnOf.get(p.rackId);
+        if (!o) {
+          const code = rackOf.get(p.rackId)!.code;
+          await tx.layoutObject.create({
+            data: {
+              layoutId: lay.id, objectType: LayoutObjectType.RACK, name: code, code, rackId: p.rackId, ...g,
+              metadata: JSON.stringify({ source: '3d' }),
+            },
+          });
+          created++;
+          continue;
+        }
+        if (same(o.x, g.x) && same(o.y, g.y) && same(o.width, g.width) && same(o.height, g.height) && same(o.rotation, g.rotation)) continue;
+        // Bins drawn inside the rack move and turn with it, so the Floor Plan stays tidy.
+        const from = { cx: o.x + o.width / 2, cy: o.y + o.height / 2, deg: facing(o) };
+        await tx.layoutObject.update({ where: { id: o.id }, data: g });
+        updated++;
+        const to = { cx: g.x + g.width / 2, cy: g.y + g.height / 2, deg: p.rotation };
+        const stack = [...(kids.get(o.id) ?? [])];
+        while (stack.length) {
+          const d = stack.pop()!;
+          stack.push(...(kids.get(d.id) ?? []));
+          await tx.layoutObject.update({ where: { id: d.id }, data: carry(d, from, to) });
+          childrenMoved++;
+        }
+      }
+
+      // Grow (never shrink) the plan canvas so everything stays on it.
+      if (poly) for (const [x, z] of poly) { maxX = Math.max(maxX, x / mpu); maxY = Math.max(maxY, z / mpu); }
+      const after = await tx.warehouseLayout.update({
+        where: { id: lay.id },
+        data: {
+          version: { increment: 1 },
+          ...(lay.metersPerUnit == null ? { metersPerUnit: mpu } : {}),
+          ...(!keepAnchor ? { floorOriginX: origin?.[0] ?? null, floorOriginZ: origin?.[1] ?? null } : {}),
+          widthUnits: Math.max(lay.widthUnits, Math.ceil(maxX + 2)),
+          heightUnits: Math.max(lay.heightUnits, Math.ceil(maxY + 2)),
+        },
+      });
+      const objects = await tx.layoutObject.findMany({ where: { layoutId: lay.id, isDeleted: false }, orderBy: this.sameOrder });
+      return { layout: after, objects, created, updated, childrenMoved };
+    });
+
+    await this.audit(
+      userId, 'LAYOUT_RACKS_ARRANGED', 'WarehouseLayout', result.layout.id,
+      { version: live?.version ?? null, metersPerUnit: layout?.metersPerUnit ?? null },
+      {
+        version: result.layout.version, metersPerUnit: result.layout.metersPerUnit,
+        racks: dto.racks.length, created: result.created, updated: result.updated, childrenMoved: result.childrenMoved,
+      },
+    );
+    return { layout: result.layout, objects: result.objects };
+  }
+
+  // "Back to auto layout": removes the rack drawings that 3D created. Racks drawn
+  // on the Floor Plan by hand stay (they are part of someone's plan), and so does
+  // any 3D drawing that has objects under it.
+  async resetRackPositions(warehouseId: string, dto: ResetRackPositionsDto, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
+    if (!layout) throw new NotFoundException('This warehouse has no layout');
+    if (layout.version !== dto.version) throw new ConflictException('This layout changed elsewhere. Reload before saving.');
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const all = await tx.layoutObject.findMany({ where: { layoutId: layout.id, isDeleted: false } });
+      const parents = new Set(all.map((o) => o.parentObjectId).filter(Boolean));
+      const linked = all.filter((o) => o.objectType === LayoutObjectType.RACK && o.rackId);
+      const remove = linked.filter((o) => isFrom3d(o.metadata) && !parents.has(o.id)).map((o) => o.id);
+      if (remove.length) {
+        await tx.layoutObject.updateMany({
+          where: { id: { in: remove } },
+          data: { isDeleted: true, deletedAt: new Date(), deletedBy: userId },
+        });
+      }
+      const after = await tx.warehouseLayout.update({ where: { id: layout.id }, data: { version: { increment: 1 } } });
+      const objects = await tx.layoutObject.findMany({ where: { layoutId: layout.id, isDeleted: false }, orderBy: this.sameOrder });
+      return { layout: after, objects, removed: remove.length, kept: linked.length - remove.length };
+    });
+
+    await this.audit(
+      userId, 'LAYOUT_RACKS_RESET', 'WarehouseLayout', layout.id,
+      { version: layout.version },
+      { version: result.layout.version, removed: result.removed, kept: result.kept },
+    );
+    return result;
+  }
+
   // ─── Sprint 5: duplicate ────────────────────────────────────────────────────
   // Copies drop slotId/rackId and code: a WMS slot has exactly one physical bin,
   // so a duplicate must never inherit the original's link or its location code.
@@ -659,4 +831,79 @@ export class WarehouseLayoutService {
       { created: created.length, skipped: slots.length - todo.length });
     return { created: created.length, skipped: slots.length - todo.length, objects: created };
   }
+}
+
+// ─── F6 helpers (3D arrange) ────────────────────────────────────────────────────
+
+const codeList = (codes: string[]) => codes.slice(0, 10).join(', ') + (codes.length > 10 ? ` +${codes.length - 10}` : '');
+const same = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+const norm360 = (d: number) => ((Math.round(d) % 360) + 360) % 360;
+
+const isFrom3d = (metadata: string | null) => {
+  try { return !!metadata && JSON.parse(metadata)?.source === '3d'; } catch { return false; }
+};
+
+/** Warehouse floor in the 3D frame (m): the outline with its top-left corner at `origin`. */
+export function floorPolygon(wh: { lengthCm?: number | null; widthCm?: number | null; floorOutline?: unknown }, origin: Pt | null): Pt[] | null {
+  const pts = outlineOf(wh);
+  if (!pts || !origin) return null;
+  const bb = bbox(pts);
+  return pts.map(([x, z]) => [origin[0] + x - bb.minX, origin[1] + z - bb.minZ] as Pt);
+}
+
+type RackPos = { rackId: string; cx: number; cz: number; length: number; depth: number; rotation: number };
+const footprint = (p: RackPos): FloorRect => ({ center: [p.cx, p.cz], length: p.length, depth: p.depth, rotY: (-p.rotation * Math.PI) / 180 });
+
+/**
+ * Same rule as the 3D view: a rack must sit on the floor and must not overlap
+ * another (touching is fine). A rack bigger than the floor in both directions
+ * can never fit, so it is not held against the save (Warehouse Master shows it).
+ */
+export function rackPositionIssues(racks: RackPos[], poly: Pt[] | null): { outside: string[]; overlap: string[] } {
+  const g = racks.map(footprint);
+  const box = g.map((r) => {
+    const c = rectCorners(r);
+    return { minX: Math.min(...c.map((q) => q[0])), maxX: Math.max(...c.map((q) => q[0])), minZ: Math.min(...c.map((q) => q[1])), maxZ: Math.max(...c.map((q) => q[1])) };
+  });
+  let outside: string[] = [];
+  if (poly) {
+    const bb = bbox(poly);
+    const fits = (p: RackPos) => (p.length <= bb.length + 1e-9 && p.depth <= bb.width + 1e-9) || (p.length <= bb.width + 1e-9 && p.depth <= bb.length + 1e-9);
+    outside = racks.filter((p, i) => fits(p) && !rectInPolygon(g[i], poly)).map((p) => p.rackId);
+  }
+  const over = new Set<string>();
+  for (let i = 0; i < racks.length; i++) {
+    for (let j = i + 1; j < racks.length; j++) {
+      const a = box[i], b = box[j];
+      if (a.maxX <= b.minX || b.maxX <= a.minX || a.maxZ <= b.minZ || b.maxZ <= a.minZ) continue;
+      if (rectsOverlap(g[i], g[j])) { over.add(racks[i].rackId); over.add(racks[j].rackId); }
+    }
+  }
+  return { outside, overlap: racks.filter((p) => over.has(p.rackId)).map((p) => p.rackId) };
+}
+
+/**
+ * Metres (3D) → a RACK drawing in plan units. 3D treats a drawing that is wider
+ * than tall as running along X, so the rotation is stored to come back the same.
+ */
+export function planGeometry(p: RackPos, mpu: number) {
+  const width = p.length / mpu, height = p.depth / mpu;
+  const rotation = width >= height ? p.rotation : norm360(p.rotation + 270);
+  return { x: p.cx / mpu - width / 2, y: p.cz / mpu - height / 2, width, height, rotation };
+}
+
+/** Which way a rack drawing faces, in the 3D sense (0 = along +X). */
+const facing = (o: { width: number; height: number; rotation: number }) =>
+  o.width >= o.height ? o.rotation : o.rotation + 90;
+
+/** A child drawing carried along when its rack moves and turns (plan units). */
+function carry(
+  d: { x: number; y: number; width: number; height: number; rotation: number },
+  from: { cx: number; cy: number; deg: number }, to: { cx: number; cy: number; deg: number },
+) {
+  const t = ((to.deg - from.deg) * Math.PI) / 180;
+  const c = Math.cos(t), s = Math.sin(t);
+  const dx = d.x + d.width / 2 - from.cx, dy = d.y + d.height / 2 - from.cy;
+  const nx = to.cx + dx * c - dy * s, ny = to.cy + dx * s + dy * c;
+  return { x: nx - d.width / 2, y: ny - d.height / 2, rotation: norm360(d.rotation + to.deg - from.deg) };
 }

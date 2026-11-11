@@ -2,33 +2,40 @@
 
 // Data hooks for the 3D view. Read-only; every call is an existing API that the
 // rest of the WMS already uses:
-//   • layout objects   GET /warehouse-layout/:warehouseId   (rack positions, operational areas)
+//   • layout plan      GET /warehouse-layout/:warehouseId   (rack positions, operational areas, scale)
 //   • stock age        GET /warehouse/:id/slot-stock-age    (oldest receivedDate per slot)
 //   • slot contents    GET /warehouse/slots/:id/detail      (latest 10 stock rows in the slot)
 //   • stock history    GET /inventory/:id/detail-full       (audit log of one stock row)
 //   • related stock    GET /inventory?search=<sku>          (other locations holding the SKU)
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { inventoryApi, layoutApi, warehouseApi, type LayoutObject, type SlotStockAge } from '@/lib/api';
+import { inventoryApi, layoutApi, warehouseApi, type LayoutObject, type SlotStockAge, type WarehouseLayout } from '@/lib/api';
 
 export type LoadState = 'idle' | 'loading' | 'error' | 'ready';
 
 /** Stock rows that no longer occupy a location (backend common/stock-presence.ts). */
 export const NOT_IN_LOCATION = new Set(['SHIPPED', 'CLOSED', 'CANCELLED', 'CONSUMED']);
 
-/** Layout objects of the warehouse's 2D plan; [] when there is no plan or it fails. null while loading. */
-export function useLayoutObjects(warehouseId: string) {
-  const [objects, setObjects] = useState<LayoutObject[] | null>(null);
+/** The warehouse's 2D plan: canvas (scale, floor anchor) and objects. */
+export interface LayoutPlan { layout: WarehouseLayout | null; objects: LayoutObject[] }
+
+/**
+ * Layout plan of the warehouse; an empty plan when there is none or it fails,
+ * null while loading. `setPlan` takes the fresh plan a 3D save returns (F6).
+ */
+export function useLayoutPlan(warehouseId: string) {
+  const [got, setGot] = useState<{ whId: string; plan: LayoutPlan | null }>({ whId: warehouseId, plan: null });
   useEffect(() => {
     if (!warehouseId) return;
     let cancelled = false;
-    setObjects(null);
+    setGot({ whId: warehouseId, plan: null });
     layoutApi.get(warehouseId)
-      .then((r) => { if (!cancelled) setObjects(r.objects ?? []); })
-      .catch(() => { if (!cancelled) setObjects([]); });
+      .then((r) => { if (!cancelled) setGot({ whId: warehouseId, plan: { layout: r.layout, objects: r.objects ?? [] } }); })
+      .catch(() => { if (!cancelled) setGot({ whId: warehouseId, plan: { layout: null, objects: [] } }); });
     return () => { cancelled = true; };
   }, [warehouseId]);
-  return objects;
+  const setPlan = useCallback((plan: LayoutPlan) => setGot({ whId: warehouseId, plan }), [warehouseId]);
+  return { plan: got.whId === warehouseId ? got.plan : null, setPlan };
 }
 
 export interface ReservedSlot { rows: number; qty: number }

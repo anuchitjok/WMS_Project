@@ -168,6 +168,8 @@ export interface Scene3D {
   floor: FloorRect;
   /** F4/F5: rack positions that look wrong (rack ids). */
   placement: Placement;
+  /** F6: scale and anchoring against the Floor Plan. */
+  frame: SceneFrame;
 }
 
 /**
@@ -501,7 +503,39 @@ export function placementIssues(racks: PlacedRack[], floorPoly: Pt[] | null): { 
   return { outside, overlap: racks.filter((p) => over.has(p.rack.id)).map((p) => p.rack.id) };
 }
 
-export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject[] = []): Scene3D {
+/** F6: plan scale and floor anchor saved on the layout by the 3D arrange mode (null = not yet). */
+export interface PlanFrame { metersPerUnit?: number | null; floorOriginX?: number | null; floorOriginZ?: number | null }
+
+/** F6: a rack's position while arranging in 3D: centre (m) and facing (deg, 0 = along +X). */
+export interface RackPose { center: [number, number]; deg: number }
+
+/** F6: how the scene maps to the Floor Plan. */
+export interface SceneFrame {
+  /** Metres per plan unit used for plan-drawn racks and areas. */
+  scale: number;
+  /** The floor sits where the layout says (saved from 3D), not fitted round the racks. */
+  anchored: boolean;
+  /** Racks placed from the Floor Plan. */
+  planRacks: number;
+}
+
+const rackBox = (racks: PlacedRack[]) => {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const p of racks) {
+    for (const [x, z] of rackCorners(p)) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
+  }
+  return racks.length ? { minX, minZ, maxX, maxZ } : { minX: -5, minZ: -5, maxX: 5, maxZ: 5 };
+};
+
+/** F6: facing of a placed rack in whole degrees (0..359; rotY = -deg). */
+export const poseDeg = (p: Pick<PlacedRack, 'rotY'>) => ((Math.round((-p.rotY * 180) / Math.PI) % 360) + 360) % 360;
+
+export function buildScene(
+  wh: WarehouseData | null, layoutObjects: LayoutObject[] = [],
+  plan: PlanFrame | null = null, draft: Map<string, RackPose> | null = null,
+): Scene3D {
   const racks = (wh?.racks ?? []).filter((r) => r.isActive !== false);
   const placed: PlacedRack[] = [];
 
@@ -510,14 +544,18 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
   for (const o of layoutObjects) if (o.objectType === 'RACK' && o.rackId) drawn.set(o.rackId, o);
 
   const linked = racks.filter((r) => drawn.has(r.id));
-  // The plan's units are arbitrary; scale it up just enough that every linked
-  // rack fits its drawn footprint, so racks never overlap each other.
-  let k = 1;
-  for (const r of linked) {
-    const o = drawn.get(r.id)!;
-    const need = rackSize(r).length;
-    const have = Math.max(o.width, o.height, 0.1);
-    k = Math.max(k, need / have);
+  // F6: a plan saved from 3D records its scale (metres per unit). Older plans have
+  // arbitrary units: scale them up just enough that every linked rack fits its
+  // drawn footprint, so racks never overlap each other.
+  const mpu = plan?.metersPerUnit && plan.metersPerUnit > 0 ? plan.metersPerUnit : null;
+  let k = mpu ?? 1;
+  if (!mpu) {
+    for (const r of linked) {
+      const o = drawn.get(r.id)!;
+      const need = rackSize(r).length;
+      const have = Math.max(o.width, o.height, 0.1);
+      k = Math.max(k, need / have);
+    }
   }
   let linkedMaxZ = -Infinity;
   for (const r of linked) {
@@ -534,7 +572,7 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
   // F5: a shaped warehouse with no plan-drawn racks lays out inside its real shape,
   // in the outline's own coordinates (the floor is then anchored, not centred).
   const shape = linked.length ? null : shapedPoints(wh);
-  const unplaced: RackData[] = [];
+  let unplaced: RackData[] = [];
   if (shape) {
     const res = autoLayoutInShape(rest, shape);
     for (const a of res.placed) placed.push(place(a.rack, a.center, 0, a.zone));
@@ -550,31 +588,6 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
     const startZ = Number.isFinite(linkedMaxZ) ? linkedMaxZ + ZONE_GAP : 0;
     for (const a of autoLayout(rest, wh, startZ)) placed.push(place(a.rack, a.center, 0, a.zone));
   }
-
-  // Slots
-  const slots: PlacedSlot[] = [];
-  for (const p of placed) {
-    for (const s of p.rack.slots ?? []) {
-      const c = slotLocal(p, s.level, s.column);
-      const [x, z] = toWorld(p, c.lx, c.lz);
-      slots.push({ slot: s, rack: p.rack, state: slotState3D(s), pos: [x, c.y, z], size: c.size, baseY: c.baseY, rotY: p.rotY, kind: p.kind });
-    }
-  }
-
-  // Zone floor areas (around each zone's racks)
-  const zoneBox = new Map<string, ZoneArea>();
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity, maxY = 0;
-  for (const p of placed) {
-    for (const [x, z] of rackCorners(p)) {
-      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-      const b = zoneBox.get(p.zone) ?? { zone: p.zone, minX: x, minZ: z, maxX: x, maxZ: z };
-      b.minX = Math.min(b.minX, x); b.maxX = Math.max(b.maxX, x); b.minZ = Math.min(b.minZ, z); b.maxZ = Math.max(b.maxZ, z);
-      zoneBox.set(p.zone, b);
-    }
-    maxY = Math.max(maxY, p.height);
-  }
-  if (!placed.length) { minX = -5; minZ = -5; maxX = 5; maxZ = 5; }
-  const zones = [...zoneBox.values()].map((b) => ({ ...b, minX: b.minX - 1.2, minZ: b.minZ - 1.2, maxX: b.maxX + 1.2, maxZ: b.maxZ + 1.2 }));
 
   // Operational areas from the same plan (same scale k as the linked racks).
   const areas: AreaRect[] = [];
@@ -592,33 +605,142 @@ export function buildScene(wh: WarehouseData | null, layoutObjects: LayoutObject
         minX: cx - hx, maxX: cx + hx, minZ: cz - hz, maxZ: cz + hz });
     }
   }
-  const all = { minX, minZ, maxX, maxZ };
+
+  // Floor: fixed before any arranging, so it never follows racks being dragged.
+  const all = rackBox(placed);
   for (const a of areas) {
     all.minX = Math.min(all.minX, a.minX); all.maxX = Math.max(all.maxX, a.maxX);
     all.minZ = Math.min(all.minZ, a.minZ); all.maxZ = Math.max(all.maxZ, a.maxZ);
   }
-  // `bounds` = racks only (camera framing); the floor also covers the areas.
-  const bounds = { minX, minZ, maxX, maxZ, maxY };
-
+  const pts = wh ? outlineOf(wh) : null;
+  const anchor = linked.length && mpu && plan?.floorOriginX != null && plan?.floorOriginZ != null && pts
+    ? [plan.floorOriginX, plan.floorOriginZ] as Pt : null;
   let floor: FloorRect;
   if (shape) {
     const bb = bbox(shape);
     floor = { cx: bb.minX + bb.length / 2, cz: bb.minZ + bb.width / 2, w: bb.length, d: bb.width, real: { w: bb.length, d: bb.width }, outline: shape };
+  } else if (anchor && pts) {
+    // F6: the floor sits where the arranged racks were saved against.
+    const bb = bbox(pts);
+    const moved = pts.map(([x, z]) => [anchor[0] + x - bb.minX, anchor[1] + z - bb.minZ] as Pt);
+    const shaped = !(pts.length === 4 && isRectilinear(pts));
+    floor = { cx: anchor[0] + bb.length / 2, cz: anchor[1] + bb.width / 2, w: bb.length, d: bb.width,
+      real: { w: bb.length, d: bb.width }, outline: shaped ? moved : null };
   } else {
     floor = floorRect(all, wh);
   }
 
+  // F6: racks being arranged take their draft position (every rack is then placed by hand).
+  if (draft) {
+    for (const p of placed) {
+      const pose = draft.get(p.rack.id);
+      if (pose) { p.center = pose.center; p.rotY = (-pose.deg * Math.PI) / 180; }
+    }
+    unplaced = [];
+  }
+
+  // Slots
+  const slots: PlacedSlot[] = [];
+  for (const p of placed) {
+    for (const s of p.rack.slots ?? []) {
+      const c = slotLocal(p, s.level, s.column);
+      const [x, z] = toWorld(p, c.lx, c.lz);
+      slots.push({ slot: s, rack: p.rack, state: slotState3D(s), pos: [x, c.y, z], size: c.size, baseY: c.baseY, rotY: p.rotY, kind: p.kind });
+    }
+  }
+
+  // Zone floor areas (around each zone's racks)
+  const zoneBox = new Map<string, ZoneArea>();
+  let maxY = 0;
+  for (const p of placed) {
+    for (const [x, z] of rackCorners(p)) {
+      const b = zoneBox.get(p.zone) ?? { zone: p.zone, minX: x, minZ: z, maxX: x, maxZ: z };
+      b.minX = Math.min(b.minX, x); b.maxX = Math.max(b.maxX, x); b.minZ = Math.min(b.minZ, z); b.maxZ = Math.max(b.maxZ, z);
+      zoneBox.set(p.zone, b);
+    }
+    maxY = Math.max(maxY, p.height);
+  }
+  const zones = [...zoneBox.values()].map((b) => ({ ...b, minX: b.minX - 1.2, minZ: b.minZ - 1.2, maxX: b.maxX + 1.2, maxZ: b.maxZ + 1.2 }));
+  // `bounds` = racks only (camera framing); the floor also covers the areas.
+  const bounds = { ...rackBox(placed), maxY };
+
   // F4: check every placed rack against the real floor (not the slab grown round racks).
   const unplacedIds = new Set(unplaced.map((r) => r.id));
+  const issues = placementIssues(placed.filter((p) => !unplacedIds.has(p.rack.id)), floorPolygonOf(floor));
+  const placement: Placement = { ...issues, unplaced: unplaced.map((r) => r.id) };
+
+  return { racks: placed, slots, zones, areas, bounds, floor, placement, frame: { scale: k, anchored: !!anchor, planRacks: linked.length } };
+}
+
+/** The real warehouse floor in world X/Z (m); null when its size is not recorded. */
+export function floorPolygonOf(floor: FloorRect): Pt[] | null {
   const fr = floor.real;
-  const floorPoly: Pt[] | null = floor.outline ?? (fr
+  return floor.outline ?? (fr
     ? [[floor.cx - fr.w / 2, floor.cz - fr.d / 2], [floor.cx + fr.w / 2, floor.cz - fr.d / 2],
       [floor.cx + fr.w / 2, floor.cz + fr.d / 2], [floor.cx - fr.w / 2, floor.cz + fr.d / 2]]
     : null);
-  const issues = placementIssues(placed.filter((p) => !unplacedIds.has(p.rack.id)), floorPoly);
-  const placement: Placement = { ...issues, unplaced: unplaced.map((r) => r.id) };
+}
 
-  return { racks: placed, slots, zones, areas, bounds, floor, placement };
+/**
+ * F6: what blocks saving an arrangement — racks off the floor or overlapping.
+ * A rack bigger than the floor both ways can never fit, so it does not block
+ * (same rule as the API; the setup card still lists it).
+ */
+export function arrangeIssues(scene: Pick<Scene3D, 'racks' | 'floor'>): { outside: string[]; overlap: string[] } {
+  const poly = floorPolygonOf(scene.floor);
+  const res = placementIssues(scene.racks, poly);
+  if (!poly) return res;
+  const bb = bbox(poly);
+  const never = new Set(scene.racks.filter((p) => !((p.length <= bb.length + 1e-9 && p.depth <= bb.width + 1e-9)
+    || (p.length <= bb.width + 1e-9 && p.depth <= bb.length + 1e-9))).map((p) => p.rack.id));
+  return { outside: res.outside.filter((id) => !never.has(id)), overlap: res.overlap };
+}
+
+/**
+ * F6, while dragging: would the racks in `ids`, shifted by (dx, dz), sit on the
+ * floor without overlapping a rack that stays put? Same rules as arrangeIssues.
+ */
+export function moveFits(scene: Pick<Scene3D, 'racks' | 'floor'>, ids: Set<string>, dx: number, dz: number): boolean {
+  const poly = floorPolygonOf(scene.floor);
+  const bb = poly ? bbox(poly) : null;
+  const box = (g: GeoRect) => {
+    const c = rackCorners({ center: g.center, rotY: g.rotY, length: g.length, depth: g.depth } as PlacedRack);
+    return { minX: Math.min(...c.map((q) => q[0])), maxX: Math.max(...c.map((q) => q[0])), minZ: Math.min(...c.map((q) => q[1])), maxZ: Math.max(...c.map((q) => q[1])) };
+  };
+  const still = scene.racks.filter((p) => !ids.has(p.rack.id)).map((p) => {
+    const g = geo(p.center, p.length, p.depth, p.rotY);
+    return { g, b: box(g) };
+  });
+  for (const p of scene.racks) {
+    if (!ids.has(p.rack.id)) continue;
+    const g = geo([p.center[0] + dx, p.center[1] + dz], p.length, p.depth, p.rotY);
+    const canFit = !bb || (p.length <= bb.length + 1e-9 && p.depth <= bb.width + 1e-9) || (p.length <= bb.width + 1e-9 && p.depth <= bb.length + 1e-9);
+    if (poly && canFit && !rectInPolygon(g, poly)) return false;
+    const b = box(g);
+    for (const o of still) {
+      if (b.maxX <= o.b.minX || o.b.maxX <= b.minX || b.maxZ <= o.b.minZ || o.b.maxZ <= b.minZ) continue;
+      if (rectsOverlap(g, o.g)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * F6: turn racks 90° (facing +90). One rack turns on the spot; several turn
+ * together round the middle of their group, keeping their spacing.
+ */
+export function rotatePoses(poses: Map<string, RackPose>, ids: string[]): Map<string, RackPose> {
+  const out = new Map(poses);
+  const list = ids.map((id) => [id, poses.get(id)] as const).filter((e): e is readonly [string, RackPose] => !!e[1]);
+  if (!list.length) return out;
+  const xs = list.map(([, p]) => p.center[0]), zs = list.map(([, p]) => p.center[1]);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+  for (const [id, p] of list) {
+    const dx = p.center[0] - cx, dz = p.center[1] - cz;
+    // Facing +90° turns +X into +Z (three.js Y rotation with rotY = -deg).
+    out.set(id, { center: [cx - dz, cz + dx], deg: (p.deg + 90) % 360 });
+  }
+  return out;
 }
 
 /** Bounds of a subset of racks (used to frame the camera on a filter). */

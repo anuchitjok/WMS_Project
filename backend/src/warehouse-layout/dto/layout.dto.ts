@@ -1,6 +1,6 @@
 import {
   IsString, IsOptional, IsInt, IsNumber, IsEnum, Min, Max, MaxLength, IsNotEmpty, Matches,
-  IsArray, IsBoolean, ArrayMaxSize, ValidateNested,
+  IsArray, IsBoolean, ArrayMaxSize, ValidateNested, IsIn,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -222,4 +222,57 @@ export class DuplicateObjectDto {
   @ApiPropertyOptional({ default: false, description: 'Copy the whole subtree' })
   @IsOptional() @IsBoolean()
   includeChildren?: boolean;
+}
+
+// ─── F6: rack positions arranged in the 3D view ─────────────────────────────────
+// Positions are metres in the 3D view's frame; the server turns them into Floor
+// Plan units with the layout's metersPerUnit. Drawings only — never a Rack row.
+
+export class RackPositionDto {
+  @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(64)
+  rackId: string;
+
+  @ApiProperty({ description: 'Centre X (m)' }) @IsNumber() @Min(-100000) @Max(100000)
+  cx: number;
+
+  @ApiProperty({ description: 'Centre Z (m)' }) @IsNumber() @Min(-100000) @Max(100000)
+  cz: number;
+
+  @ApiProperty({ description: 'Footprint along the rack (m)' }) @IsNumber() @Min(0.05) @Max(1000)
+  length: number;
+
+  @ApiProperty({ description: 'Footprint across the rack (m)' }) @IsNumber() @Min(0.05) @Max(1000)
+  depth: number;
+
+  @ApiProperty({ enum: [0, 90, 180, 270] }) @IsIn([0, 90, 180, 270])
+  rotation: number;
+}
+
+export class SaveRackPositionsDto {
+  @ApiPropertyOptional({ description: 'Layout version the client last read (omit when there is no layout yet); 409 if stale' })
+  @IsOptional() @IsInt() @Min(0)
+  version?: number;
+
+  @ApiProperty({ description: 'Metres per plan unit the view used; only recorded when the layout has none yet' })
+  @IsNumber() @Min(0.001) @Max(1000)
+  metersPerUnit: number;
+
+  @ApiPropertyOptional({ description: 'Floor top-left corner X (m); only recorded when the layout has none yet' })
+  @IsOptional() @IsNumber() @Min(-100000) @Max(100000)
+  floorOriginX?: number;
+
+  @ApiPropertyOptional({ description: 'Floor top-left corner Z (m); only recorded when the layout has none yet' })
+  @IsOptional() @IsNumber() @Min(-100000) @Max(100000)
+  floorOriginZ?: number;
+
+  @ApiProperty({ type: [RackPositionDto], description: 'Every active rack of the warehouse, once' })
+  @IsArray() @ArrayMaxSize(5000)
+  @ValidateNested({ each: true }) @Type(() => RackPositionDto)
+  racks: RackPositionDto[];
+}
+
+export class ResetRackPositionsDto {
+  @ApiProperty({ description: 'Layout version the client last read; 409 if stale' })
+  @IsInt() @Min(0)
+  version: number;
 }
