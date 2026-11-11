@@ -6,6 +6,7 @@ import { HandoverService } from '../fulfillment/services/handover.service';
 import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
 import { scopedWarehouseIds } from '../common/warehouse-scope';
 import { buildSlipRows, deliveryMethodOf, requestQrUrl, SlipRow, DeliveryMethod } from './picking-slip-data';
+import { approverPickedRows, openPickRows } from '../fulfillment/approver-picks';
 import { decideConfirm, receiptState, resolveRefView, ReceiptState } from './request-ref';
 
 interface Actor extends AccessPrincipal {
@@ -78,7 +79,11 @@ export class RequestRefService {
         stockItem: i.stockItemId ? byId.get(i.stockItemId) ?? null : null,
       }));
     }
-    const rows = buildSlipRows(req.items, taskItems);
+    // PR6 label (read only): rows the approver chose — on the task once allocated, else still open picks.
+    const approverRows = taskItems && task
+      ? (await approverPickedRows(this.prisma as any, [{ id: task.id, requestId: req.id }])).get(task.id)
+      : await openPickRows(this.prisma as any, req.id);
+    const rows = buildSlipRows(req.items, taskItems, approverRows);
 
     const stockWh = (taskItems ?? req.items).map((i) => i.stockItem?.warehouse?.id).filter((x): x is string => !!x);
     const warehouseIds = task?.warehouseId ? [task.warehouseId] : [...new Set(stockWh)];
@@ -130,7 +135,7 @@ export class RequestRefService {
       receiptState: state,
       task: ctx.task ? { id: ctx.task.id, refNumber: ctx.task.refNumber, status: ctx.task.status, version: ctx.task.version } : null,
       // The requester sees what they will receive; only the warehouse needs pick locations.
-      items: ctx.rows.map((r) => (access.canPick ? r : { ...r, location: null })),
+      items: ctx.rows.map((r) => (access.canPick ? r : { ...r, location: null, selectedByApprover: false })),
     };
   }
 

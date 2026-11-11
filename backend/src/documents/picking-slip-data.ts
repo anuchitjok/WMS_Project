@@ -47,6 +47,8 @@ export interface SlipRow {
   unit: string | null;
   condition: string;
   location: SlipLocation;
+  /** PR6: the approver chose this stock row (Manual Pick). False for FIFO lines. */
+  selectedByApprover: boolean;
 }
 
 /**
@@ -93,7 +95,11 @@ export interface TaskItemLike {
  * authoritative reservation (what the warehouse must actually pick), otherwise the
  * request lines and their approval-time stock link are used.
  */
-export function buildSlipRows(requestItems: RequestItemLike[], taskItems?: TaskItemLike[] | null): SlipRow[] {
+export function buildSlipRows(
+  requestItems: RequestItemLike[],
+  taskItems?: TaskItemLike[] | null,
+  approverRows?: ReadonlySet<string> | null,
+): SlipRow[] {
   const useTask = !!taskItems && taskItems.length > 0;
   const src = useTask
     ? taskItems!.map((t) => ({ product: t.product, qty: t.qtyRequested ?? 1, stock: t.stockItem }))
@@ -109,6 +115,7 @@ export function buildSlipRows(requestItems: RequestItemLike[], taskItems?: TaskI
     unit: s.product?.unit ?? null,
     condition: conditionOf(s.stock),
     location: slipLocation(s.stock),
+    selectedByApprover: !!s.stock?.id && !!approverRows?.has(s.stock.id),
   }));
 }
 

@@ -29,6 +29,8 @@ export type SystemStatus = 'ok' | 'degraded' | 'down' | null;
 export interface TaskLine {
   id: string; stockItemId: string | null; qtyRequested: number; qtyPicked: number;
   binLocation: string | null; product?: { code?: string; name?: string; unit?: string } | null;
+  /** PR6: the approver chose this stock location (Manual Pick). */
+  selectedByApprover?: boolean;
 }
 /** Open fulfilment task of this warehouse (shipped / delivered ones are left out). */
 export interface OpenTask {

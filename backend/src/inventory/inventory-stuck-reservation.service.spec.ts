@@ -34,6 +34,11 @@ function makePrisma(item: Partial<{ status: StockStatus }> = {}) {
     fulfillmentTask: { findFirst: jest.fn().mockResolvedValue(CLOSED_TASK) },
     withdrawalRequest: { update: jest.fn().mockResolvedValue({}) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
+    // PR6: no approver pick holds the unit unless a test says so.
+    withdrawalRequestPick: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
   };
   p.$transaction = jest.fn((arg: any) => (typeof arg === 'function' ? arg(p) : Promise.all(arg)));
   return p;
@@ -125,5 +130,25 @@ describe('InventoryService — releaseStuckReservation', () => {
       expect.anything(), [{ stockItemId: STOCK_ID }], 'stuck reservation on no request', 'user_1',
     );
     expect(prisma.withdrawalRequestItem.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('PR6: refuses a unit an approver chose for a request that is still live', async () => {
+    prisma.withdrawalRequestItem.findMany.mockResolvedValue([]);
+    prisma.withdrawalRequestPick.findFirst.mockResolvedValue({
+      requestItem: { request: { refNumber: 'WR-PICK', status: RequestStatus.APPROVED } },
+    });
+    await expect(service.releaseStuckReservation(STOCK_ID, 'user_1')).rejects.toThrow(/WR-PICK is APPROVED/);
+    expect(orchestration.releaseReservation).not.toHaveBeenCalled();
+  });
+
+  it('PR6: a pick left open on a finished request is closed with the release', async () => {
+    prisma.withdrawalRequestItem.findMany.mockResolvedValue([]);
+    prisma.withdrawalRequestPick.findFirst.mockResolvedValue({
+      requestItem: { request: { refNumber: 'WR-OLD', status: RequestStatus.CANCELLED } },
+    });
+    await service.releaseStuckReservation(STOCK_ID, 'user_1');
+    expect(prisma.withdrawalRequestPick.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { stockItemId: STOCK_ID, releasedAt: null } }),
+    );
   });
 });

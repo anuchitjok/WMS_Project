@@ -62,6 +62,8 @@ export interface SlipRow {
   condition: string;
   /** Only for warehouse users; null for the requester. */
   location: { warehouse: string; bin: string } | null;
+  /** PR6: the approver chose this stock location (Manual Pick). */
+  selectedByApprover?: boolean;
 }
 
 export type RefView =

@@ -6,6 +6,7 @@ import { PickingService } from './services/picking.service';
 import { PackingService } from './services/packing.service';
 import { HandoverService } from './services/handover.service';
 import { claimTaskStatus, CANCELLABLE_TASK_STATUSES } from './services/task-state';
+import { approverPickedRows } from './approver-picks';
 
 const EXCEPTION_STATUSES: FulfillmentStatus[] = [
   FulfillmentStatus.SHORT_PICK,
@@ -57,6 +58,13 @@ export class FulfillmentService {
       : [];
     const methodById = new Map(methods.map((r) => [r.id, r.deliveryMethod === 'SHIP' ? 'SHIP' : 'COLLECT']));
     for (const t of tasks as any[]) t.deliveryMethod = methodById.get(t.requestId) ?? 'COLLECT';
+
+    // PR6 label (read only): lines whose stock row the approver chose.
+    const chosen = await approverPickedRows(this.prisma as any, tasks);
+    for (const t of tasks as any[]) {
+      const rows = chosen.get(t.id);
+      for (const it of t.items) it.selectedByApprover = !!it.stockItemId && !!rows?.has(it.stockItemId);
+    }
 
     const inSet = (arr: FulfillmentStatus[], s: FulfillmentStatus) => arr.includes(s);
     return {

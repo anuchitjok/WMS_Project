@@ -140,8 +140,15 @@ export class DocumentsService {
       this.t(doc, r.brand, TC.brand + 2, y + 6, { size: 7.5, width: 51, height: 9 });
       this.t(doc, r.serial, TC.ser + 2, y + 6, { size: 7, bold: r.serial !== '—', width: 76, height: 9 });
       // Location: line 1 warehouse, line 2 rack / slot (bold — what the picker walks to)
-      this.t(doc, r.location.warehouse, TC.loc + 2, y + 2.5, { size: 6.5, color: '#555555', width: 74, height: 8 });
-      this.t(doc, r.location.bin, TC.loc + 2, y + 10.5, { size: 8, bold: true, width: 74, height: 9 });
+      if (r.selectedByApprover) {
+        // PR6: Manual Pick — a third short line; FIFO rows keep the layout below unchanged.
+        this.t(doc, r.location.warehouse, TC.loc + 2, y + 1.5, { size: 6.5, color: '#555555', width: 74, height: 8 });
+        this.t(doc, r.location.bin, TC.loc + 2, y + 8, { size: 8, bold: true, width: 74, height: 9 });
+        this.t(doc, 'Selected by Approver', TC.loc + 2, y + 15, { size: 5, bold: true, color: '#111111', width: 74, height: 6 });
+      } else {
+        this.t(doc, r.location.warehouse, TC.loc + 2, y + 2.5, { size: 6.5, color: '#555555', width: 74, height: 8 });
+        this.t(doc, r.location.bin, TC.loc + 2, y + 10.5, { size: 8, bold: true, width: 74, height: 9 });
+      }
       this.t(doc, String(r.qty), TC.qty + 2, y + 6, { size: 9, bold: true, width: 28, height: 10 });
       this.t(doc, r.condition, TC.cond + 2, y + 6, { size: 7.5, width: 52, height: 9 });
       y += RH;

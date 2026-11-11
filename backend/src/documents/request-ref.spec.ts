@@ -76,6 +76,7 @@ describe('RequestRefService.confirmReceipt', () => {
       },
       stockItem: { findMany: jest.fn(async () => []) },
       user: { findUnique: jest.fn(async () => null) },
+      withdrawalRequestPick: { findMany: jest.fn(async () => []) },
     };
     const handover: any = {
       issueToRma: jest.fn(async () => {
@@ -145,6 +146,7 @@ describe('RequestRefService.view', () => {
       },
       stockItem: { findMany: jest.fn(async () => [{ id: 's1', serialNumber: 'SN1', warehouse: { id: taskWarehouse, code: 'WH1' }, rack: { code: 'A01' }, slot: { code: 'A01-01-02' }, goodsReceivingItems: [] }]) },
       user: { findUnique: jest.fn(async () => ({ fullName: 'Pete Picker' })) },
+      withdrawalRequestPick: { findMany: jest.fn(async () => []) },
     };
     return new RequestRefService(prisma, {} as any);
   }
