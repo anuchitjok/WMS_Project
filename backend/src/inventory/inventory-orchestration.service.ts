@@ -42,7 +42,8 @@ export class InventoryOrchestrationService {
    * claimed yet, locked. Approval only links the first reserved unit to the request
    * line, so reserved units are treated as a per-product pool — but a unit linked
    * to a *different* approved request is never taken, and `preferId` (this line's
-   * own linked unit) comes first.
+   * own linked unit) comes first. Rows held by an open approver pick (PR6) are
+   * left out: allocation and cancel handle them through the pick itself.
    */
   async lockApprovalPool(
     tx: Prisma.TransactionClient,
@@ -60,6 +61,11 @@ export class InventoryOrchestrationService {
         AND NOT EXISTS (
           SELECT 1 FROM "WithdrawalRequestItem" wri JOIN "WithdrawalRequest" wr ON wr."id" = wri."requestId"
           WHERE wri."stockItemId" = s."id" AND wr."id" <> ${params.requestId} AND wr."status" = 'APPROVED')
+        -- PR6: a row an approver chose (open pick) is used only through that pick,
+        -- never through the pool — not by another request, nor by another line.
+        AND NOT EXISTS (
+          SELECT 1 FROM "WithdrawalRequestPick" wrp
+          WHERE wrp."stockItemId" = s."id" AND wrp."releasedAt" IS NULL)
       ORDER BY CASE WHEN s."id" = ${params.preferId} THEN 0 ELSE 1 END, s."receivedDate" ASC
       LIMIT ${params.limit}
       FOR UPDATE OF s SKIP LOCKED

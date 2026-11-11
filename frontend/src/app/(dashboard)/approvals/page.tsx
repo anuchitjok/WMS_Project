@@ -7,7 +7,7 @@
 // delivery method on each row (4.7).
 
 import { useEffect, useState, useCallback } from 'react';
-import { ShieldCheck, X, AlertTriangle, CheckCircle2, Eye, XCircle } from 'lucide-react';
+import { ShieldCheck, X, AlertTriangle, CheckCircle2, Eye, XCircle, MapPin } from 'lucide-react';
 import { toast } from 'sonner';
 import { requestsApi, localizeError } from '@/lib/api';
 import { requestsApiP4, BULK_APPROVE_MAX, type BulkApproveResponse } from '@/lib/api-requests';
@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { RequestDetailDrawer } from '@/components/requests/request-detail-drawer';
+import { PickLocationDialog } from '@/components/requests/pick-location-dialog';
 import { DeliveryMethodBadge } from '@/components/requests/delivery-method-badge';
 import { REQUEST_STATUS_COLORS } from '@/lib/utils';
 import type { RequestStatus } from '@/types';
@@ -54,6 +55,8 @@ export default function ApprovalsWorkspacePage() {
   const [bulkReason, setBulkReason] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkApproveResponse | null>(null);
+  // PR6: approve while choosing pick locations
+  const [pickTarget, setPickTarget] = useState<{ id: string; ref: string } | null>(null);
   const { m, t, fmt } = useT();
   const A = m.approvals;
 
@@ -217,6 +220,10 @@ export default function ApprovalsWorkspacePage() {
                         <Eye className="h-3.5 w-3.5 mr-1" />{A.viewDetails}
                       </Button>
                       <Button size="sm" className="h-7 bg-green-600 hover:bg-green-700 text-white" disabled={busyId === r.id} onClick={() => approve(r.id)}>{A.approve}</Button>
+                      <Button size="sm" variant="outline" className="h-7 px-2 text-slate-700" disabled={busyId === r.id} title={A.pick.openTitle}
+                        onClick={() => setPickTarget({ id: r.id, ref: r.refNumber })}>
+                        <MapPin className="h-3.5 w-3.5 mr-1" />{A.pick.open}
+                      </Button>
                       <Button size="sm" variant="outline" className="h-7 text-red-600 border-red-200" disabled={busyId === r.id} onClick={() => { setRejectTarget(r); setRejectReason(''); }}>{A.reject}</Button>
                     </td>
                   </tr>
@@ -234,10 +241,22 @@ export default function ApprovalsWorkspacePage() {
           <>
             <Button size="sm" variant="outline" className="text-red-600 border-red-200" disabled={busyId === req.id}
               onClick={() => { setRejectTarget(req); setRejectReason(''); }}>{A.reject}</Button>
+            <Button size="sm" variant="outline" className="text-slate-700" disabled={busyId === req.id} title={A.pick.openTitle}
+              onClick={() => setPickTarget({ id: req.id, ref: req.refNumber })}>
+              <MapPin className="h-3.5 w-3.5 mr-1" />{A.pick.open}
+            </Button>
             <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" disabled={busyId === req.id}
               onClick={() => approve(req.id)}>{A.approve}</Button>
           </>
         ) : null}
+      />
+
+      {/* PR6 — approve and choose the rack / slot to pick from */}
+      <PickLocationDialog
+        requestId={pickTarget?.id ?? null}
+        refNumber={pickTarget?.ref}
+        onClose={() => setPickTarget(null)}
+        onApproved={() => { setPickTarget(null); setDetailId(null); load(); }}
       />
 
       {/* Reject-reason modal — the reason is recorded and shown to the requester */}
@@ -283,7 +302,10 @@ export default function ApprovalsWorkspacePage() {
           </>}
         >
           {bulkMode === 'approve' ? (
-            <p className="text-sm text-slate-600">{A.bulkApproveHint}</p>
+            <>
+              <p className="text-sm text-slate-600">{A.bulkApproveHint}</p>
+              <p className="text-xs text-slate-500">{A.pick.bulkFifo}</p>
+            </>
           ) : (
             <>
               <label className="block text-sm text-slate-600">{A.reasonLabel} <span className="text-red-500">*</span></label>

@@ -239,9 +239,27 @@ export class InventoryService {
       }
     }
 
+    // PR6: a row an approver chose for a request that is still live belongs to
+    // that request — the way out is cancelling the request, as for linked rows.
+    const openPick = await this.prisma.withdrawalRequestPick.findFirst({
+      where: { stockItemId: id, releasedAt: null },
+      include: { requestItem: { include: { request: { select: { refNumber: true, status: true } } } } },
+    });
+    if (openPick && LIVE_REQUEST_STATUSES.includes(openPick.requestItem.request.status)) {
+      const r = openPick.requestItem.request;
+      throw new ConflictException(
+        `${r.refNumber} is ${r.status} and still holds this unit — cancel the request instead`,
+      );
+    }
+
     const refs = links.map((l) => l.request.refNumber).join(', ') || 'no request';
     const updated = await this.prisma.$transaction(async (tx) => {
       await this.orchestration.releaseReservation(tx, [{ stockItemId: id }], `stuck reservation on ${refs}`, userId);
+      // A pick left open on a finished request no longer holds anything.
+      await tx.withdrawalRequestPick.updateMany({
+        where: { stockItemId: id, releasedAt: null },
+        data: { releasedAt: new Date() },
+      });
       if (links.length > 0) {
         await tx.withdrawalRequestItem.updateMany({
           where: { id: { in: links.map((l) => l.id) } },

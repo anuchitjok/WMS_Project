@@ -17,6 +17,19 @@ import { ISSUED_TASK_STATUSES } from '../fulfillment/services/task-state';
 import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
 import { DELIVERY_METHODS, DeliveryMethod } from './dto/create-request.dto';
 import { BULK_APPROVE_MAX, BulkApproveResult } from './dto/bulk-approve.dto';
+import { ScopePrincipal, scopedWarehouseIds, canAccessWarehouse } from '../common/warehouse-scope';
+import {
+  PickInput, PICK_ERR, checkPickPlan, readPickRows, lockPickRow, rowProblem,
+} from './request-picks';
+
+/** PR6: what approve() needs to honour approver-chosen pick locations. */
+/** PR6: most stock rows listed per line in the pick picker (oldest first). */
+export const PICK_OPTIONS_MAX = 300;
+
+export interface ApprovePickOptions {
+  picks?: PickInput[];
+  principal?: ScopePrincipal | null;
+}
 
 /**
  * P4 4.1 — free-text search on the request list. Case-insensitive "contains" on
@@ -344,6 +357,177 @@ export class RequestsService {
    * Falls back to creating an instance if none exists (no-rule path auto-creates
    * a single default step, preserving legacy single-click approval).
    */
+  // ── PR6: pick locations chosen by the approver ───────────────────────────
+
+  /** Why picks cannot be chosen for this request now, or null when they can. */
+  private async pickBlock(req: { id: string; requesterId: string; status: RequestStatus }): Promise<'STATUS' | 'MODE' | 'NOT_FINAL_STEP' | null> {
+    if (req.status !== RequestStatus.SUBMITTED && req.status !== RequestStatus.PENDING_APPROVAL) return 'STATUS';
+    // ALLOCATION mode reserves nothing at approval, so there is nothing to place.
+    if (isUnifiedReservationEnabled()) return 'MODE';
+    if (isApprovalEngineEnabled()) {
+      // Only the step that makes the request APPROVED reserves stock (Q1).
+      const instance: any = await this.approval.ensurePendingInstance('WithdrawalRequest', req.id, req.requesterId);
+      const pending = (instance?.steps ?? []).filter((s: any) => s.status === 'PENDING').length;
+      if (!instance?.steps?.length || pending > 1) return 'NOT_FINAL_STEP';
+    }
+    return null;
+  }
+
+  /** Checks a pick plan without locks; also reads what the audit entry needs. */
+  private async preparePicks(
+    items: Array<{ id: string; productId: string; quantityRequested: number }>,
+    picks: PickInput[],
+    principal: ScopePrincipal | null,
+  ) {
+    const ids = [...new Set(picks.map((p) => p.stockItemId))];
+    const rows = await readPickRows(this.prisma, ids);
+    const { byLine, warehouseId } = checkPickPlan(items, picks, rows, principal);
+
+    const locs = await this.prisma.stockItem.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, warehouse: { select: { code: true } }, rack: { select: { code: true } }, slot: { select: { code: true } } },
+    });
+    const loc = new Map(locs.map((l) => [l.id, [l.warehouse?.code, l.rack?.code, l.slot?.code].filter(Boolean).join('|')]));
+    // The row FIFO would have taken first, so the audit shows when FIFO was overridden.
+    const fifo = new Map<string, string | null>();
+    for (const lineId of byLine.keys()) {
+      const item = items.find((i) => i.id === lineId)!;
+      const first = await this.prisma.$queryRaw<{ id: string }[]>`
+        SELECT s."id" FROM "StockItem" s
+        WHERE s."productId" = ${item.productId} AND s."status" = 'AVAILABLE' AND s."quantity" > 0 AND ${NOT_COUNT_LOCKED}
+        ORDER BY s."receivedDate" ASC LIMIT 1`;
+      fifo.set(lineId, first[0]?.id ?? null);
+    }
+    return { byLine, warehouseId, principal, audit: { loc, fifo } };
+  }
+
+  /**
+   * Reserves exactly the chosen rows of one line (inside the approval
+   * transaction): lock, re-check, split, AVAILABLE → RESERVED, record the pick.
+   * Any row that changed since it was chosen aborts the whole approval.
+   */
+  private async reservePicks(
+    tx: Prisma.TransactionClient,
+    item: { id: string; productId: string; quantityRequested: number },
+    chosen: PickInput[],
+    approverId: string,
+    plan: { warehouseId: string | null; principal: ScopePrincipal | null; audit: { loc: Map<string, string>; fifo: Map<string, string | null> } },
+  ): Promise<string> {
+    let first = true;
+    for (const p of chosen) {
+      const row = await lockPickRow(tx, p.stockItemId);
+      const why = !row ? 'NOT_FOUND'
+        : row.warehouseId !== plan.warehouseId || !canAccessWarehouse(plan.principal, row.warehouseId) ? 'MOVED'
+          : rowProblem(row, item.productId, p.qty);
+      if (why) throw new ConflictException({ message: PICK_ERR.rowTaken, stockItemId: p.stockItemId, reason: why });
+
+      // Bulk row: the chosen quantity keeps the row id, the rest stays AVAILABLE.
+      await splitStockRow(tx, p.stockItemId, p.qty, StockStatus.AVAILABLE);
+      await tx.stockItem.update({ where: { id: p.stockItemId }, data: { status: StockStatus.RESERVED } });
+      if (first) {
+        // Same first-row link as FIFO approval, so existing screens read it unchanged.
+        await tx.withdrawalRequestItem.update({
+          where: { id: item.id },
+          data: { stockItemId: p.stockItemId, quantityApproved: item.quantityRequested },
+        });
+        first = false;
+      }
+      await tx.withdrawalRequestPick.create({
+        data: { requestItemId: item.id, stockItemId: p.stockItemId, quantity: p.qty, pickedById: approverId },
+      });
+    }
+    const fifoId = plan.audit.fifo.get(item.id) ?? null;
+    const where = chosen.map((p) => `${plan.audit.loc.get(p.stockItemId) || p.stockItemId} ×${p.qty}`).join(', ');
+    const sameAsFifo = chosen.length > 0 && chosen[0].stockItemId === fifoId;
+    await tx.auditLog.create({
+      data: {
+        userId: approverId,
+        action: 'REQUEST_PICK_CHOSEN',
+        entityType: 'WithdrawalRequestItem',
+        entityId: item.id,
+        detail: `${item.productId}: ${where}${sameAsFifo ? ' (same as FIFO)' : ` (FIFO would take ${fifoId ?? 'none'})`}`,
+      },
+    });
+    return `${item.productId}: ${item.quantityRequested} unit(s) from ${chosen.length} chosen row(s)`;
+  }
+
+  /**
+   * Stock rows the approver may choose from, per request line: AVAILABLE, not
+   * being counted, inside the caller's warehouses, oldest first (FIFO order).
+   * Read only. `canPick` is false (with the reason) when picks would be refused.
+   */
+  async pickOptions(id: string, principal: ScopePrincipal | null) {
+    const req = await this.prisma.withdrawalRequest.findUnique({
+      where: { id },
+      include: { items: { include: { product: { select: { id: true, code: true, name: true, partNumber: true } } } } },
+    });
+    if (!req) throw new NotFoundException('Request not found');
+    const block = await this.pickBlock(req);
+    const products = [...new Set(req.items.map((i) => i.productId))];
+    const scope = scopedWarehouseIds(principal);
+
+    type Opt = {
+      id: string; productId: string; quantity: number; serialNumber: string | null; batchNumber: string | null;
+      receivedDate: Date; expiryDate: Date | null; warehouseId: string | null; warehouseCode: string | null;
+      warehouseName: string | null; rackCode: string | null; slotCode: string | null;
+    };
+    const rows = block || !products.length ? [] : await this.prisma.$queryRaw<Opt[]>`
+      SELECT x."id", x."productId", x."quantity", x."serialNumber", x."batchNumber", x."receivedDate", x."expiryDate",
+             x."warehouseId", x."warehouseCode", x."warehouseName", x."rackCode", x."slotCode"
+      FROM (
+        SELECT s."id", s."productId", s."quantity", s."serialNumber", s."batchNumber", s."receivedDate", s."expiryDate",
+               s."warehouseId", w."code" AS "warehouseCode", w."name" AS "warehouseName",
+               r."code" AS "rackCode", sl."code" AS "slotCode",
+               ROW_NUMBER() OVER (PARTITION BY s."productId" ORDER BY s."receivedDate" ASC, s."id" ASC) AS "rn"
+        FROM "StockItem" s
+        LEFT JOIN "Warehouse" w ON w."id" = s."warehouseId"
+        LEFT JOIN "Rack" r ON r."id" = s."rackId"
+        LEFT JOIN "Slot" sl ON sl."id" = s."slotId"
+        WHERE s."productId" = ANY(${products}::text[]) AND s."status" = 'AVAILABLE' AND s."quantity" > 0
+          AND ${NOT_COUNT_LOCKED}
+          AND (${scope}::text[] IS NULL OR s."warehouseId" = ANY(${scope}::text[]))
+      ) x WHERE x."rn" <= ${PICK_OPTIONS_MAX + 1}
+      ORDER BY x."productId", x."rn"`;
+    // FIFO's first row over all warehouses (what approval without picks would take).
+    const fifoRows = block || !products.length ? [] : await this.prisma.$queryRaw<{ productId: string; id: string }[]>`
+      SELECT DISTINCT ON (s."productId") s."productId", s."id" FROM "StockItem" s
+      WHERE s."productId" = ANY(${products}::text[]) AND s."status" = 'AVAILABLE' AND s."quantity" > 0 AND ${NOT_COUNT_LOCKED}
+      ORDER BY s."productId", s."receivedDate" ASC, s."id" ASC`;
+    const fifo = new Map(fifoRows.map((r) => [r.productId, r.id]));
+
+    return {
+      requestId: req.id,
+      canPick: !block,
+      blocked: block,
+      lines: req.items.map((item) => {
+        const opts = rows.filter((r) => r.productId === item.productId);
+        return {
+          itemId: item.id,
+          productId: item.productId,
+          productCode: item.product?.code ?? null,
+          productName: item.product?.name ?? null,
+          partNumber: item.product?.partNumber ?? null,
+          quantity: item.quantityRequested,
+          fifoStockItemId: fifo.get(item.productId) ?? null,
+          more: opts.length > PICK_OPTIONS_MAX,
+          options: opts.slice(0, PICK_OPTIONS_MAX).map((r) => ({
+            stockItemId: r.id,
+            quantity: Number(r.quantity),
+            serialNumber: r.serialNumber,
+            batchNumber: r.batchNumber,
+            receivedDate: r.receivedDate,
+            expiryDate: r.expiryDate,
+            warehouseId: r.warehouseId,
+            warehouseCode: r.warehouseCode,
+            warehouseName: r.warehouseName,
+            rackCode: r.rackCode,
+            slotCode: r.slotCode,
+          })),
+        };
+      }),
+    };
+  }
+
   private async decideViaEngine(
     requestId: string,
     requesterId: string,
@@ -359,13 +543,26 @@ export class RequestsService {
     return (result?.status as 'APPROVED' | 'REJECTED' | 'PENDING') ?? 'PENDING';
   }
 
-  async approve(id: string, approverId: string, approved: boolean, rejectReason?: string) {
+  async approve(id: string, approverId: string, approved: boolean, rejectReason?: string, opts: ApprovePickOptions = {}) {
     const req = await this.findOne(id);
     if (req.status !== RequestStatus.SUBMITTED && req.status !== RequestStatus.PENDING_APPROVAL) {
       throw new BadRequestException('Request is not in a reviewable state');
     }
     // Maker ≠ checker: a requester cannot approve their own request (rejecting it is harmless).
     if (approved) assertNotSelfApproval(approverId, [req.requesterId], 'a request');
+
+    // PR6: approver-chosen pick locations. Checked here, before the approval
+    // engine records a decision, so a bad choice changes nothing; every row is
+    // checked again under a lock inside the transaction below.
+    const picks = opts.picks ?? [];
+    let pickPlan: Awaited<ReturnType<RequestsService['preparePicks']>> | null = null;
+    if (picks.length) {
+      if (!approved) throw new BadRequestException(PICK_ERR.approveOnly);
+      const block = await this.pickBlock(req);
+      if (block === 'MODE') throw new BadRequestException(PICK_ERR.modeOnly);
+      if (block === 'NOT_FINAL_STEP') throw new BadRequestException(PICK_ERR.finalStepOnly);
+      pickPlan = await this.preparePicks(req.items, picks, opts.principal ?? null);
+    }
 
     // Phase 4: when the engine is enabled, the decision is recorded there first.
     // Multi-step rules may keep the request PENDING until all steps approve.
@@ -432,6 +629,11 @@ export class RequestsService {
         // the row id, the remainder stays AVAILABLE (same model as allocation).
         // Serial rows hold 1 unit each, so they behave exactly as before.
         for (const item of req.items) {
+          const chosen = pickPlan?.byLine.get(item.id);
+          if (chosen) {
+            reservedSummary.push(await this.reservePicks(tx, item, chosen, approverId, pickPlan!));
+            continue;
+          }
           const need = item.quantityRequested;
           const taken: string[] = [];
           let covered = 0;
@@ -584,8 +786,30 @@ export class RequestsService {
         // Legacy approval reserved ceil(qty) units per line but linked only the
         // first; release all of them, not just the linked one.
         let released = 0;
+        // PR6: rows the approver chose are released exactly (they are not in the pool).
+        const openPicks = await tx.withdrawalRequestPick.findMany({
+          where: { releasedAt: null, requestItem: { requestId: id } },
+          select: { id: true, requestItemId: true, stockItemId: true },
+        });
+        const pickedLines = new Set(openPicks.map((p) => p.requestItemId));
+        if (openPicks.length) {
+          const ids = openPicks.map((p) => p.stockItemId);
+          await tx.$queryRaw`SELECT "id" FROM "StockItem" WHERE "id" = ANY(${ids}::text[]) FOR UPDATE`;
+          await this.inventory.releaseReservation(
+            tx,
+            ids.map((stockItemId) => ({ stockItemId })),
+            `request ${req.refNumber} (chosen at approval)`,
+            userId,
+          );
+          await tx.withdrawalRequestPick.updateMany({
+            where: { id: { in: openPicks.map((p) => p.id) } },
+            data: { releasedAt: new Date() },
+          });
+          released += openPicks.length;
+        }
         for (const item of req.items) {
           if (!item.stockItemId) continue; // unified mode: approval reserved nothing
+          if (pickedLines.has(item.id)) continue; // released above
           const rows = await this.inventory.lockApprovalPool(tx, {
             productId: item.productId,
             requestId: id,
