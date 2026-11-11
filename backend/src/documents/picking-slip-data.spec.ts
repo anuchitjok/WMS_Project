@@ -69,6 +69,35 @@ describe('picking slip data (plan P5 5.1/5.2)', () => {
       ]);
     });
 
+    it('PR6: before allocation a Manual Pick line shows one row per chosen location', () => {
+      const items = [
+        { id: 'I1', product, quantityRequested: 15, stockItem: stock({ id: 'S1', slot: { code: 'A01-04-04' } }) },
+        { id: 'I2', product, quantityRequested: 2, stockItem: stock({ id: 'S9', slot: { code: 'A01-01-01' } }) },
+      ];
+      const splits = new Map([['I1', [
+        { qty: 11, stockItem: stock({ id: 'S1', slot: { code: 'A01-04-04' } }) },
+        { qty: 4, stockItem: stock({ id: 'S2', slot: { code: 'A01-04-06' } }) },
+      ]]]);
+      const rows = buildSlipRows(items, null, new Set(['S1', 'S2']), splits);
+      expect(rows.map((r) => [r.no, r.location.bin, r.qty, r.selectedByApprover])).toEqual([
+        [1, 'A01-04-04', 11, true],
+        [2, 'A01-04-06', 4, true],
+        // FIFO line (no picks): unchanged — one row, its own qty and stock link
+        [3, 'A01-01-01', 2, false],
+      ]);
+    });
+
+    it('PR6: splits are ignored once the task exists (task lines win)', () => {
+      const splits = new Map([['I1', [{ qty: 1, stockItem: stock({ id: 'S2', slot: { code: 'A01-04-06' } }) }]]]);
+      const rows = buildSlipRows([{ id: 'I1', product, quantityRequested: 1, stockItem: null }],
+        [{ product, qtyRequested: 1, stockItem: stock({ id: 'S5', slot: { code: 'A01-09-09' } }) }], null, splits);
+      expect(rows.map((r) => r.location.bin)).toEqual(['A01-09-09']);
+    });
+
+    it('PR6: no splits = old behaviour (FIFO request)', () => {
+      expect(buildSlipRows(reqItems, null, new Set(), new Map())).toEqual(buildSlipRows(reqItems, null));
+    });
+
     it('falls back to request lines when the task has no lines', () => {
       expect(buildSlipRows(reqItems, [])[0].location.bin).toBe('A01-01-01');
     });

@@ -6,7 +6,7 @@ import { HandoverService } from '../fulfillment/services/handover.service';
 import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
 import { scopedWarehouseIds } from '../common/warehouse-scope';
 import { buildSlipRows, deliveryMethodOf, requestQrUrl, SlipRow, DeliveryMethod } from './picking-slip-data';
-import { approverPickedRows, openPickRows } from '../fulfillment/approver-picks';
+import { approverPickedRows, openPicksByItem } from '../fulfillment/approver-picks';
 import { decideConfirm, receiptState, resolveRefView, ReceiptState } from './request-ref';
 
 interface Actor extends AccessPrincipal {
@@ -79,11 +79,18 @@ export class RequestRefService {
         stockItem: i.stockItemId ? byId.get(i.stockItemId) ?? null : null,
       }));
     }
-    // PR6 label (read only): rows the approver chose — on the task once allocated, else still open picks.
-    const approverRows = taskItems && task
-      ? (await approverPickedRows(this.prisma as any, [{ id: task.id, requestId: req.id }])).get(task.id)
-      : await openPickRows(this.prisma as any, req.id);
-    const rows = buildSlipRows(req.items, taskItems, approverRows);
+    // PR6 (read only): rows the approver chose — on the task once allocated, else the
+    // still-open picks. Before allocation a Manual Pick line shows one row per chosen
+    // location; FIFO lines are left as they were.
+    let approverRows: Set<string> | undefined;
+    let pickSplits: Map<string, Array<{ qty: number; stockItem: SlipContext['req']['items'][number]['stockItem'] & { id: string } }>> | null = null;
+    if (taskItems && task) {
+      approverRows = (await approverPickedRows(this.prisma as any, [{ id: task.id, requestId: req.id }])).get(task.id);
+    } else {
+      pickSplits = await openPicksByItem(this.prisma as any, req.id, STOCK_INCLUDE);
+      approverRows = new Set([...pickSplits.values()].flat().map((p) => p.stockItem.id));
+    }
+    const rows = buildSlipRows(req.items, taskItems, approverRows, pickSplits);
 
     const stockWh = (taskItems ?? req.items).map((i) => i.stockItem?.warehouse?.id).filter((x): x is string => !!x);
     const warehouseIds = task?.warehouseId ? [task.warehouseId] : [...new Set(stockWh)];

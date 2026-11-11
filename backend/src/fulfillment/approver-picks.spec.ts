@@ -1,4 +1,4 @@
-import { approverPickedRows, firstTaskByRequest, openPickRows } from './approver-picks';
+import { approverPickedRows, firstTaskByRequest, openPicksByItem } from './approver-picks';
 import { buildSlipRows } from '../documents/picking-slip-data';
 
 // PR6 "Selected by Approver" label — read-only rule.
@@ -50,12 +50,20 @@ describe('approverPickedRows', () => {
     expect(x.fulfillmentTask.findMany).not.toHaveBeenCalled();
   });
 
-  it('before allocation, only open picks count', async () => {
-    const x = db([
-      { stockItemId: 'S1', releasedAt: null, requestId: 'R1' },
-      { stockItemId: 'S2', releasedAt: d('09:00:00'), requestId: 'R1' },
-    ], []);
-    expect([...(await openPickRows(x as any, 'R1'))]).toEqual(['S1']);
+  it('before allocation: open picks only, grouped per request line, in chosen order', async () => {
+    const findMany = jest.fn().mockResolvedValue([
+      { requestItemId: 'I1', quantity: 11, stockItem: { id: 'S1' } },
+      { requestItemId: 'I1', quantity: 4, stockItem: { id: 'S2' } },
+      { requestItemId: 'I2', quantity: 1, stockItem: { id: 'S3' } },
+    ]);
+    const out = await openPicksByItem({ withdrawalRequestPick: { findMany } } as any, 'R1', { slot: true });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { releasedAt: null, requestItem: { requestId: 'R1' } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: expect.objectContaining({ stockItem: { include: { slot: true } } }),
+    }));
+    expect(out.get('I1')).toEqual([{ qty: 11, stockItem: { id: 'S1' } }, { qty: 4, stockItem: { id: 'S2' } }]);
+    expect(out.get('I2')).toEqual([{ qty: 1, stockItem: { id: 'S3' } }]);
   });
 });
 

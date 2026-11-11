@@ -66,11 +66,25 @@ export async function approverPickedRows(
   return out;
 }
 
-/** Before allocation: stock rows still held by an open approver pick of this request. */
-export async function openPickRows(db: PickDb, requestId: string): Promise<Set<string>> {
-  const picks = await db.withdrawalRequestPick.findMany({
+/**
+ * Before allocation: the open approver picks of a request, per request line, in the
+ * order they were chosen. `stockInclude` is passed through to load each location.
+ * Read only.
+ */
+export async function openPicksByItem<S extends { id: string }>(
+  db: PickDb,
+  requestId: string,
+  stockInclude: Record<string, unknown>,
+): Promise<Map<string, Array<{ qty: number; stockItem: S }>>> {
+  const picks: Array<{ requestItemId: string; quantity: number; stockItem: S }> = await db.withdrawalRequestPick.findMany({
     where: { releasedAt: null, requestItem: { requestId } },
-    select: { stockItemId: true, releasedAt: true, requestItem: { select: { requestId: true } } },
-  });
-  return new Set(picks.map((p) => p.stockItemId));
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { requestItemId: true, quantity: true, stockItem: { include: stockInclude } },
+  }) as any;
+  const out = new Map<string, Array<{ qty: number; stockItem: S }>>();
+  for (const p of picks) {
+    if (!out.has(p.requestItemId)) out.set(p.requestItemId, []);
+    out.get(p.requestItemId)!.push({ qty: Number(p.quantity), stockItem: p.stockItem });
+  }
+  return out;
 }
