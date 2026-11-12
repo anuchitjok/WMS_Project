@@ -44,6 +44,7 @@ import { SlaModule } from './sla/sla.module';
 import { CycleCountModule } from './cycle-count/cycle-count.module';
 import { ApprovalModule } from './approval/approval.module';
 import { ScrapModule } from './scrap/scrap.module';
+import { RelocationModule } from './relocation/relocation.module';
 import { DocumentsModule } from './documents/documents.module';
 import { PlanningModule } from './planning/planning.module';
 import { CompanyProfileModule } from './company/company-profile.module';
@@ -93,6 +94,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     CycleCountModule,
     ApprovalModule,
     ScrapModule,
+    RelocationModule,
     DocumentsModule,
     PlanningModule,
     CompanyProfileModule,

@@ -42,6 +42,7 @@ export const nav: Messages['nav'] = {
     doa: 'DOA / ชำรุด',
     rtvCases: 'เคส RTV',
     scrap: 'จัดการของเสีย',
+    relocation: 'ย้ายตำแหน่งจัดเก็บ',
     approvalWorkspace: 'พื้นที่อนุมัติ',
     importExport: 'นำเข้า / ส่งออก',
     notifications: 'การแจ้งเตือน',

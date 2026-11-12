@@ -41,6 +41,7 @@ export const nav = {
     doa: 'DOA / Defective',
     rtvCases: 'RTV Cases',
     scrap: 'Scrap Management',
+    relocation: 'Location Relocation',
     approvalWorkspace: 'Approval Workspace',
     importExport: 'Import / Export',
     notifications: 'Notifications',

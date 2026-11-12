@@ -85,6 +85,13 @@ export const status: Messages['status'] = {
     REJECTED: '已驳回',
     CANCELLED: '已取消',
   },
+  relocation: {
+    PENDING_APPROVAL: '待审批',
+    APPROVED: '已批准',
+    COMPLETED: '已完成',
+    REJECTED: '已驳回',
+    CANCELLED: '已取消',
+  },
   priority: {
     LOW: '低',
     NORMAL: '普通',

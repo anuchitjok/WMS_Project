@@ -85,6 +85,13 @@ export const status: Messages['status'] = {
     REJECTED: 'ถูกปฏิเสธ',
     CANCELLED: 'ยกเลิก',
   },
+  relocation: {
+    PENDING_APPROVAL: 'รออนุมัติ',
+    APPROVED: 'อนุมัติแล้ว',
+    COMPLETED: 'ย้ายเสร็จแล้ว',
+    REJECTED: 'ไม่อนุมัติ',
+    CANCELLED: 'ยกเลิก',
+  },
   priority: {
     LOW: 'ต่ำ',
     NORMAL: 'ปกติ',

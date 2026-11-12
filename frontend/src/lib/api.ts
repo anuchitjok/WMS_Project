@@ -763,6 +763,25 @@ export const scrapApi = {
     request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }),
 };
 
+// PR7 Location Relocation Request — stock moves only on complete().
+export const relocationApi = {
+  list: (q: { status?: string; warehouseId?: string; page?: number; limit?: number } = {}) => {
+    const p = new URLSearchParams();
+    Object.entries(q).forEach(([k, v]) => { if (v !== undefined && v !== '') p.set(k, String(v)); });
+    const qs = p.toString();
+    return request<{ data: any[]; total: number; page: number; limit: number }>(`/relocations${qs ? `?${qs}` : ''}`);
+  },
+  get: (id: string) => request<any>(`/relocations/${id}`),
+  movable: (warehouseId: string, slotId: string) =>
+    request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&slotId=${encodeURIComponent(slotId)}`),
+  create: (body: { warehouseId: string; reason?: string; lines: { stockItemId: string; toSlotId: string; quantity: number }[] }) =>
+    request<any>('/relocations', { method: 'POST', body: JSON.stringify(body) }),
+  approve: (id: string) => request<any>(`/relocations/${id}/approve`, { method: 'POST' }),
+  reject: (id: string, reason: string) => request<any>(`/relocations/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  cancel: (id: string) => request<any>(`/relocations/${id}/cancel`, { method: 'POST' }),
+  complete: (id: string) => request<any>(`/relocations/${id}/complete`, { method: 'POST' }),
+};
+
 export const documentsApi = {
   pickingSlipUrl: (requestId: string) => `${BASE}/api/documents/picking-slip/${requestId}`,
   coverSheetUrl: (requestId: string) => `${BASE}/api/documents/cover-sheet/${requestId}`,

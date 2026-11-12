@@ -7,7 +7,7 @@ import {
   LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Trash2, ListTodo,
-  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck, ClipboardCheck,
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck, ClipboardCheck, ArrowRightLeft,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
@@ -72,6 +72,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/receiving', label: 'goodsReceiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'putaway', icon: MapPin, roles: WH },
       { href: '/inventory', label: 'inventory', icon: Package },
+      // PR7: same legacy roles as the backend rule relocationRead (operators); the API enforces the real permission.
+      { href: '/relocation', label: 'relocation', icon: ArrowRightLeft, roles: WH },
       // P4 4.2: approval sits in the outbound flow — approve, then allocate/fulfil.
       // Role list is deliberately its own (not WH): DEPT_APPROVER must keep seeing it.
       { href: '/approvals', label: 'approvalWorkspace', icon: ShieldCheck, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER', 'WAREHOUSE_SUPERVISOR', 'DEPT_APPROVER'] },
