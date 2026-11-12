@@ -20,6 +20,7 @@
 // Slot colour follows the same placement-based states as the Racks & slots tab.
 
 import type { LayoutObject } from '@/lib/api';
+import { sizeOf } from './setup-health';
 import {
   type RackData, type SlotData, type WarehouseData,
   isBlocked, isOccupied, slotUtil,
@@ -179,19 +180,20 @@ export function rackGrid(r: RackData) {
   return { levels, columns };
 }
 
-/** Rack size in metres: real size when recorded, defaults otherwise. */
+/** Rack size in metres: real size (own, else its Rack Type's — same rule as Dashboard), defaults otherwise. */
 export function rackSize(r: RackData) {
   const { levels, columns } = rackGrid(r);
+  const sz = sizeOf(r);
   const kind: RackKind = isFloorRack(r) ? 'floor' : 'shelf';
   if (kind === 'floor') {
-    const length = cmToM(r.lengthCm) ?? columns * FLOOR_SLOT_W;
-    const depth = cmToM(r.widthCm) ?? levels * FLOOR_ROW_D;
-    const height = cmToM(r.heightCm) ?? FLOOR_STACK_H;
+    const length = cmToM(sz.lengthCm) ?? columns * FLOOR_SLOT_W;
+    const depth = cmToM(sz.widthCm) ?? levels * FLOOR_ROW_D;
+    const height = cmToM(sz.heightCm) ?? FLOOR_STACK_H;
     return { kind, levels, columns, length, depth, height, slotW: length / columns, levelH: height, rowD: depth / levels };
   }
-  const length = cmToM(r.lengthCm) ?? columns * SLOT_W;
-  const depth = cmToM(r.widthCm) ?? RACK_D;
-  const height = Math.max(cmToM(r.heightCm) ?? BASE_Y + levels * SLOT_H, BASE_Y + levels * 0.3);
+  const length = cmToM(sz.lengthCm) ?? columns * SLOT_W;
+  const depth = cmToM(sz.widthCm) ?? RACK_D;
+  const height = Math.max(cmToM(sz.heightCm) ?? BASE_Y + levels * SLOT_H, BASE_Y + levels * 0.3);
   return { kind, levels, columns, length, depth, height, slotW: length / columns, levelH: (height - BASE_Y) / levels, rowD: depth };
 }
 

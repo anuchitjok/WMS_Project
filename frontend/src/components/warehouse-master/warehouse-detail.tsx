@@ -2,7 +2,7 @@
 
 // Right panel for a warehouse: size, space used/free, rack list, capacity planner.
 import { useEffect, useState } from 'react';
-import { Calculator, Layers, Pencil, Plus, Power, PowerOff, Ruler } from 'lucide-react';
+import { Calculator, Layers, Pencil, Plus, Power, PowerOff, Ruler, Wand2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseSpaceApi, type CapacityPlan, type RackTypeMaster, type WarehouseSpaceSummary } from '@/lib/api-warehouse';
@@ -10,8 +10,9 @@ import { getT, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { Fact, Pill, rackCategoryOf, selectClass } from './shared';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
+import { SetupHealthCard } from '@/components/warehouse-layout/setup-health-card';
 
-export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditLayout, onEdit, onToggleActive, onAddRack, onSelectRack }: {
+export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditLayout, onEdit, onToggleActive, onAddRack, onSetup, onSelectRack }: {
   warehouse: any;
   space?: WarehouseSpaceSummary;
   rackTypes: RackTypeMaster[];
@@ -20,6 +21,8 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
   onEdit: () => void;
   onToggleActive: () => void;
   onAddRack: (templateId?: string) => void;
+  /** Open the setup wizard (many racks at once). */
+  onSetup?: () => void;
   onSelectRack: (rackId: string) => void;
 }) {
   const { m, t, fmt } = useT();
@@ -52,11 +55,17 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
                 </Button>
               </>
             )}
+            {canEditLayout && onSetup && (
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={onSetup}><Wand2 className="w-4 h-4" /> {wm.actions.setupWizard}</Button>
+            )}
             {canEditLayout && (
               <Button size="sm" className="gap-1.5 bg-green-600 hover:bg-green-700 text-white" onClick={() => onAddRack()}><Plus className="w-4 h-4" /> {wm.actions.addRack}</Button>
             )}
           </div>
         </div>
+
+        {/* Missing / wrong master data (same check as the 3D page); a code opens the rack */}
+        <div className="mt-4 empty:hidden"><SetupHealthCard wh={w} onRack={onSelectRack} showMasterLink={false} /></div>
 
         {/* Size */}
         <div className="mt-4 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3">

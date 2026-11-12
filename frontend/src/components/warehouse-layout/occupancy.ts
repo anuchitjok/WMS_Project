@@ -21,7 +21,9 @@ export interface RackData {
   lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null;
   rackTypeId?: string | null;
   /** Only present when the API includes the template relation. */
-  rackTypeMaster?: { category?: string | null } | null;
+  rackTypeMaster?: { category?: string | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null } | null;
+  /** Own size with every missing value taken from the Rack Type (backend space-math, same as Dashboard). */
+  effectiveSize?: { lengthCm: number | null; widthCm: number | null; heightCm: number | null } | null;
   slots: SlotData[];
   _count?: { slots: number; stockItems: number };
 }

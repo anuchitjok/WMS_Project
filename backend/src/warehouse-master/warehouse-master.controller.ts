@@ -8,7 +8,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
-  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, GenerateSlotsDto, SpaceSimulateDto,
+  CreateSlotDto, UpdateSlotDto, BulkUpdateSlotsDto, BulkDeleteSlotsDto, SetupRacksDto, GenerateSlotsDto, SpaceSimulateDto,
 } from './warehouse-master.dto';
 
 // Plan P1 1.7 (legacy role enum, as the sidebar uses):
@@ -103,6 +103,13 @@ export class WarehouseMasterController {
   @Delete('racks/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   deleteRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deleteRack(id, userId); }
 
+  // Setup wizard: preview or create whole zones of racks + slots in one transaction.
+  @Post('warehouses/:id/setup-racks') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Create racks for zones from a Rack Type, with their slots (preview: true = plan only)' })
+  setupRacks(@Param('id') id: string, @Body() dto: SetupRacksDto, @CurrentUser() user: any) {
+    return this.service.setupRacks(id, dto, user.id, user);
+  }
+
   @Post('racks/:id/generate-slots') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   @ApiOperation({ summary: 'Preview or create <Rack>-<LL>-<CC> slots; existing slots are skipped' })
   generateSlots(@Param('id') id: string, @Body() dto: GenerateSlotsDto, @CurrentUser('id') userId: string) {
@@ -121,11 +128,18 @@ export class WarehouseMasterController {
     return this.service.bulkUpdateSlots(dto.ids, dto.changes, userId);
   }
 
+  // Soft deletes slots with no stock in them now (G3); the others are listed, not deleted.
+  @Post('slots/bulk-delete') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Delete many slots; slots holding stock now are skipped (preview: true = report only)' })
+  bulkDeleteSlots(@Body() dto: BulkDeleteSlotsDto, @CurrentUser() user: any) {
+    return this.service.bulkDeleteSlots(dto.ids, user.id, dto.preview === true, user);
+  }
+
   @Patch('slots/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
   updateSlot(@Param('id') id: string, @Body() dto: UpdateSlotDto, @CurrentUser('id') userId: string) {
     return this.service.updateSlot(id, dto, userId);
   }
 
   @Delete('slots/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
-  deleteSlot(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deleteSlot(id, userId); }
+  deleteSlot(@Param('id') id: string, @CurrentUser() user: any) { return this.service.deleteSlot(id, user.id, user); }
 }

@@ -4,6 +4,15 @@ import { RackType, SlotStatus, SlotType } from '@prisma/client';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
 import { diffFields, describeChanges, type ChangeSet } from '../common/audit-diff';
+import { effectiveRackSize, type RackLike } from '../warehouse-master/space-math';
+
+// Each rack carries `effectiveSize`: its own size with every missing value taken
+// from its Rack Type — the same rule (space-math) as Warehouse Master and the
+// Dashboard, so the 3D view, the forms and the space figures always agree.
+type WithRacks<W> = W & { racks: Array<RackLike & Record<string, unknown>> };
+function withEffectiveSize<W extends WithRacks<object>>(w: W) {
+  return { ...w, racks: w.racks.map((r) => ({ ...r, effectiveSize: effectiveRackSize(r) })) };
+}
 
 @Injectable()
 export class WarehouseService {
@@ -20,17 +29,17 @@ export class WarehouseService {
     orderBy: [{ level: 'asc' as const }, { column: 'asc' as const }],
   };
 
-  findAll(scope?: ScopePrincipal) {
+  async findAll(scope?: ScopePrincipal) {
     const wh = warehouseFilter(scope);
-    return this.prisma.warehouse.findMany({
+    const list = await this.prisma.warehouse.findMany({
       where: { isActive: true, ...(wh ? { id: wh } : {}) },
       include: {
         racks: {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
-            rackTypeMaster: { select: { category: true } },
-            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
+            rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } },
+            _count: { select: { slots: { where: { isActive: true } }, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },
@@ -38,6 +47,7 @@ export class WarehouseService {
       },
       orderBy: { code: 'asc' },
     });
+    return list.map((w) => withEffectiveSize(w as any));
   }
 
   async findOne(id: string, scope?: ScopePrincipal) {
@@ -49,15 +59,15 @@ export class WarehouseService {
           where: { isActive: true },
           include: {
             slots: this.slotInclude,
-            rackTypeMaster: { select: { category: true } },
-            _count: { select: { slots: true, stockItems: IN_LOCATION_COUNT } },
+            rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } },
+            _count: { select: { slots: { where: { isActive: true } }, stockItems: IN_LOCATION_COUNT } },
           },
           orderBy: { code: 'asc' },
         },
       },
     });
     if (!wh) throw new NotFoundException('Warehouse not found');
-    return wh;
+    return withEffectiveSize(wh as any);
   }
 
   async getSlotDetail(id: string, scope?: ScopePrincipal) {

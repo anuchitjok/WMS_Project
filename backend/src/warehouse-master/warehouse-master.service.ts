@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, RackType, SlotType } from '@prisma/client';
-import { ScopePrincipal, warehouseFilter, scopedWarehouseIds } from '../common/warehouse-scope';
+import { ScopePrincipal, warehouseFilter, scopedWarehouseIds, assertWarehouseAccess } from '../common/warehouse-scope';
 import {
   RackCategory, addSlots, buildSpaceSummary, effectiveRackSize, emptySlotCounts, legacyRackType,
   planCapacity, planSlotCodes, rackCategory, simulate, slotSize, SlotCounts, WarehouseSpaceSummary,
@@ -10,12 +10,53 @@ import {
 } from './space-math';
 import type {
   CreateWarehouseDto, UpdateWarehouseDto, CreateRackTypeDto, UpdateRackTypeDto, CreateRackDto, UpdateRackDto,
-  CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto,
+  CreateSlotDto, UpdateSlotDto, BulkSlotChangesDto, SpaceSimulateDto, SetupRacksDto,
 } from './warehouse-master.dto';
-import { IN_LOCATION_COUNT } from '../common/stock-presence';
+import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 
 // Stock statuses that count as "active inventory" occupying a location.
 const ACTIVE_STOCK = ['AVAILABLE', 'RESERVED', 'PICKED', 'QUARANTINE', 'PENDING_INSPECTION', 'RTV_PENDING'] as const;
+
+/** Stock in a location now (same rule as occupancy: common/stock-presence). */
+const STOCK_NOW = { status: { notIn: NOT_IN_LOCATION } } satisfies Prisma.StockItemWhereInput;
+/** A live slot with nothing in it now - the guard on every slot delete write. */
+const DELETABLE = { isDeleted: false, stockItems: { none: STOCK_NOW } } satisfies Prisma.SlotWhereInput;
+const slotDeleted = (userId: string) => ({ isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId });
+
+/** Racks the setup wizard creates in one go (zones × racks, slots from the Rack Type grid). */
+export interface SetupRacksResult {
+  warehouseId: string;
+  rackType: { id: string; code: string; name: string; category: string; lengthCm: number; widthCm: number; heightCm: number; levels: number; columns: number };
+  racks: { code: string; zone: string }[];
+  slotsPerRack: number;
+  totalRacks: number;
+  totalSlots: number;
+  /** Floor taken by the new racks (m²). */
+  newFootprintM2: number;
+  /** Floor already taken by the warehouse's racks (m², racks with a known size). */
+  usedFootprintM2: number;
+  /** Usable floor (m²) = length × width × usable %; null when the size is not entered. */
+  usableAreaM2: number | null;
+  /** NO_WAREHOUSE_SIZE | OVER_AREA (warn only, G4). */
+  warnings: string[];
+  preview: boolean;
+  created: number;
+}
+
+/** Most racks one setup call may create (keeps the transaction short). */
+const SETUP_MAX_RACKS = 500;
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export interface BulkDeleteSlotsResult {
+  /** Deleted (in preview: would be deleted). */
+  deleted: { id: string; code: string }[];
+  /** Not deleted: stock is in the slot now. */
+  blocked: { id: string; code: string; stock: number }[];
+  /** Unknown or already deleted ids. */
+  notFound: string[];
+  preview: boolean;
+}
 
 const SIZE_KEYS = ['lengthCm', 'widthCm', 'heightCm'] as const;
 const trimOrNull = (v: string | null | undefined) => (v == null ? null : v.trim() || null);
@@ -104,8 +145,9 @@ export class WarehouseMasterService {
           where: { isDeleted: false },
           include: {
             rackTypeMaster: true,
-            slots: { where: { isDeleted: false }, include: { _count: { select: { stockItems: true } } }, orderBy: [{ level: 'asc' }, { column: 'asc' }] },
-            _count: { select: { slots: true, stockItems: true } },
+            // Slot stock = stock in the slot now (shipped / consumed history does not count).
+            slots: { where: { isDeleted: false }, include: { _count: { select: { stockItems: IN_LOCATION_COUNT } } }, orderBy: [{ level: 'asc' }, { column: 'asc' }] },
+            _count: { select: { slots: { where: { isDeleted: false } }, stockItems: true } },
           },
           orderBy: { code: 'asc' },
         },
@@ -156,8 +198,12 @@ export class WarehouseMasterService {
     }
     const slot = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
     if (!slot) throw new NotFoundException('Slot not found');
-    const stock = await this.prisma.stockItem.count({ where: { slotId: id } });
-    return { entity, id, stock, canDelete: stock === 0 };
+    // G3: a slot can be deleted when nothing is in it now, even with past stock.
+    const [stock, history] = await Promise.all([
+      this.prisma.stockItem.count({ where: { slotId: id, ...STOCK_NOW } }),
+      this.prisma.stockItem.count({ where: { slotId: id } }),
+    ]);
+    return { entity, id, stock, history, canDelete: stock === 0 };
   }
 
   // ── Space summary (plan 1.5) — scoped to the caller's warehouses ─────────────
@@ -508,6 +554,102 @@ export class WarehouseMasterService {
     return { ...result, created };
   }
 
+  // ── Setup wizard ────────────────────────────────────────────────────────────
+  /**
+   * Plans (preview) or creates racks for whole zones in one transaction: rack
+   * codes `<Zone>-R<nn>` continue after the zone's highest existing number, each
+   * rack takes the Rack Type (size, levels × columns) and gets its slots right
+   * away. Nothing is half-created: any failure rolls everything back.
+   */
+  async setupRacks(warehouseId: string, dto: SetupRacksDto, userId: string, scope?: ScopePrincipal): Promise<SetupRacksResult> {
+    assertWarehouseAccess(scope, warehouseId, 'this warehouse');
+    const wh = await this.prisma.warehouse.findFirst({ where: { id: warehouseId, isDeleted: false } });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+    const type = await this.prisma.rackTypeMaster.findUnique({ where: { id: dto.rackTypeId } });
+    if (!type || !type.isActive) throw new NotFoundException('Rack type not found or inactive');
+
+    const zones = dto.zones.map((z) => ({ name: z.name.trim(), racks: z.racks }));
+    const seen = new Set<string>();
+    for (const z of zones) {
+      const k = z.name.toUpperCase();
+      if (seen.has(k)) throw new BadRequestException(`Zone "${z.name}" is listed twice`);
+      seen.add(k);
+    }
+    const totalRacks = zones.reduce((a, z) => a + z.racks, 0);
+    if (totalRacks > SETUP_MAX_RACKS) throw new BadRequestException(`At most ${SETUP_MAX_RACKS} racks at a time`);
+
+    // Rack codes: continue after the highest <Zone>-R<nn> already in this warehouse
+    // (deleted racks too — their code still holds the unique key).
+    const existing = await this.prisma.rack.findMany({
+      where: { warehouseId },
+      select: { code: true, isDeleted: true, lengthCm: true, widthCm: true, heightCm: true, rackType: true, rackTypeMaster: { select: { category: true, lengthCm: true, widthCm: true, heightCm: true } } },
+    });
+    const taken = new Set(existing.map((r) => r.code.toUpperCase()));
+    const racks: { code: string; zone: string }[] = [];
+    for (const z of zones) {
+      const re = new RegExp(`^${z.name.replace(/[-]/g, '\\-')}-R(\\d+)$`, 'i');
+      let n = existing.reduce((mx, r) => { const m = re.exec(r.code); return m ? Math.max(mx, Number(m[1])) : mx; }, 0);
+      for (let i = 0; i < z.racks; i++) {
+        let code: string;
+        do { n += 1; code = `${z.name}-R${pad2(n)}`; } while (taken.has(code.toUpperCase()));
+        taken.add(code.toUpperCase());
+        racks.push({ code, zone: z.name });
+      }
+    }
+
+    const levels = Math.max(1, type.levels), columns = Math.max(1, type.columns);
+    const planned = planSlotCodes('X', levels, columns, []); // same grid for every rack
+    const size = { lengthCm: type.lengthCm, widthCm: type.widthCm, heightCm: type.heightCm };
+    const slot = slotSize(size, levels, columns);
+    const category = type.category === 'PALLET_ON_FLOOR' ? 'PALLET_ON_FLOOR' : 'STANDARD_RACK';
+    const slotType = category === 'PALLET_ON_FLOOR' ? SlotType.PALLET : SlotType.STANDARD;
+
+    const m2 = (l: number | null, w: number | null) => (l && w ? (l * w) / 10_000 : 0);
+    const newFootprintM2 = round2(racks.length * m2(type.lengthCm, type.widthCm));
+    const usedFootprintM2 = round2(existing.filter((r) => !r.isDeleted).reduce((a, r) => {
+      const s = effectiveRackSize(r as any); return a + m2(s.lengthCm, s.widthCm);
+    }, 0));
+    const usableAreaM2 = wh.lengthCm && wh.widthCm ? round2(m2(wh.lengthCm, wh.widthCm) * ((wh.usableAreaPct ?? 100) / 100)) : null;
+    const warnings: string[] = [];
+    if (usableAreaM2 == null) warnings.push('NO_WAREHOUSE_SIZE');
+    else if (usedFootprintM2 + newFootprintM2 > usableAreaM2) warnings.push('OVER_AREA');
+
+    const result: SetupRacksResult = {
+      warehouseId,
+      rackType: { id: type.id, code: type.code, name: type.name, category, lengthCm: type.lengthCm, widthCm: type.widthCm, heightCm: type.heightCm, levels, columns },
+      racks, slotsPerRack: planned.length, totalRacks: racks.length, totalSlots: racks.length * planned.length,
+      newFootprintM2, usedFootprintM2, usableAreaM2, warnings, preview: !!dto.preview, created: 0,
+    };
+    if (dto.preview) return result;
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const ids: string[] = [];
+      for (const r of racks) {
+        // Rack own size stays empty: it follows the Rack Type (one size rule, G5).
+        const rack = await tx.rack.create({
+          data: {
+            warehouseId, code: r.code, zone: r.zone, levels, columns,
+            rackTypeId: type.id, rackType: legacyRackType(category) as RackType,
+            capacity: planned.length * Math.max(1, type.slotCapacity),
+          },
+          select: { id: true, code: true },
+        });
+        ids.push(rack.id);
+        await tx.slot.createMany({
+          data: planSlotCodes(rack.code, levels, columns, []).map((p) => ({
+            rackId: rack.id, code: p.code, level: p.level, column: p.column, slotType, capacity: type.slotCapacity,
+            lengthCm: slot.lengthCm, widthCm: slot.widthCm, heightCm: slot.heightCm,
+          })),
+        });
+      }
+      await this.audit(userId, 'RACKS_SETUP', 'Warehouse', warehouseId, null, {
+        rackTypeId: type.id, rackType: type.code, zones, rackIds: ids, codes: racks.map((r) => r.code), slots: racks.length * planned.length,
+      }, tx);
+      return ids.length;
+    }, { timeout: 60_000 });
+    return { ...result, created };
+  }
+
   // ── Slot ────────────────────────────────────────────────────────────────────
   async createSlot(dto: CreateSlotDto, userId: string) {
     if (!dto.code?.trim()) throw new ConflictException('Slot code is required');
@@ -548,13 +690,56 @@ export class WarehouseMasterService {
     });
   }
 
-  async deleteSlot(id: string, userId: string) {
-    const before = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
-    if (!before) throw new NotFoundException('Slot not found');
-    const stock = await this.prisma.stockItem.count({ where: { slotId: id } });
-    if (stock > 0) throw new ConflictException(`Cannot delete: ${stock} stock item(s) occupy this slot`);
-    const after = await this.prisma.slot.update({ where: { id }, data: { isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId } });
-    await this.audit(userId, 'SLOT_DELETED', 'Slot', id, before, after);
-    return { success: true, id };
+  /**
+   * Soft delete (G3): allowed when no stock is in the slot now, even if stock
+   * passed through it before. The row stays, so stock history and reports keep
+   * the slot code; receiving / putaway refuse deleted slots (resolveLocation).
+   */
+  async deleteSlot(id: string, userId: string, scope?: ScopePrincipal) {
+    const found = await this.prisma.slot.findFirst({ where: { id, isDeleted: false }, include: { rack: { select: { warehouseId: true } } } });
+    if (!found) throw new NotFoundException('Slot not found');
+    assertWarehouseAccess(scope, found.rack.warehouseId, 'this location');
+    const { rack: _rack, ...before } = found;
+    const stock = await this.prisma.stockItem.count({ where: { slotId: id, ...STOCK_NOW } });
+    if (stock > 0) throw new ConflictException(`Cannot delete: ${stock} stock item(s) are in this slot now`);
+    return this.prisma.$transaction(async (tx) => {
+      // Guarded write: stock that arrived after the check above makes it a no-op.
+      const data = slotDeleted(userId);
+      const res = await tx.slot.updateMany({ where: { id, ...DELETABLE }, data });
+      if (res.count !== 1) throw new ConflictException('Stock was put in this slot meanwhile - nothing deleted');
+      await this.audit(userId, 'SLOT_DELETED', 'Slot', id, before, { ...before, ...data }, tx);
+      return { success: true, id };
+    });
+  }
+
+  /**
+   * Delete many slots at once (G3). Slots with stock in them now are skipped and
+   * listed with the reason; the rest are soft deleted in one transaction with
+   * one audit entry. `preview` only reports what would happen.
+   */
+  async bulkDeleteSlots(ids: string[], userId: string, preview = false, scope?: ScopePrincipal): Promise<BulkDeleteSlotsResult> {
+    const unique = [...new Set(ids)];
+    const run = async (db: Prisma.TransactionClient): Promise<BulkDeleteSlotsResult> => {
+      const slots = await db.slot.findMany({
+        where: { id: { in: unique }, isDeleted: false },
+        select: { id: true, code: true, rackId: true, rack: { select: { warehouseId: true } }, _count: { select: { stockItems: IN_LOCATION_COUNT } } },
+      });
+      // One slot outside the caller's warehouses refuses the whole request.
+      for (const s of slots) assertWarehouseAccess(scope, s.rack.warehouseId, `location ${s.code}`);
+      const found = new Set(slots.map((s) => s.id));
+      const notFound = unique.filter((id) => !found.has(id));
+      const blocked = slots.filter((s) => s._count.stockItems > 0).map((s) => ({ id: s.id, code: s.code, stock: s._count.stockItems }));
+      const deletable = slots.filter((s) => s._count.stockItems === 0).map((s) => ({ id: s.id, code: s.code }));
+      if (preview || !deletable.length) return { deleted: preview ? deletable : [], blocked, notFound, preview };
+      const res = await db.slot.updateMany({ where: { id: { in: deletable.map((d) => d.id) }, ...DELETABLE }, data: slotDeleted(userId) });
+      // Stock put away between the read and the write: undo everything (rollback).
+      if (res.count !== deletable.length) throw new ConflictException('Stock was put in some of these slots meanwhile - nothing deleted, please try again');
+      await this.audit(userId, 'SLOTS_BULK_DELETED', 'Slot', deletable[0].id, null, {
+        ids: deletable.map((d) => d.id), codes: deletable.map((d) => d.code),
+        rackIds: [...new Set(slots.map((s) => s.rackId))], blocked, notFound,
+      }, db);
+      return { deleted: deletable, blocked, notFound, preview };
+    };
+    return preview ? run(this.prisma as unknown as Prisma.TransactionClient) : this.prisma.$transaction(run);
   }
 }

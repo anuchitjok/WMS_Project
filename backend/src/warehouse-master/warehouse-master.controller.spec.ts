@@ -45,6 +45,8 @@ const MANAGER_WRITES: Array<[string, string, Record<string, unknown>]> = [
   ['patch', '/warehouse-master/slots/s1', { capacity: 2 }],
   ['patch', '/warehouse-master/slots/bulk', { ids: ['s1', 's2'], changes: { capacity: 2 } }],
   ['delete', '/warehouse-master/slots/s1', {}],
+  ['post', '/warehouse-master/slots/bulk-delete', { ids: ['s1', 's2'] }],
+  ['post', '/warehouse-master/warehouses/w1/setup-racks', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }], preview: true }],
 ];
 const READS = [
   '/warehouse-master', '/warehouse-master/summary', '/warehouse-master/space-summary',
@@ -121,6 +123,16 @@ describe('WarehouseMasterController (HTTP)', () => {
     expect(service.updateSlot).not.toHaveBeenCalled();
   });
 
+  it('POST slots/bulk-delete passes ids, preview flag and the caller scope', async () => {
+    await send('post', '/warehouse-master/slots/bulk-delete', { ids: ['a', 'b'], preview: true }).expect(200);
+    expect(service.bulkDeleteSlots).toHaveBeenCalledWith(['a', 'b'], 'u1', true, expect.objectContaining({ warehouseIds: ['w1'] }));
+  });
+
+  it('DELETE slots/:id passes the caller scope', async () => {
+    await send('delete', '/warehouse-master/slots/s9', {}).expect(200);
+    expect(service.deleteSlot).toHaveBeenCalledWith('s9', 'u1', expect.objectContaining({ warehouseIds: ['w1'] }));
+  });
+
   describe('validation', () => {
     it('rejects non-positive warehouse sizes and usable % above 100', async () => {
       await send('post', '/warehouse-master/warehouses', { code: 'W', name: 'W', lengthCm: -1 }).expect(400);
@@ -137,6 +149,23 @@ describe('WarehouseMasterController (HTTP)', () => {
     it('rejects bulk edit with unknown fields or no ids', async () => {
       await send('patch', '/warehouse-master/slots/bulk', { ids: [], changes: { capacity: 1 } }).expect(400);
       await send('patch', '/warehouse-master/slots/bulk', { ids: ['a'], changes: { status: 'EMPTY' } }).expect(400);
+    });
+    it('rejects bulk delete with no ids, non-string ids or unknown fields', async () => {
+      await send('post', '/warehouse-master/slots/bulk-delete', { ids: [] }).expect(400);
+      await send('post', '/warehouse-master/slots/bulk-delete', { ids: [1, 2] }).expect(400);
+      await send('post', '/warehouse-master/slots/bulk-delete', { ids: ['a'], force: true }).expect(400);
+    });
+    it('rejects setup with bad zone names, rack counts or unknown fields', async () => {
+      const url = '/warehouse-master/warehouses/w1/setup-racks';
+      await send('post', url, { rackTypeId: 't1', zones: [] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A B', racks: 1 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 0 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 100 }] }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 1 }], levels: 9 }).expect(400);
+    });
+    it('setup passes the warehouse id, body and caller scope', async () => {
+      await send('post', '/warehouse-master/warehouses/w1/setup-racks', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }] }).expect(200);
+      expect(service.setupRacks).toHaveBeenCalledWith('w1', expect.objectContaining({ rackTypeId: 't1' }), 'u1', expect.objectContaining({ warehouseIds: ['w1'] }));
     });
     it('rejects an unknown simulator mode', async () => {
       await send('post', '/warehouse-master/space-simulate', { mode: 'BOOK' }).expect(400);

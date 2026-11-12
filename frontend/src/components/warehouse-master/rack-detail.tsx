@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { warehouseMasterApi } from '@/lib/api';
-import { warehouseSpaceApi, type GenerateSlotsResult, type SlotChanges } from '@/lib/api-warehouse';
+import { warehouseSpaceApi, type BulkDeleteSlotsResult, type GenerateSlotsResult, type SlotChanges } from '@/lib/api-warehouse';
 import { labelOf, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
@@ -86,6 +86,9 @@ export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, o
               </Button>
               {selected.length > 1 && <span className="text-sm text-slate-600">{t(wm.rack.selectedCount, { count: selected.length })}</span>}
               <Button size="sm" variant="outline" onClick={() => { setMulti(true); setSelected(slots.map((s) => s.id)); }}>{wm.rack.selectAll}</Button>
+              {/* Empty = no stock in it now (stock history does not count, G3) */}
+              <Button size="sm" variant="outline" disabled={!slots.some((s) => !(s._count?.stockItems > 0))}
+                onClick={() => { setMulti(true); setSelected(slots.filter((s) => !(s._count?.stockItems > 0)).map((s) => s.id)); }}>{wm.rack.selectEmpty}</Button>
               {selected.length > 0 && <Button size="sm" variant="ghost" onClick={() => setSelected([])}>{wm.rack.clearSelection}</Button>}
             </div>
           )}
@@ -108,6 +111,9 @@ export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, o
 
         {selSlots.length === 1 && <SlotEditor key={selSlots[0].id} slot={selSlots[0]} canEdit={canEditLayout} onSaved={onChanged} onDeleted={async () => { setSelected([]); await onChanged(); }} />}
         {selSlots.length > 1 && canEditLayout && <BulkEditor key={selected.join(',')} ids={selected} onSaved={onChanged} />}
+        {selSlots.length > 1 && canEditLayout && (
+          <BulkDelete key={`del-${selected.join(',')}`} ids={selected} onDone={async () => { setSelected([]); await onChanged(); }} />
+        )}
 
         {slots.length > 0 && <AllSlotsList slots={slots} selected={selected} onPick={pick} />}
       </section>
@@ -368,6 +374,71 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
         </div>
       )}
     </form>
+  );
+}
+
+// ─── Bulk delete (G3) ─────────────────────────────────────────────────────────
+// Step 1 asks the server what would happen (preview), step 2 deletes. The server
+// re-checks everything, so stock put away in between is never deleted.
+const MAX_CODES = 24;
+
+function BulkDelete({ ids, onDone }: { ids: string[]; onDone: () => Promise<void> | void }) {
+  const { m, t } = useT();
+  const sl = m.warehouseMaster.slot;
+  const [plan, setPlan] = useState<BulkDeleteSlotsResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function check() {
+    setBusy(true);
+    try { setPlan(await warehouseSpaceApi.bulkDeleteSlots(ids, true)); }
+    catch (err: any) { toast.error(err.message); } finally { setBusy(false); }
+  }
+  async function run() {
+    if (!plan) return;
+    setBusy(true);
+    try {
+      const r = await warehouseSpaceApi.bulkDeleteSlots(plan.deleted.map((d) => d.id), false);
+      toast.success(t(sl.bulkDeleted, { count: r.deleted.length }));
+      if (r.blocked.length) toast.warning(t(sl.bulkDeleteSkipped, { count: r.blocked.length }));
+      setPlan(null);
+      await onDone();
+    } catch (err: any) { toast.error(err.message); setPlan(null); } finally { setBusy(false); }
+  }
+  const codes = (list: { code: string }[]) => (
+    <span className="mt-1 flex flex-wrap gap-1">
+      {list.slice(0, MAX_CODES).map((x) => <span key={x.code} className="rounded border border-slate-200 bg-white px-1.5 py-px text-xs tabular-nums text-slate-700">{x.code}</span>)}
+      {list.length > MAX_CODES && <span className="text-xs text-slate-500 self-center">+{list.length - MAX_CODES}</span>}
+    </span>
+  );
+
+  if (!plan) {
+    return (
+      <div className="mt-3 flex justify-end">
+        <Button type="button" size="sm" variant="outline" className="gap-1.5 text-red-600 hover:text-red-700" disabled={busy} onClick={check}>
+          <Trash2 className="w-4 h-4" /> {t(sl.bulkDelete, { count: ids.length })}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 rounded-lg border border-red-200 bg-red-50/40 p-4 space-y-2" role="alertdialog" aria-label={t(sl.bulkDeleteTitle, { count: ids.length })}>
+      <h4 className="text-sm font-semibold text-slate-900">{t(sl.bulkDeleteTitle, { count: ids.length })}</h4>
+      {plan.deleted.length > 0
+        ? <div className="text-sm text-slate-700">{t(sl.bulkDeleteWill, { count: plan.deleted.length })}{codes(plan.deleted)}</div>
+        : <p className="text-sm text-slate-700">{sl.bulkDeleteNone}</p>}
+      {plan.blocked.length > 0 && (
+        <div className="text-sm text-amber-800">{sl.bulkDeleteBlocked}{codes(plan.blocked.map((b) => ({ code: `${b.code} (${b.stock})` })))}</div>
+      )}
+      <p className="text-xs text-slate-500">{sl.bulkDeleteKeep}</p>
+      <div className="flex justify-end gap-2">
+        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => setPlan(null)}>{m.common.actions.cancel}</Button>
+        {plan.deleted.length > 0 && (
+          <Button type="button" size="sm" className="bg-red-600 hover:bg-red-700 text-white" disabled={busy} onClick={run}>
+            {t(sl.bulkDeleteConfirm, { count: plan.deleted.length })}
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 
