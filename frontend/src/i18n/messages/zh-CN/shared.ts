@@ -18,4 +18,9 @@ export const shared: Messages['shared'] = {
     label: '原因',
     select: '选择原因…',
   },
+  // PR6: pick-list line whose location the approver chose (Manual Pick)
+  selectedByApprover: {
+    label: '审批人指定',
+    title: '审批人在批准时指定了此库存库位（手动拣货）。请严格从此库位拣取。',
+  },
 };

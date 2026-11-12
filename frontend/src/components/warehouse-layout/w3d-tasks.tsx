@@ -17,6 +17,7 @@ import { ArrowRight, ChevronDown, ChevronUp, ClipboardList, MapPin, PackageCheck
 import { labelOf, useT } from '@/i18n';
 import { cn, formatDate } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SelectedByApproverBadge } from '@/components/requests/selected-by-approver-badge';
 import type { FlowFigures, OpenTask, Source, StockFigures, TaskLine } from './use-tower-data';
 
 export type TaskTab = 'now' | 'pending' | 'flow';
@@ -167,6 +168,7 @@ function TaskRow({ t, open, onToggle, locate, onGoSlot, stopOf }: {
                 ) : (
                   <span className="text-xs text-amber-700">{l.stockItemId ? T.noLocation : T.notAllocated}</span>
                 )}
+                {l.selectedByApprover && left > 0 && <SelectedByApproverBadge />}
                 {stop && (stop.reachable ? (
                   <span className="rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-semibold text-cyan-800">{tr(T.stop, { n: stop.order })}</span>
                 ) : (

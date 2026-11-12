@@ -17,6 +17,7 @@ import { documentsApi } from '@/lib/api';
 import { documentsRefApi, type RefView, type SlipRow, type ReceiptState } from '@/lib/api-documents';
 import { getT, labelOf, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { SelectedByApproverBadge } from '@/components/requests/selected-by-approver-badge';
 
 export default function RequestRefPage() {
   return (
@@ -182,6 +183,7 @@ function PickRow({ row }: { row: SlipRow }) {
       <div className="w-28 sm:w-32 shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
         <p className="text-xs text-slate-500 flex items-center gap-1"><MapPin className="h-3 w-3" />{hasLoc ? loc!.warehouse : P.location}</p>
         <p className={cn('font-mono font-semibold break-all', hasLoc ? 'text-base text-slate-900' : 'text-sm text-slate-400')}>{hasLoc ? loc!.bin : P.noLocation}</p>
+        {hasLoc && row.selectedByApprover && <SelectedByApproverBadge className="mt-1" />}
       </div>
       <div className="min-w-0 flex-1">
         <p className="font-mono text-sm font-semibold text-slate-900 break-all">{row.sku}</p>

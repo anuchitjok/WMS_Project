@@ -17,4 +17,9 @@ export const shared = {
     label: 'Reason',
     select: 'Select a reason…',
   },
+  // PR6: pick-list line whose location the approver chose (Manual Pick)
+  selectedByApprover: {
+    label: 'Selected by Approver',
+    title: 'The approver chose this stock location at approval (Manual Pick). Pick from exactly this location.',
+  },
 };

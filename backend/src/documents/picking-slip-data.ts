@@ -47,6 +47,8 @@ export interface SlipRow {
   unit: string | null;
   condition: string;
   location: SlipLocation;
+  /** PR6: the approver chose this stock row (Manual Pick). False for FIFO lines. */
+  selectedByApprover: boolean;
 }
 
 /**
@@ -76,6 +78,8 @@ export function conditionOf(stock: StockLike | null | undefined): string {
 }
 
 export interface RequestItemLike {
+  /** Request line id — only needed to match PR6 approver picks (pickSplits). */
+  id?: string;
   product?: ProductLike | null;
   quantityRequested?: number | null;
   quantityApproved?: number | null;
@@ -93,11 +97,31 @@ export interface TaskItemLike {
  * authoritative reservation (what the warehouse must actually pick), otherwise the
  * request lines and their approval-time stock link are used.
  */
-export function buildSlipRows(requestItems: RequestItemLike[], taskItems?: TaskItemLike[] | null): SlipRow[] {
+/** PR6: one stock location the approver chose for a request line (an open pick). */
+export interface PickSplit {
+  qty: number;
+  stockItem: StockLike | null;
+}
+
+export function buildSlipRows(
+  requestItems: RequestItemLike[],
+  taskItems?: TaskItemLike[] | null,
+  approverRows?: ReadonlySet<string> | null,
+  /**
+   * PR6, before allocation only: request line id -> the locations the approver chose.
+   * Such a line becomes one row per location with its real quantity. Lines without
+   * picks (FIFO) keep the single request-line row exactly as before.
+   */
+  pickSplits?: ReadonlyMap<string, readonly PickSplit[]> | null,
+): SlipRow[] {
   const useTask = !!taskItems && taskItems.length > 0;
   const src = useTask
     ? taskItems!.map((t) => ({ product: t.product, qty: t.qtyRequested ?? 1, stock: t.stockItem }))
-    : requestItems.map((r) => ({ product: r.product, qty: r.quantityApproved ?? r.quantityRequested ?? 1, stock: r.stockItem }));
+    : requestItems.flatMap((r) => {
+      const split = r.id ? pickSplits?.get(r.id) : undefined;
+      if (split?.length) return split.map((p) => ({ product: r.product, qty: p.qty, stock: p.stockItem }));
+      return [{ product: r.product, qty: r.quantityApproved ?? r.quantityRequested ?? 1, stock: r.stockItem }];
+    });
   return src.map((s, i) => ({
     no: i + 1,
     sku: s.product?.code || '—',
@@ -109,6 +133,7 @@ export function buildSlipRows(requestItems: RequestItemLike[], taskItems?: TaskI
     unit: s.product?.unit ?? null,
     condition: conditionOf(s.stock),
     location: slipLocation(s.stock),
+    selectedByApprover: !!s.stock?.id && !!approverRows?.has(s.stock.id),
   }));
 }
 

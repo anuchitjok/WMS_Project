@@ -250,12 +250,49 @@ export const requestsApi = {
     request<any[]>(`/requests/products-available${brandId ? `?brandId=${brandId}` : ''}`),
   submit: (id: string) => request<WithdrawalRequest>(`/requests/${id}/submit`, { method: 'PATCH' }),
   cancel: (id: string) => request<WithdrawalRequest>(`/requests/${id}/cancel`, { method: 'PATCH' }),
-  approve: (id: string, approved: boolean, rejectReason?: string) =>
+  // PR6: `picks` = approver-chosen stock rows; absent = FIFO as before.
+  approve: (id: string, approved: boolean, rejectReason?: string, picks?: PickChoice[]) =>
     request<WithdrawalRequest>(`/requests/${id}/approve`, {
       method: 'PATCH',
-      body: JSON.stringify({ approved, rejectReason }),
+      body: JSON.stringify({ approved, rejectReason, ...(picks?.length ? { picks } : {}) }),
     }),
+  pickOptions: (id: string) => request<PickOptions>(`/requests/${id}/pick-options`),
 };
+
+/** PR6: one stock row chosen for a request line. */
+export interface PickChoice { itemId: string; stockItemId: string; qty: number }
+export interface PickOption {
+  stockItemId: string;
+  quantity: number;
+  serialNumber: string | null;
+  batchNumber: string | null;
+  receivedDate: string;
+  expiryDate: string | null;
+  warehouseId: string | null;
+  warehouseCode: string | null;
+  warehouseName: string | null;
+  rackCode: string | null;
+  slotCode: string | null;
+}
+export interface PickOptions {
+  requestId: string;
+  canPick: boolean;
+  /** Why locations cannot be chosen now. */
+  blocked: 'STATUS' | 'MODE' | 'NOT_FINAL_STEP' | null;
+  lines: Array<{
+    itemId: string;
+    productId: string;
+    productCode: string | null;
+    productName: string | null;
+    partNumber: string | null;
+    quantity: number;
+    /** The row FIFO would take first (any warehouse). */
+    fifoStockItemId: string | null;
+    /** More rows exist than are listed. */
+    more: boolean;
+    options: PickOption[];
+  }>;
+}
 
 // Users
 export const usersApi = {

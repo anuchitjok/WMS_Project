@@ -18,4 +18,9 @@ export const shared: Messages['shared'] = {
     label: 'เหตุผล',
     select: 'เลือกเหตุผล…',
   },
+  // PR6: pick-list line whose location the approver chose (Manual Pick)
+  selectedByApprover: {
+    label: 'ผู้อนุมัติเลือก',
+    title: 'ผู้อนุมัติเลือกตำแหน่งสต็อกนี้ตอนอนุมัติ (Manual Pick) ให้หยิบจากตำแหน่งนี้เท่านั้น',
+  },
 };

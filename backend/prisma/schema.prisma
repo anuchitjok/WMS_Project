@@ -194,6 +194,7 @@ model User {
   relocationsCompleted RelocationRequest[] @relation("RelocationCompleted")
   auditLogs          AuditLog[]
   goodsReceivings    GoodsReceiving[]
+  requestPicksChosen   WithdrawalRequestPick[] @relation("RequestPickChosenBy")
 
   @@index([role])
   @@index([roleId])
@@ -529,6 +530,7 @@ model StockItem {
   scrapCases             ScrapCase[]
   relocationLines        RelocationLine[]
   goodsReceivingItems    GoodsReceivingItem[]
+  requestPicks           WithdrawalRequestPick[]
 
   @@index([serialNumber])
   @@index([status])
@@ -678,6 +680,26 @@ model WithdrawalRequestItem {
   request   WithdrawalRequest @relation(fields: [requestId], references: [id])
   product   Product           @relation(fields: [productId], references: [id])
   stockItem StockItem?        @relation(fields: [stockItemId], references: [id])
+  picks     WithdrawalRequestPick[]
+}
+
+/// PR6: stock row the approver chose for a request line (migration 36).
+/// releasedAt is set when allocation uses it or the request is cancelled.
+model WithdrawalRequestPick {
+  id            String    @id @default(cuid())
+  requestItemId String
+  stockItemId   String
+  quantity      Float
+  pickedById    String
+  createdAt     DateTime  @default(now())
+  releasedAt    DateTime?
+
+  requestItem WithdrawalRequestItem @relation(fields: [requestItemId], references: [id], onDelete: Cascade)
+  stockItem   StockItem             @relation(fields: [stockItemId], references: [id])
+  pickedBy    User                  @relation("RequestPickChosenBy", fields: [pickedById], references: [id])
+
+  @@index([requestItemId])
+  @@index([stockItemId])
 }
 
 // ─── RTV ──────────────────────────────────────────────────────────────────────

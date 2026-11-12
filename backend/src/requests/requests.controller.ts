@@ -88,14 +88,25 @@ export class RequestsController {
     return this.requestsService.recoverStalled(id, reason, userId);
   }
 
+  // PR6: stock rows the approver may choose (read only, same right as approving).
+  @Get(':id/pick-options')
+  @UseGuards(AccessGuard)
+  @Access(ACCESS.requestApprove)
+  pickOptions(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.requestsService.pickOptions(id, user ?? null);
+  }
+
   @Patch(':id/approve')
   @UseGuards(AccessGuard)
   @Access(ACCESS.requestApprove)
   approve(
     @Param('id') id: string,
     @Body() body: ApproveRequestDto,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: any,
   ) {
-    return this.requestsService.approve(id, userId, body.approved, body.rejectReason);
+    return this.requestsService.approve(id, user.id, body.approved, body.rejectReason, {
+      picks: body.picks,
+      principal: user ?? null,
+    });
   }
 }
