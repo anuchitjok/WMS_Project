@@ -21,6 +21,7 @@
 
 import type { LayoutObject } from '@/lib/api';
 import { sizeOf } from './setup-health';
+import { bbox, isRectilinear, outlineOf } from './floor-geometry';
 import {
   type RackData, type SlotData, type WarehouseData,
   isBlocked, isOccupied, slotUtil,
@@ -131,6 +132,11 @@ export interface FloorRect {
   cx: number; cz: number; w: number; d: number;
   /** Real warehouse size (m) from Warehouse Master; null = not measured (floor is fitted to the racks). */
   real: { w: number; d: number } | null;
+  /**
+   * F3: floor shape in world X/Z (m) when the warehouse has a non-rectangular
+   * outline (L / U / T …); null = plain rectangle (cx, cz, w, d). Centred like `real`.
+   */
+  outline: [number, number][] | null;
 }
 
 /**
@@ -227,7 +233,7 @@ export function slotLocal(p: PlacedRack, level: number, column: number) {
  */
 export function floorRect(
   b: { minX: number; minZ: number; maxX: number; maxZ: number },
-  wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm'> | null,
+  wh?: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'floorOutline'> | null,
   margin = FLOOR_MARGIN,
 ): FloorRect {
   const rl = cmToM(wh?.lengthCm), rw = cmToM(wh?.widthCm);
@@ -236,7 +242,18 @@ export function floorRect(
   // stick out (a data problem the Dashboard › Warehouse Space tab flags).
   const w = Math.max(b.maxX - b.minX + (real ? 0 : margin * 2), real?.w ?? 0);
   const d = Math.max(b.maxZ - b.minZ + (real ? 0 : margin * 2), real?.d ?? 0);
-  return { cx: (b.minX + b.maxX) / 2, cz: (b.minZ + b.maxZ) / 2, w, d, real };
+  const cx = (b.minX + b.maxX) / 2, cz = (b.minZ + b.maxZ) / 2;
+  return { cx, cz, w, d, real, outline: real ? shapedOutline(wh, cx, cz) : null };
+}
+
+/** World points of a saved non-rectangular floor shape, centred on (cx, cz); null for a rectangle. */
+function shapedOutline(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | 'floorOutline'> | null | undefined, cx: number, cz: number) {
+  if (!wh?.floorOutline) return null;
+  const pts = outlineOf(wh);
+  if (!pts || (pts.length === 4 && isRectilinear(pts))) return null; // a 4-corner box is just the rectangle
+  const bb = bbox(pts);
+  const ox = cx - bb.length / 2 - bb.minX, oz = cz - bb.width / 2 - bb.minZ;
+  return pts.map(([x, z]) => [ox + x, oz + z] as [number, number]);
 }
 
 function place(r: RackData, center: [number, number], rotY: number, zone: string): PlacedRack {

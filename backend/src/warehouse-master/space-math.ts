@@ -3,6 +3,8 @@
 // Pure functions only (no Prisma), so they are unit-tested directly and reused by
 // the space summary, the capacity planner, slot generation and the simulator.
 
+import { floorAreaM2 } from './floor-geometry';
+
 export type RackCategory = 'STANDARD_RACK' | 'PALLET_ON_FLOOR';
 export const RACK_CATEGORIES: RackCategory[] = ['STANDARD_RACK', 'PALLET_ON_FLOOR'];
 
@@ -29,6 +31,8 @@ export interface RackLike extends Size3 {
 
 export interface WarehouseLike extends Size3 {
   usableAreaPct: number | null;
+  /** Migration 33 — floor shape; area follows the real shape when set (D3). */
+  floorOutline?: unknown;
 }
 
 const round = (n: number, dp = 2) => Math.round(n * 10 ** dp) / 10 ** dp;
@@ -95,7 +99,7 @@ export interface WarehouseArea {
 
 export function warehouseArea(wh: WarehouseLike): WarehouseArea {
   const pct = pos(wh.usableAreaPct) ? Math.min(100, wh.usableAreaPct) : 100;
-  const total = footprintM2(wh);
+  const total = floorAreaM2(wh); // real shape when set, else length × width
   return {
     hasSize: total != null,
     usableAreaPct: pct,
@@ -269,8 +273,8 @@ export interface FloorSpace {
   racksWithoutSizeCodes: string[];
 }
 
-export function floorSpace(wh: Size3, racks: RackLike[]): FloorSpace {
-  const total = footprintM2(wh);
+export function floorSpace(wh: Size3 & { floorOutline?: unknown }, racks: RackLike[]): FloorSpace {
+  const total = floorAreaM2(wh);
   const totalCents = total != null ? Math.round(total * 100) : null;
   let fpCents = 0;
   const withoutSizeCodes: string[] = [];

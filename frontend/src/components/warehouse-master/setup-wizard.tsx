@@ -12,6 +12,7 @@ import { warehouseSpaceApi, type RackTypeMaster, type SetupRacksResult } from '@
 import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { autoLayout, rackSize } from '../warehouse-layout/scene-geometry';
+import { floorAreaM2 } from '../warehouse-layout/floor-geometry';
 import type { RackData } from '../warehouse-layout/occupancy';
 import { Field, ModalWrap, optNum, selectClass } from './shared';
 import { SizeWarnings } from './forms';
@@ -120,13 +121,13 @@ export function SetupWizard({ warehouse: initial, rackTypes, isAdmin, onClose, o
         <div className="space-y-3">
           <p className="text-sm text-slate-600">{wz.sizeHint}</p>
           <div className="grid grid-cols-3 gap-3">
-            <Field label={m.warehouseMaster.form.lengthM}><Input type="number" min={0} step="any" disabled={!isAdmin} value={size.l} onChange={(e) => setSize({ ...size, l: e.target.value })} /></Field>
-            <Field label={m.warehouseMaster.form.widthM}><Input type="number" min={0} step="any" disabled={!isAdmin} value={size.w} onChange={(e) => setSize({ ...size, w: e.target.value })} /></Field>
+            <Field label={m.warehouseMaster.form.lengthM}><Input type="number" min={0} step="any" disabled={!isAdmin || !!warehouse.floorOutline} title={warehouse.floorOutline ? m.warehouseMaster.floorShape.shapeOwnsSize : undefined} value={size.l} onChange={(e) => setSize({ ...size, l: e.target.value })} /></Field>
+            <Field label={m.warehouseMaster.form.widthM}><Input type="number" min={0} step="any" disabled={!isAdmin || !!warehouse.floorOutline} title={warehouse.floorOutline ? m.warehouseMaster.floorShape.shapeOwnsSize : undefined} value={size.w} onChange={(e) => setSize({ ...size, w: e.target.value })} /></Field>
             <Field label={m.warehouseMaster.form.heightM}><Input type="number" min={0} step="any" disabled={!isAdmin} value={size.h} onChange={(e) => setSize({ ...size, h: e.target.value })} /></Field>
           </div>
           <SizeWarnings warnings={warehouseSizeWarnings({ lengthCm: mToCm(L), widthCm: mToCm(W), heightCm: mToCm(H) })} />
           {!isAdmin && <p className="text-xs text-slate-500">{wz.sizeAdminOnly}</p>}
-          {L && W ? <p className="text-sm text-slate-700">{t(wz.area, { area: fmt.number(L * W) })}</p> : <p className="text-xs text-amber-700">{wz.sizeSkip}</p>}
+          {L && W ? <p className="text-sm text-slate-700">{t(wz.area, { area: fmt.number(warehouse.floorOutline ? floorAreaM2(warehouse) ?? L * W : L * W) })}</p> : <p className="text-xs text-amber-700">{wz.sizeSkip}</p>}
         </div>
       )}
 

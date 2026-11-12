@@ -1,6 +1,6 @@
 import {
   ArrayMaxSize, ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsNumber, IsOptional,
-  IsPositive, IsString, Max, MaxLength, Min, ValidateNested, IsEnum, Matches,
+  IsPositive, IsString, Max, MaxLength, Min, ValidateNested, IsEnum, Matches, IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -16,6 +16,8 @@ export class WarehouseSizeFields {
   @ApiPropertyOptional({ description: 'cm' }) @IsOptional() @IsNumber() @IsPositive() heightCm?: number | null;
   @ApiPropertyOptional({ description: '% of floor usable after aisles (blank = 100)' })
   @IsOptional() @IsNumber() @IsPositive() @Max(100) usableAreaPct?: number | null;
+  @ApiPropertyOptional({ description: 'Floor shape {version:1, unit:"m", shape, points:[[x,z],...], params?}; null = rectangle. Checked in the service.' })
+  @IsOptional() @IsObject() floorOutline?: Record<string, unknown> | null;
 }
 
 export class CreateWarehouseDto extends WarehouseSizeFields {

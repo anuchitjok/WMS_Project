@@ -330,6 +330,8 @@ model Warehouse {
   widthCm       Float?
   heightCm      Float?
   usableAreaPct Float?
+  // Migration 33 — floor shape {version,unit:'m',shape,points[[x,z]],params}; null = rectangle from lengthCm × widthCm
+  floorOutline  Json?
   isActive   Boolean     @default(true)
   isDeleted  Boolean     @default(false)
   deletedAt  DateTime?
