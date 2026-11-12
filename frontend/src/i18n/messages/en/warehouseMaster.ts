@@ -210,6 +210,7 @@ export const warehouseMaster = {
     legendNew: 'New',
     legendExisting: 'Already there',
     previewNote: 'Automatic arrangement, like the 3D view; you can move racks later.',
+    previewUnplaced: '{n} rack(s) do not fit in the warehouse shape: {codes}',
     back: 'Back',
     next: 'Next',
     create: 'Create {racks} racks',

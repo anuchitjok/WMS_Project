@@ -25,7 +25,12 @@ export interface HealthWarehouse extends SizeCm { code: string; racks: HealthRac
 
 export type MissingKey = 'whSize' | 'rackSize' | 'rackZone' | 'rackSlots';
 /** Serious ones get a red outline in 3D; slotTooSmall is a softer hint. */
-export type AnomalyKey = 'rackTooBig' | 'rackBiggerThanWh' | 'slotsOverGrid' | 'slotTooSmall';
+export type AnomalyKey = 'rackTooBig' | 'rackBiggerThanWh' | 'slotsOverGrid' | 'slotTooSmall'
+  /** F4/F5 (3D only, from the placed scene): outside the floor, overlapping, could not be auto-placed. */
+  | 'rackOutside' | 'rackOverlap' | 'rackUnplaced';
+
+/** Rack ids with a position problem (3D scene placement). */
+export interface PlacementIds { outside: string[]; overlap: string[]; unplaced: string[] }
 
 export interface HealthItem<K extends string> { key: K; racks: { id: string; code: string }[] }
 export interface SetupHealth {
@@ -52,7 +57,7 @@ export function sizeOf(r: HealthRack): SizeCm {
 
 const slotCount = (r: HealthRack) => r.slots?.length ?? r._count?.slots ?? 0;
 
-export function setupHealth(wh: HealthWarehouse): SetupHealth {
+export function setupHealth(wh: HealthWarehouse, placement?: PlacementIds | null): SetupHealth {
   const racks = wh.racks.filter((r) => r.isActive !== false).slice().sort(byCode);
   const pick = (f: (r: HealthRack) => boolean) => racks.filter(f).map((r) => ({ id: r.id, code: r.code }));
 
@@ -74,6 +79,13 @@ export function setupHealth(wh: HealthWarehouse): SetupHealth {
     const s = slotSizeCm(sizeOf(r), r.levels, r.columns, isFloor(r));
     return !!s && s.min < SIZE_WARN.slotMinCm;
   });
+
+  if (placement) {
+    const ids = (list: string[]) => { const set = new Set(list); return (r: HealthRack) => set.has(r.id); };
+    add(anomalies, 'rackUnplaced', ids(placement.unplaced));
+    add(anomalies, 'rackOutside', ids(placement.outside));
+    add(anomalies, 'rackOverlap', ids(placement.overlap));
+  }
 
   const flagged = new Set<string>();
   for (const a of anomalies) if (a.key !== 'slotTooSmall') for (const r of a.racks) flagged.add(r.id);

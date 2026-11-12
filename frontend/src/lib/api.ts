@@ -425,7 +425,14 @@ export interface WarehouseLayout {
   unitLabel: string;
   version: number;
   notes: string | null;
+  /** F6: metres per plan unit and the floor's top-left corner (m); null until saved from 3D. */
+  metersPerUnit?: number | null;
+  floorOriginX?: number | null;
+  floorOriginZ?: number | null;
 }
+
+/** F6: one rack's position from the 3D arrange mode (metres; rotation 0/90/180/270). */
+export interface RackPositionInput { rackId: string; cx: number; cz: number; length: number; depth: number; rotation: number }
 
 export interface LayoutResponse {
   warehouse: { id: string; code: string; name: string; isActive: boolean };
@@ -435,6 +442,12 @@ export interface LayoutResponse {
 
 export const layoutApi = {
   get: (warehouseId: string) => request<LayoutResponse>(`/warehouse-layout/${warehouseId}`),
+  /** F6: save every active rack's 3D position onto the Floor Plan (drawings only). */
+  saveRackPositions: (warehouseId: string, dto: { version?: number; metersPerUnit: number; floorOriginX?: number; floorOriginZ?: number; racks: RackPositionInput[] }) =>
+    request<{ layout: WarehouseLayout; objects: LayoutObject[] }>(`/warehouse-layout/${warehouseId}/rack-positions`, { method: 'PUT', body: JSON.stringify(dto) }),
+  /** F6: back to auto layout — removes the rack drawings 3D created. */
+  resetRackPositions: (warehouseId: string, version: number) =>
+    request<{ layout: WarehouseLayout; objects: LayoutObject[]; removed: number; kept: number }>(`/warehouse-layout/${warehouseId}/rack-positions/reset`, { method: 'POST', body: JSON.stringify({ version }) }),
   create: (warehouseId: string, dto: Partial<WarehouseLayout> = {}) =>
     request<WarehouseLayout>(`/warehouse-layout/${warehouseId}`, { method: 'POST', body: JSON.stringify(dto) }),
   updateCanvas: (layoutId: string, dto: Partial<WarehouseLayout>) =>

@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { warehouseSpaceApi, type RackTypeMaster, type SetupRacksResult } from '@/lib/api-warehouse';
 import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { autoLayout, rackSize } from '../warehouse-layout/scene-geometry';
+import { autoPlace, rackSize } from '../warehouse-layout/scene-geometry';
 import { floorAreaM2 } from '../warehouse-layout/floor-geometry';
 import type { RackData } from '../warehouse-layout/occupancy';
 import { Field, ModalWrap, optNum, selectClass } from './shared';
@@ -231,9 +231,9 @@ export function SetupWizard({ warehouse: initial, rackTypes, isAdmin, onClose, o
  * check the fit; nothing here is saved.
  */
 function LayoutPreview({ warehouse, plan }: { warehouse: any; plan: SetupRacksResult }) {
-  const { m } = useT();
+  const { m, t } = useT();
   const wz = m.warehouseMaster.wizard;
-  const placed = useMemo(() => {
+  const { placed, unplaced, outline } = useMemo(() => {
     const t = plan.rackType;
     const planned: RackData[] = plan.racks.map((r) => ({
       id: `new:${r.code}`, code: r.code, zone: r.zone, rackType: t.category === 'PALLET_ON_FLOOR' ? 'PALLET' : 'STANDARD',
@@ -241,7 +241,11 @@ function LayoutPreview({ warehouse, plan }: { warehouse: any; plan: SetupRacksRe
       rackTypeMaster: { category: t.category, lengthCm: t.lengthCm, widthCm: t.widthCm, heightCm: t.heightCm },
     }));
     const existing: RackData[] = (warehouse.racks ?? []).filter((r: any) => r.isActive !== false).map((r: any) => ({ ...r, slots: [] }));
-    return autoLayout([...existing, ...planned], warehouse).map((p) => ({ ...p, size: rackSize(p.rack), isNew: p.rack.id.startsWith('new:') }));
+    const res = autoPlace([...existing, ...planned], warehouse);
+    return {
+      placed: res.placed.map((p) => ({ ...p, size: rackSize(p.rack), isNew: p.rack.id.startsWith('new:') })),
+      unplaced: res.unplaced, outline: res.outline,
+    };
   }, [warehouse, plan]);
   if (!placed.length) return null;
 
@@ -252,7 +256,9 @@ function LayoutPreview({ warehouse, plan }: { warehouse: any; plan: SetupRacksRe
   return (
     <figure className="rounded-lg border border-slate-200 bg-slate-50 p-2">
       <svg viewBox={`${-pad} ${-pad} ${maxX + pad * 2} ${maxZ + pad * 2}`} className="h-64 w-full" role="img" aria-label={wz.previewLabel}>
-        {realW > 0 && realD > 0 && <rect x={0} y={0} width={realW} height={realD} fill="#fff" stroke="#94a3b8" strokeWidth={Math.max(maxX, maxZ) / 300} />}
+        {outline
+          ? <polygon points={outline.map(([x, z]) => `${x},${z}`).join(' ')} fill="#fff" stroke="#94a3b8" strokeWidth={Math.max(maxX, maxZ) / 300} />
+          : realW > 0 && realD > 0 && <rect x={0} y={0} width={realW} height={realD} fill="#fff" stroke="#94a3b8" strokeWidth={Math.max(maxX, maxZ) / 300} />}
         {placed.map((p) => (
           <rect key={p.rack.id} x={p.center[0] - p.size.length / 2} y={p.center[1] - p.size.depth / 2} width={p.size.length} height={p.size.depth}
             fill={p.isNew ? '#16a34a' : '#cbd5e1'} opacity={p.isNew ? 0.85 : 1}>
@@ -264,6 +270,7 @@ function LayoutPreview({ warehouse, plan }: { warehouse: any; plan: SetupRacksRe
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-green-600" /> {wz.legendNew}</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-sm bg-slate-300" /> {wz.legendExisting}</span>
         <span>{wz.previewNote}</span>
+        {unplaced.length > 0 && <span className="font-medium text-red-700">{t(wz.previewUnplaced, { n: unplaced.length, codes: unplaced.slice(0, 6).map((r) => r.code).join(', ') })}</span>}
       </figcaption>
     </figure>
   );

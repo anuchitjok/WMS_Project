@@ -1061,9 +1061,145 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
   );
 }
 
+// ─── F6: arrange racks (drag on the floor) ─────────────────────────────────────
+
+/** What the 3D view needs to let racks be dragged (Warehouse3D owns the draft). */
+export interface ArrangeProps {
+  /** Racks that move together (the picked rack, or its whole zone). */
+  selected: Set<string>;
+  /** Racks off the floor or overlapping (drawn red). */
+  bad: Set<string>;
+  /** Drag step (m). */
+  snap: number;
+  /** Would the racks fit if shifted by (dx, dz)? Colours the ghost while dragging. */
+  check: (ids: Set<string>, dx: number, dz: number) => boolean;
+  /** A rack was pressed: returns the ids that move with it. */
+  onPick: (rackId: string) => string[];
+  /** Dropped: shift these racks by (dx, dz) metres. */
+  onMove: (ids: string[], dx: number, dz: number) => void;
+}
+
+const ARR_MARGIN = 0.3; // m round the rack footprint
+const ARR_BAND = 0.22;  // outline width on the floor (m)
+const ORBIT_MOUSE = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+const ARRANGE_MOUSE = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
+const ORBIT_TOUCH = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+const ARRANGE_TOUCH = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN };
+const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const ARR_BLUE = '#2563eb', ARR_RED = '#dc2626', ARR_IDLE = '#94a3b8';
+
+interface ArrangeDrag { ids: Set<string>; x0: number; z0: number; dx: number; dz: number; px: number; py: number }
+
+/**
+ * An outline round every rack (blue = picked, red = off the floor or overlapping).
+ * Press a rack and drag: a ghost of the rack (or
+ * zone) follows in `snap` steps, blue where it fits, red where it does not; it is
+ * dropped on release. The camera is switched off for the drag so it does not move.
+ */
+function ArrangeLayer({ racks, a, floor }: { racks: PlacedRack[]; a: ArrangeProps; floor: Scene3D['floor'] }) {
+  const controls = useThree((s) => s.controls) as Controls | null;
+  const invalidate = useThree((s) => s.invalidate);
+  const drag = useRef<ArrangeDrag | null>(null);
+  const [live, setLive] = useState<{ ids: Set<string>; dx: number; dz: number; ok: boolean } | null>(null);
+  const hit = useMemo(() => new THREE.Vector3(), []);
+  const snapTo = (v: number) => Math.round(v / a.snap) * a.snap;
+  const ground = (ray: THREE.Ray): [number, number] | null => (ray.intersectPlane(FLOOR_PLANE, hit) ? [hit.x, hit.z] : null);
+
+  // Release anywhere (even outside the canvas) ends the drag.
+  const aRef = useRef(a);
+  aRef.current = a;
+  useEffect(() => {
+    const up = (e: PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      drag.current = null;
+      setLive(null);
+      if (controls) controls.enabled = true;
+      document.body.style.cursor = '';
+      const far = Math.hypot(e.clientX - d.px, e.clientY - d.py) > DRAG_PX;
+      if (far && (d.dx || d.dz)) aRef.current.onMove([...d.ids], d.dx, d.dz);
+      invalidate();
+    };
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => { window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); };
+  }, [controls, invalidate]);
+  // Leaving arrange mode mid-drag must not leave the camera switched off.
+  useEffect(() => () => { if (controls) controls.enabled = true; }, [controls]);
+
+  const down = (p: PlacedRack) => (e: ThreeEvent<PointerEvent>) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const g = ground(e.ray);
+    if (!g) return;
+    if (controls) controls.enabled = false;
+    const ids = new Set(a.onPick(p.rack.id));
+    drag.current = { ids, x0: g[0], z0: g[1], dx: 0, dz: 0, px: e.clientX, py: e.clientY };
+    setLive({ ids, dx: 0, dz: 0, ok: true });
+    document.body.style.cursor = 'grabbing';
+    invalidate();
+  };
+  const move = (e: ThreeEvent<PointerEvent>) => {
+    const d = drag.current;
+    if (!d) return;
+    const g = ground(e.ray);
+    if (!g) return;
+    const dx = snapTo(g[0] - d.x0), dz = snapTo(g[1] - d.z0);
+    if (dx === d.dx && dz === d.dz) return;
+    d.dx = dx; d.dz = dz;
+    setLive({ ids: d.ids, dx, dz, ok: a.check(d.ids, dx, dz) });
+    invalidate();
+  };
+
+  // Outlines on the floor round the footprint (a pad under the rack would be hidden by it).
+  const bands = useMemo(() => ({
+    sel: racks.filter((p) => a.selected.has(p.rack.id) && !a.bad.has(p.rack.id)).flatMap((p) => footprintBand(p, ARR_MARGIN, ARR_BAND)),
+    bad: racks.filter((p) => a.bad.has(p.rack.id)).flatMap((p) => footprintBand(p, ARR_MARGIN, ARR_BAND)),
+    idle: racks.filter((p) => !a.selected.has(p.rack.id) && !a.bad.has(p.rack.id)).flatMap((p) => footprintBand(p, ARR_MARGIN, ARR_BAND / 2)),
+  }), [racks, a.selected, a.bad]);
+  const span = Math.max(floor.w, floor.d) * 4 + 200;
+  return (
+    <group>
+      <BoxInstances items={bands.idle} color={ARR_IDLE} opacity={0.5} />
+      <BoxInstances items={bands.sel} color={ARR_BLUE} />
+      <BoxInstances items={bands.bad} color={ARR_RED} />
+      {/* Catches the pointer anywhere on the floor while dragging */}
+      {live && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[floor.cx, 0, floor.cz]} onPointerMove={move}>
+          <planeGeometry args={[span, span]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      )}
+      {racks.map((p) => {
+        const id = p.rack.id;
+        const moving = !!live && live.ids.has(id);
+        return (
+          <group key={id}>
+            {/* Grab box: the whole rack volume, invisible */}
+            <mesh position={[p.center[0], p.height / 2, p.center[1]]} rotation={[0, p.rotY, 0]}
+              onPointerDown={down(p)}
+              onPointerOver={() => { if (!drag.current) document.body.style.cursor = 'grab'; }}
+              onPointerOut={() => { if (!drag.current) document.body.style.cursor = ''; }}>
+              <boxGeometry args={[p.length, p.height, p.depth]} />
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+            </mesh>
+            {/* Ghost at the drop spot */}
+            {live && moving && (live.dx !== 0 || live.dz !== 0) && (
+              <mesh position={[p.center[0] + live.dx, p.height / 2, p.center[1] + live.dz]} rotation={[0, p.rotY, 0]} raycast={noRaycast}>
+                <boxGeometry args={[p.length, p.height, p.depth]} />
+                <meshBasicMaterial color={live.ok ? ARR_BLUE : ARR_RED} transparent opacity={0.35} depthWrite={false} />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, route, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, route, arrange, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
   onHoverSlot?: (i: number | null) => void;
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
@@ -1252,7 +1388,9 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
         </>
       )}
       <BoxInstances items={geo.marks} ghost={sg.marks} color={STATE_3D.blocked.color} opacity={0.85} />
-      <BoxInstances items={geo.hits} color="#000000" hit onClick={pickSlot} onHover={hoverSlot} />
+      {/* Slots are not clickable while racks are being arranged (F6) */}
+      {!arrange && <BoxInstances items={geo.hits} color="#000000" hit onClick={pickSlot} onHover={hoverSlot} />}
+      {arrange && <ArrangeLayer racks={scene.racks} a={arrange} floor={f} />}
 
       <LabelProjector labels={labels} els={labelEls} racks={scene.racks} />
 
@@ -1262,8 +1400,10 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
       {route && route.path.length > 1 && <RouteLine path={route.path} start={route.start} />}
       {focusRack && <RackHighlight p={focusRack} />}
 
+      {/* Arranging (F6): left drag on the floor pans instead of turning the view */}
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
-        maxPolarAngle={MAX_POLAR} minDistance={2} maxDistance={maxDist} />
+        maxPolarAngle={MAX_POLAR} minDistance={2} maxDistance={maxDist}
+        mouseButtons={arrange ? ARRANGE_MOUSE : ORBIT_MOUSE} touches={arrange ? ARRANGE_TOUCH : ORBIT_TOUCH} />
       <CameraRig apiRef={apiRef} homeBounds={homeBounds} fitBounds={fitBounds} fitKey={fitKey}
         focused={!!active && activeRacks.length > 0 && activeRacks.length < scene.racks.length} topInset={topInset}
         floor={f} maxY={scene.bounds.maxY} slotPos={slotPos} selectedSlotId={selectedSlotId} rackOfSlot={rackOfSlot} rackOf={rackOf}
@@ -1321,6 +1461,8 @@ export interface Scene3DProps {
   onUserCamera?: () => void;
   /** Card shown above the selected slot. */
   tooltip?: ReactNode;
+  /** F6: racks can be dragged on the floor (null = normal view). */
+  arrange?: ArrangeProps | null;
 }
 
 export default function WarehouseScene3D(props: Scene3DProps) {

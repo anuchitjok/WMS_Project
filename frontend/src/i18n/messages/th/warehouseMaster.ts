@@ -211,6 +211,7 @@ export const warehouseMaster: Messages['warehouseMaster'] = {
     legendNew: 'ใหม่',
     legendExisting: 'มีอยู่แล้ว',
     previewNote: 'จัดวางอัตโนมัติแบบเดียวกับหน้า 3D ย้าย rack ทีหลังได้',
+    previewUnplaced: 'มี {n} rack ที่วางในรูปคลังไม่ได้: {codes}',
     back: 'ย้อนกลับ',
     next: 'ถัดไป',
     create: 'สร้าง {racks} rack',

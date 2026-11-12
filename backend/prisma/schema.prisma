@@ -1238,6 +1238,11 @@ model WarehouseLayout {
   unitLabel   String    @default("m") // display only
   version     Int       @default(0) // optimistic lock for batch saves (mirrors FulfillmentTask.version)
   notes       String?   @db.Text
+  // F6 (35_layout_meters_per_unit.sql): metres per plan unit, and where the floor's
+  // top-left corner sits on the plan (m). NULL = not saved from 3D yet.
+  metersPerUnit Float?
+  floorOriginX  Float?
+  floorOriginZ  Float?
   isDeleted   Boolean   @default(false)
   deletedAt   DateTime?
   deletedBy   String?
