@@ -10,11 +10,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { cn } from '@/lib/utils';
 import { useT } from '@/i18n';
 
-export function ArrangeBar({ top, snap, selected, zoneMode, onZoneMode, onRotate, outside, overlap, hasFloor, saving, canReset, onSave, onCancel, onReset }: {
+export function ArrangeBar({ top, snap, selected, racks, pickedRack, onFindRack, zoneMode, onZoneMode, onRotate, outside, overlap, hasFloor, saving, canReset, onSave, onCancel, onReset }: {
   /** Distance from the top of the stage (px). */
   top: number;
   snap: number;
   selected: number;
+  /** Every rack on the floor, for the "go to rack" list. */
+  racks: { id: string; code: string; zone: string | null }[];
+  /** The rack picked from the list (empty while a whole zone or nothing is picked). */
+  pickedRack: string;
+  /** Picked from the list: select that rack and glide the camera to it. */
+  onFindRack: (rackId: string) => void;
   zoneMode: boolean;
   onZoneMode: (zone: boolean) => void;
   onRotate: () => void;
@@ -34,6 +40,9 @@ export function ArrangeBar({ top, snap, selected, zoneMode, onZoneMode, onRotate
   const problems = outside + overlap;
   const seg = (on: boolean) => cn('px-2.5 py-1 text-xs font-medium transition-colors',
     on ? 'bg-emerald-700 text-white' : 'bg-white text-slate-600 hover:bg-slate-50');
+  // Racks grouped by zone, so a code is easy to find in a long list.
+  const zones = [...new Set(racks.map((r) => r.zone ?? ''))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const byCode = (a: { code: string }, b: { code: string }) => a.code.localeCompare(b.code, undefined, { numeric: true });
   return (
     <div style={{ top }} role="region" aria-label={A.title}
       className="absolute inset-x-3 z-40 mx-auto w-auto max-w-2xl rounded-xl bg-white/95 p-3 text-sm text-slate-700 shadow-md ring-1 ring-slate-200 sm:w-fit">
@@ -52,6 +61,22 @@ export function ArrangeBar({ top, snap, selected, zoneMode, onZoneMode, onRotate
           <RotateCw className="h-3.5 w-3.5" /> {A.rotate}
         </Button>
         <span className="text-xs text-slate-500">{selected ? t(A.selected, { n: selected }) : A.noneSelected}</span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="text-xs text-slate-500" htmlFor="w3d-find-rack">{A.findLabel}</label>
+        <select id="w3d-find-rack" value={pickedRack} disabled={saving || !racks.length}
+          onChange={(e) => { if (e.target.value) onFindRack(e.target.value); }}
+          className="h-8 max-w-[14rem] rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 disabled:text-slate-400">
+          <option value="">{A.findPlaceholder}</option>
+          {zones.map((z) => (
+            <optgroup key={z || 'none'} label={z || A.findNoZone}>
+              {racks.filter((r) => (r.zone ?? '') === z).sort(byCode).map((r) => (
+                <option key={r.id} value={r.id}>{r.code}</option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
       </div>
 
       <p className={cn('mt-2 text-xs', problems ? 'font-medium text-red-700' : 'text-emerald-700')} role="status">
