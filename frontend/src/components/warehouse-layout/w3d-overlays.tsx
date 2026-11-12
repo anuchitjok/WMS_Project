@@ -39,10 +39,11 @@ export function CameraPresets({ active, onPick, top = 12, children }: {
     <div className="absolute left-3 z-40 flex flex-col items-start gap-2" style={{ top }}>
       <div className="flex flex-wrap gap-1.5">
         {PRESETS.map((p) => (
-          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={active === p.id}
-            className={cn('inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-sm font-medium shadow-md ring-1 transition-colors',
+          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={active === p.id} aria-label={C[p.id]} title={C[p.id]}
+            className={cn('inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-sm font-medium shadow-md ring-1 transition-colors sm:px-3',
               active === p.id ? 'bg-emerald-700 text-white ring-emerald-700' : 'bg-white/95 text-slate-700 ring-slate-200 hover:bg-white')}>
-            <p.icon className="h-4 w-4" /> {C[p.id]}
+            {/* Phones: icon only, so the presets stay on one row (the overlays below assume one row). */}
+            <p.icon className="h-4 w-4" /> <span className="hidden sm:inline">{C[p.id]}</span>
           </button>
         ))}
       </div>
@@ -185,11 +186,15 @@ function Swatch({ color, label, count }: { color: string; label: string; count?:
   );
 }
 
-export function Legend({ mode, onMode, counts, ageState, onRetryAge, hideBoxes, onHideBoxes }: {
+export function Legend({ mode, onMode, counts, ageState, onRetryAge, reservedState, reservedPartial, onRetryReserved, hideBoxes, onHideBoxes }: {
   mode: ViewMode; onMode: (m: ViewMode) => void;
   counts: Record<SlotState3D, number>;
   ageState: 'idle' | 'loading' | 'error' | 'ready';
   onRetryAge: () => void;
+  /** Reserved stock (status mode): loading / error / no access are said in the legend, never guessed. */
+  reservedState?: 'loading' | 'ready' | 'error' | 'denied';
+  reservedPartial?: boolean;
+  onRetryReserved?: () => void;
   /** Status mode: hide pallets / cartons so the status colours read on their own. */
   hideBoxes?: boolean;
   onHideBoxes?: (v: boolean) => void;
@@ -202,6 +207,15 @@ export function Legend({ mode, onMode, counts, ageState, onRetryAge, hideBoxes, 
     body = (
       <>
         {STATE_ORDER.map((k) => <Swatch key={k} color={STATE_3D[k].color} label={W.status[k]} count={counts[k]} />)}
+        {reservedState === 'loading' && (
+          <span className="flex items-center gap-1 text-xs text-slate-400"><Loader2 className="h-3 w-3 animate-spin" /> {L.reservedLoading}</span>
+        )}
+        {reservedState === 'error' && (
+          <span className="flex items-center gap-2 text-xs text-red-600">{L.reservedError}
+            {onRetryReserved && <button type="button" onClick={onRetryReserved} className="font-medium underline">{L.retry}</button>}</span>
+        )}
+        {reservedState === 'denied' && <span className="text-xs text-slate-500">{L.reservedDenied}</span>}
+        {reservedState === 'ready' && reservedPartial && <span className="text-xs text-amber-700">{L.reservedPartial}</span>}
         {onHideBoxes && (
           <label className="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-xs text-slate-600">
             <input type="checkbox" checked={!!hideBoxes} onChange={(e) => onHideBoxes(e.target.checked)} className="h-3.5 w-3.5 accent-emerald-700" />

@@ -29,9 +29,9 @@ import { useT } from '@/i18n';
 import {
   type Scene3D, type PlacedRack, type PlacedSlot, type ViewMode, type EnvMode, type AreaRect,
   BASE_Y, PALLET_H, COLORS, NO_ZONE, STATE_3D, DECK_STATUS, boundsOf, rackToWorld, frameColumns, bracingPanels,
-  cartonGrid, cartonCount, cartonLayout, rackCorners,
+  cartonGrid, cartonCount, cartonLayout, rackCorners, slotState3D,
 } from './scene-geometry';
-import { isOccupied, isBlocked } from './occupancy';
+import { isOccupied, isBlocked, slotUtil } from './occupancy';
 import { intersectSpans, pointInPolygon, spansAt } from './floor-geometry';
 
 export type CameraPreset = 'iso' | 'top' | 'front';
@@ -46,6 +46,8 @@ export interface SceneApi {
   flyTo: (slotId: string) => void;
   focusSelectedSlot: () => void;
   focusSelectedRack: () => void;
+  /** Glide to one rack (rack panel "Zoom to rack"). */
+  focusRack: (rackId: string) => void;
 }
 export interface CameraInfo { x: number; z: number; tx: number; tz: number }
 
@@ -665,7 +667,7 @@ function clampTarget(v: THREE.Vector3, floor: Scene3D['floor'], maxY: number) {
   return v;
 }
 
-function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, floor, maxY, slotPos, selectedSlotId, rackOfSlot, onCamera, onUserCamera }: {
+function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, floor, maxY, slotPos, selectedSlotId, rackOfSlot, rackOf, onCamera, onUserCamera }: {
   apiRef: RefObject<SceneApi | null>;
   homeBounds: Bounds; fitBounds: Bounds; fitKey: string;
   /** A subset of racks is in focus (filter / rack or zone label). */
@@ -676,6 +678,7 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
   slotPos: (slotId: string) => [number, number, number] | null;
   selectedSlotId: string | null;
   rackOfSlot: (slotId: string) => PlacedRack | null;
+  rackOf: (rackId: string) => PlacedRack | null;
   onCamera?: (c: CameraInfo) => void;
   onUserCamera?: () => void;
 }) {
@@ -752,6 +755,13 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
       goal.current = { pos: pos.clone().add(t.clone().sub(target)), target: t };
       invalidate();
     };
+    const focusPlaced = (r: PlacedRack | null) => {
+      if (!r) return;
+      const { pos, target } = current();
+      const dir = pos.clone().sub(target);
+      const v = frame(padded(boundsOf([r])), focusDir(dir.lengthSq() > 0 ? dir : PRESET_DIR.iso));
+      go(v.pos, v.target);
+    };
     const flyTo = (slotId: string) => {
       const p = slotPos(slotId);
       if (!p) return;
@@ -787,17 +797,11 @@ function CameraRig({ apiRef, homeBounds, fitBounds, fitKey, focused, topInset, f
       },
       flyTo,
       focusSelectedSlot: () => { if (sel.current) flyTo(sel.current); },
-      focusSelectedRack: () => {
-        const r = sel.current ? rackOfSlot(sel.current) : null;
-        if (!r) return;
-        const { pos, target } = current();
-        const dir = pos.clone().sub(target);
-        const v = frame(padded(boundsOf([r])), focusDir(dir.lengthSq() > 0 ? dir : PRESET_DIR.iso));
-        go(v.pos, v.target);
-      },
+      focusSelectedRack: () => focusPlaced(sel.current ? rackOfSlot(sel.current) : null),
+      focusRack: (rackId: string) => focusPlaced(rackOf(rackId)),
     };
     return () => { apiRef.current = null; };
-  }, [apiRef, camera, controls, homeBounds, invalidate, size, slotPos, floor, maxY, rackOfSlot, topInset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [apiRef, camera, controls, homeBounds, invalidate, size, slotPos, floor, maxY, rackOfSlot, rackOf, topInset]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return null;
 }
@@ -816,7 +820,80 @@ function Outline({ s, color }: { s: PlacedSlot; color: string }) {
   );
 }
 
+/**
+ * Rack in focus (PR8 Phase 2): the same cyan-blue as the selected slot, as an edge
+ * round the whole rack plus a soft footprint on the floor. Cyan, not the status
+ * blue, so it stays readable over "In use" slots (decided with the user).
+ */
+function RackHighlight({ p }: { p: PlacedRack }) {
+  const pad = 0.12;
+  // Wider than the red "data looks wrong" band (FLAG_MARGIN), so both show on a flagged rack.
+  const band = useMemo(() => footprintBand(p, FOCUS_MARGIN, FOCUS_W), [p]);
+  return (
+    <>
+      <group position={[p.center[0], 0, p.center[1]]} rotation={[0, p.rotY, 0]}>
+        <lineSegments geometry={OUTLINE_GEOM} position={[0, p.height / 2 + 0.02, 0]} scale={[p.length + pad * 2, p.height + 0.08, p.depth + pad * 2]} renderOrder={3}>
+          <lineBasicMaterial color="#06b6d4" />
+        </lineSegments>
+      </group>
+      <BoxInstances items={band} color="#22d3ee" roughness={0.6} />
+    </>
+  );
+}
+const FOCUS_MARGIN = 0.5; // m around the rack footprint
+const FOCUS_W = 0.18;     // band width on the floor
+
 /** Selected slot: translucent cyan volume with a bright edge (the 3D accent colour). */
+/**
+ * PR8 Phase 5: estimated pick route painted on the floor — a cyan line through the
+ * aisles, small arrows every few metres showing the walking direction, and a ring
+ * where it starts (and ends). Drawn over the floor markings, under the racks.
+ */
+const ROUTE_Y = 0.06;
+const ROUTE_ARROW_EVERY = 4; // m
+const ARROW_GEOM = (() => {
+  const g = new THREE.BufferGeometry();
+  // Flat chevron pointing along +X, lying on the floor.
+  g.setAttribute('position', new THREE.Float32BufferAttribute([0.35, 0, 0, -0.25, 0, -0.3, -0.25, 0, 0.3], 3));
+  g.setIndex([0, 1, 2]);
+  g.computeVertexNormals();
+  return g;
+})();
+function RouteLine({ path, start }: { path: [number, number][]; start: [number, number] }) {
+  const points = useMemo(() => path.map(([x, z]) => new THREE.Vector3(x, ROUTE_Y, z)), [path]);
+  const arrows = useMemo(() => {
+    const out: { pos: [number, number, number]; rotY: number }[] = [];
+    let carry = ROUTE_ARROW_EVERY / 2;
+    for (let i = 0; i + 1 < path.length; i++) {
+      const [ax, az] = path[i], [bx, bz] = path[i + 1];
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 1e-6) continue;
+      const rotY = -Math.atan2(bz - az, bx - ax);
+      for (let d = carry; d < len; d += ROUTE_ARROW_EVERY) {
+        const t = d / len;
+        out.push({ pos: [ax + (bx - ax) * t, ROUTE_Y + 0.01, az + (bz - az) * t], rotY });
+      }
+      carry = (carry - len) % ROUTE_ARROW_EVERY;
+      if (carry < 0) carry += ROUTE_ARROW_EVERY;
+    }
+    return out;
+  }, [path]);
+  return (
+    <group renderOrder={1}>
+      <Line points={points} color="#0891b2" lineWidth={4} transparent opacity={0.9} depthWrite={false} />
+      {arrows.map((a, i) => (
+        <mesh key={i} geometry={ARROW_GEOM} position={a.pos} rotation={[0, a.rotY, 0]}>
+          <meshBasicMaterial color="#0e7490" side={THREE.DoubleSide} depthWrite={false} />
+        </mesh>
+      ))}
+      <mesh position={[start[0], ROUTE_Y, start[1]]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.45, 0.7, 32]} />
+        <meshBasicMaterial color="#0891b2" side={THREE.DoubleSide} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
 function Highlight({ s }: { s: PlacedSlot }) {
   return (
     <group position={s.pos} rotation={[0, s.rotY, 0]} scale={[s.size[0] * 1.02, s.size[1] * 0.98, s.size[2] * 1.06]}>
@@ -932,16 +1009,17 @@ const FLAG_W = 0.14;      // line width on the floor
 /** Red line round the floor footprint of each flagged rack (rack data looks wrong). */
 function flagOutline(racks: PlacedRack[], flagged: Set<string> | undefined): BoxItem[] {
   if (!flagged?.size) return [];
+  return racks.filter((p) => flagged.has(p.rack.id)).flatMap((p) => footprintBand(p, FLAG_MARGIN, FLAG_W));
+}
+
+/** Four flat bars on the floor round a rack footprint, `margin` m out, `w` m wide. */
+function footprintBand(p: PlacedRack, margin: number, w: number): BoxItem[] {
+  const c = rackCorners({ ...p, length: p.length + margin * 2, depth: p.depth + margin * 2 });
   const out: BoxItem[] = [];
-  for (const p of racks) {
-    if (!flagged.has(p.rack.id)) continue;
-    const grown: PlacedRack = { ...p, length: p.length + FLAG_MARGIN * 2, depth: p.depth + FLAG_MARGIN * 2 };
-    const c = rackCorners(grown);
-    for (let i = 0; i < 4; i++) {
-      const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
-      const len = Math.hypot(x1 - x0, z1 - z0) + FLAG_W;
-      out.push({ pos: [(x0 + x1) / 2, 0.012, (z0 + z1) / 2], scale: [len, 0.012, FLAG_W], rotY: -Math.atan2(z1 - z0, x1 - x0) });
-    }
+  for (let i = 0; i < 4; i++) {
+    const [x0, z0] = c[i], [x1, z1] = c[(i + 1) % 4];
+    const len = Math.hypot(x1 - x0, z1 - z0) + w;
+    out.push({ pos: [(x0 + x1) / 2, 0.012, (z0 + z1) / 2], scale: [len, 0.012, w], rotY: -Math.atan2(z1 - z0, x1 - x0) });
   }
   return out;
 }
@@ -985,7 +1063,8 @@ function SunLight({ floor, maxY }: { floor: { cx: number; cz: number; w: number;
 
 // ─── Scene ─────────────────────────────────────────────────────────────────────
 
-function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, onSelectSlot, apiRef, onCamera, onUserCamera, labels, labelEls, zoneNames }: Scene3DProps & {
+function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof, hideBoxes, flagged, topInset = 0, selectedSlotId, focusRackId, pickSlots, route, onSelectSlot, apiRef, onCamera, onUserCamera, onHoverSlot, labels, labelEls, zoneNames }: Scene3DProps & {
+  onHoverSlot?: (i: number | null) => void;
   labels: Label3D[]; labelEls: RefObject<Map<string, HTMLElement>>; zoneNames: Record<string, string>;
 }) {
   const [hover, setHover] = useState<number | null>(null);
@@ -1037,8 +1116,17 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
     return b;
   }, [scene]);
   const activeRacks = useMemo(() => (active ? scene.racks.filter((p) => active.has(p.rack.id)) : scene.racks), [scene, active]);
-  const fitBounds = useMemo(() => (active && activeRacks.length ? boundsOf(activeRacks) : homeBounds), [active, activeRacks, homeBounds]);
-  const fitKey = useMemo(() => activeRacks.map((p) => p.rack.id).join(','), [activeRacks]);
+  const fitBounds = useMemo(() => {
+    const b = active && activeRacks.length ? boundsOf(activeRacks) : homeBounds;
+    if (!route?.path.length) return b;
+    // PR8 Phase 5: frame the whole route, start point included.
+    const r = { ...b };
+    for (const [x, z] of route.path) {
+      r.minX = Math.min(r.minX, x); r.maxX = Math.max(r.maxX, x); r.minZ = Math.min(r.minZ, z); r.maxZ = Math.max(r.maxZ, z);
+    }
+    return r;
+  }, [active, activeRacks, homeBounds, route]);
+  const fitKey = useMemo(() => activeRacks.map((p) => p.rack.id).join(',') + (route ? `|${route.start.join()}` : ''), [activeRacks, route]);
   const slotIdx = useMemo(() => new Map(scene.slots.map((s, i) => [s.slot.id, i])), [scene]);
   const slotPos = useMemo(() => (id: string) => {
     const i = slotIdx.get(id);
@@ -1067,9 +1155,18 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
   };
   const hoverSlot = (i: number | null) => {
     const ok = i != null && !!scene.slots[i] && slotIsOn(i);
-    setHover(ok ? i : null);
+    const next = ok ? i : null;
+    if (next !== hover) onHoverSlot?.(next);
+    setHover(next);
     document.body.style.cursor = ok ? 'pointer' : '';
   };
+  const rackOf = useMemo(() => (id: string) => rackById.get(id) ?? null, [rackById]);
+  const focusRack = focusRackId ? rackById.get(focusRackId) : undefined;
+  const picks = useMemo(() => {
+    if (!pickSlots?.length) return [];
+    const ids = new Set(pickSlots.map((p) => p.slotId));
+    return scene.slots.filter((s) => ids.has(s.slot.id) && s.slot.id !== selectedSlotId);
+  }, [pickSlots, scene, selectedSlotId]);
   useEffect(() => () => { document.body.style.cursor = ''; }, []);
 
   return (
@@ -1161,14 +1258,32 @@ function SceneContent({ scene, active, slotOn, colors, colorMode, envMode, roof,
 
       {hovered && hovered.slot.id !== selectedSlotId && <Outline s={hovered} color="#334155" />}
       {selected && <Highlight s={selected} />}
+      {picks.map((s) => <Highlight key={s.slot.id} s={s} />)}
+      {route && route.path.length > 1 && <RouteLine path={route.path} start={route.start} />}
+      {focusRack && <RackHighlight p={focusRack} />}
 
       <OrbitControls makeDefault enableDamping dampingFactor={0.12} screenSpacePanning={false}
         maxPolarAngle={MAX_POLAR} minDistance={2} maxDistance={maxDist} />
       <CameraRig apiRef={apiRef} homeBounds={homeBounds} fitBounds={fitBounds} fitKey={fitKey}
         focused={!!active && activeRacks.length > 0 && activeRacks.length < scene.racks.length} topInset={topInset}
-        floor={f} maxY={scene.bounds.maxY} slotPos={slotPos} selectedSlotId={selectedSlotId} rackOfSlot={rackOfSlot}
+        floor={f} maxY={scene.bounds.maxY} slotPos={slotPos} selectedSlotId={selectedSlotId} rackOfSlot={rackOfSlot} rackOf={rackOf}
         onCamera={onCamera} onUserCamera={onUserCamera} />
     </>
+  );
+}
+
+/** Small card over the slot under the pointer: code, rack, status, fill. */
+function HoverTag({ slot, rack }: { slot: PlacedSlot['slot']; rack: PlacedSlot['rack'] }) {
+  const { m, t } = useT();
+  const st = slotState3D(slot);
+  return (
+    <div className="whitespace-nowrap rounded-lg bg-slate-900/90 px-2.5 py-1 text-center text-white shadow-lg">
+      <p className="font-mono text-xs font-semibold leading-tight">{slot.code}</p>
+      <p className="flex items-center justify-center gap-1.5 text-[11px] leading-tight text-slate-200">
+        <span className={`h-1.5 w-1.5 rounded-full ${STATE_3D[st].dot}`} />
+        {m.layout3d.w3d.status[st]} · {slotUtil(slot)}% · {t(m.layout3d.view.rackN, { rack: rack.code })}
+      </p>
+    </div>
   );
 }
 
@@ -1190,6 +1305,12 @@ export interface Scene3DProps {
   /** Pixels at the top of the stage covered by floating overlays (filter bar, presets). */
   topInset?: number;
   selectedSlotId: string | null;
+  /** Rack in focus (one rack picked): drawn with a cyan-blue outline. */
+  focusRackId?: string | null;
+  /** PR8 Phase 4: slots of the chosen pick task, in pick order (cyan + a number tag each). */
+  pickSlots?: { slotId: string; n: number }[];
+  /** PR8 Phase 5: estimated walking route (floor x, z) and where it starts. */
+  route?: { path: [number, number][]; start: [number, number]; startLabel: string } | null;
   onSelectSlot: (slotId: string) => void;
   onSelectRack: (rackId: string) => void;
   /** A zone name on the floor was clicked: focus every rack in that zone. */
@@ -1203,13 +1324,24 @@ export interface Scene3DProps {
 }
 
 export default function WarehouseScene3D(props: Scene3DProps) {
-  const { scene, active, envMode, selectedSlotId, onSelectRack, onSelectZone, tooltip } = props;
+  const { scene, active, envMode, selectedSlotId, pickSlots, route, onSelectRack, onSelectZone, tooltip } = props;
   const { m, t, fmt } = useT();
   const L = m.layout3d.view, A = m.layout3d.w3d.area;
   const labelEls = useRef(new Map<string, HTMLElement>());
   const selected = selectedSlotId ? scene.slots.find((s) => s.slot.id === selectedSlotId) : undefined;
+  // Slot under the pointer (never the selected one: that has its own tag).
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+  const hoverRaw = hoverIdx != null ? scene.slots[hoverIdx] : undefined;
+  const hovered = hoverRaw && hoverRaw.slot.id !== selectedSlotId ? hoverRaw : undefined;
   const showFloor = envMode !== 'rack';
   const dims = showFloor ? dimensionSpots(scene.floor) : null;
+  // Pick order tags: one per slot (a slot holding two lines shows "1, 3").
+  const pickTags = useMemo(() => {
+    if (!pickSlots?.length) return [];
+    const byId = new Map<string, number[]>();
+    for (const p of pickSlots) byId.set(p.slotId, [...(byId.get(p.slotId) ?? []), p.n]);
+    return scene.slots.filter((s) => byId.has(s.slot.id)).map((s) => ({ s, ns: byId.get(s.slot.id)! }));
+  }, [pickSlots, scene]);
   // A zone is "on" while at least one of its racks is in the focus / filter.
   const zoneOn = (zone: string) => !active || scene.racks.some((p) => p.zone === zone && active.has(p.rack.id));
 
@@ -1231,8 +1363,11 @@ export default function WarehouseScene3D(props: Scene3DProps) {
       out.push({ key: `r:${p.rack.id}`, pos: [x, sg.y, z], lod: 'near', keep: !!active && active.has(p.rack.id) });
     }
     if (selected) out.push({ key: 'sel', pos: [selected.pos[0], selected.pos[1] + selected.size[1] * 0.55, selected.pos[2]] });
+    if (hovered) out.push({ key: 'hov', pos: [hovered.pos[0], hovered.pos[1] + hovered.size[1] * 0.55, hovered.pos[2]] });
+    for (const { s } of pickTags) out.push({ key: `pk:${s.slot.id}`, pos: [s.pos[0], s.pos[1] + s.size[1] * 0.5, s.pos[2]], keep: true });
+    if (route) out.push({ key: 'pk-start', pos: [route.start[0], 0.1, route.start[1]], keep: true });
     return out;
-  }, [scene, selected, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scene, selected, hovered, pickTags, route, showFloor, active, dims?.map((d) => d.key + d.pos.join()).join()]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reg = (key: string) => (el: HTMLElement | null) => {
     if (el) labelEls.current.set(key, el); else labelEls.current.delete(key);
@@ -1243,7 +1378,7 @@ export default function WarehouseScene3D(props: Scene3DProps) {
     <div className="absolute inset-0">
       <Canvas frameloop="demand" dpr={[1, 2]} shadows="percentage" camera={{ fov: FOV, near: 0.1, far: 3000, position: [-20, 30, 30] }}
         gl={{ antialias: true }} className="touch-none">
-        <SceneContent {...props} labels={labels} labelEls={labelEls} zoneNames={zoneNames} />
+        <SceneContent {...props} labels={labels} labelEls={labelEls} zoneNames={zoneNames} onHoverSlot={setHoverIdx} />
       </Canvas>
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -1289,6 +1424,25 @@ export default function WarehouseScene3D(props: Scene3DProps) {
         {selected && (
           <div ref={reg('sel')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`}>
             {tooltip}
+          </div>
+        )}
+        {pickTags.map(({ s, ns }) => (
+          <div key={s.slot.id} ref={reg(`pk:${s.slot.id}`)} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-1`}>
+            <span className="grid min-w-6 place-items-center rounded-full bg-cyan-500 px-1.5 py-0.5 text-xs font-bold tabular-nums text-white shadow-md ring-2 ring-white">
+              {ns.join(', ')}
+            </span>
+          </div>
+        ))}
+        {route && (
+          <div ref={reg('pk-start')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-1`}>
+            <span className="whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-cyan-800 shadow-md ring-1 ring-cyan-300">
+              {route.startLabel}
+            </span>
+          </div>
+        )}
+        {hovered && (
+          <div ref={reg('hov')} style={{ ['--ay' as string]: '-100%' }} className={`${place} pb-2`} role="tooltip">
+            <HoverTag slot={hovered.slot} rack={hovered.rack} />
           </div>
         )}
       </div>

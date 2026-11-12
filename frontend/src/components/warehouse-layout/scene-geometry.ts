@@ -43,23 +43,30 @@ const ZONE_GAP = 5;          // gap between the floor-plan racks and the auto la
 const AUTO_ZONE_GAP = 3;     // main aisle between auto-laid zone blocks
 export const FLOOR_MARGIN = 5; // floor around the racks
 
-// ─── Slot state (same rules as the Racks & slots tab) ──────────────────────────
+// ─── Slot state (Racks & slots tab rules + "reserved" from stock status) ───────
 
-export type SlotState3D = 'empty' | 'inUse' | 'full' | 'blocked';
+export type SlotState3D = 'empty' | 'inUse' | 'full' | 'reserved' | 'blocked';
 
+/**
+ * Blocked > Reserved > Full > In use > Available (decided with the user, PR8 Phase 3).
+ * Reserved = at least one stock row in the slot is reserved for an order.
+ */
 export const slotState3D = (s: SlotData): SlotState3D =>
-  isBlocked(s) ? 'blocked' : !isOccupied(s) ? 'empty' : slotUtil(s) >= 90 ? 'full' : 'inUse';
+  isBlocked(s) ? 'blocked'
+    : (s.reservedRows ?? 0) > 0 ? 'reserved'
+      : !isOccupied(s) ? 'empty' : slotUtil(s) >= 90 ? 'full' : 'inUse';
 
 // 3D status palette (reference design): green = available, blue = in use,
-// orange = full, red = blocked. Labels are translated in the UI
+// orange = full, violet = reserved, red = blocked. Labels are translated in the UI
 // (layout3d.w3d.status.<key>); `label` is the English fallback. The 2D tabs keep their own colours.
 export const STATE_3D: Record<SlotState3D, { label: string; color: string; swatch: string; pill: string; dot: string }> = {
   empty:   { label: 'Available', color: '#22c55e', swatch: 'bg-green-500 border-green-600', pill: 'bg-green-50 text-green-700 ring-1 ring-green-200',  dot: 'bg-green-500' },
   inUse:   { label: 'In use',    color: '#2563eb', swatch: 'bg-blue-600 border-blue-700',   pill: 'bg-blue-50 text-blue-700 ring-1 ring-blue-200',     dot: 'bg-blue-600' },
   full:    { label: 'Full',      color: '#f59e0b', swatch: 'bg-amber-500 border-amber-600', pill: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200',  dot: 'bg-amber-500' },
+  reserved: { label: 'Reserved', color: '#8b5cf6', swatch: 'bg-violet-500 border-violet-600', pill: 'bg-violet-50 text-violet-700 ring-1 ring-violet-200', dot: 'bg-violet-500' },
   blocked: { label: 'Blocked',   color: '#ef4444', swatch: 'bg-red-500 border-red-600',     pill: 'bg-red-50 text-red-700 ring-1 ring-red-200',        dot: 'bg-red-500' },
 };
-export const STATE_ORDER: SlotState3D[] = ['empty', 'inUse', 'full', 'blocked'];
+export const STATE_ORDER: SlotState3D[] = ['empty', 'inUse', 'full', 'reserved', 'blocked'];
 
 /** Fill % filter buckets (slotUtil = stock rows ÷ capacity, same rule as Racks & slots). */
 export type FillBucket = 'zero' | 'low' | 'mid' | 'high';
@@ -554,6 +561,7 @@ export const CARTON_TINT: Record<SlotState3D, string> = {
   empty: mixHex('#d8c09a', STATE_3D.empty.color, 0.38),
   inUse: mixHex('#d8c09a', STATE_3D.inUse.color, 0.38),
   full: mixHex('#d8c09a', STATE_3D.full.color, 0.38),
+  reserved: mixHex('#d8c09a', STATE_3D.reserved.color, 0.5),
   blocked: STATE_3D.blocked.color,
 };
 
@@ -562,6 +570,7 @@ export const DECK_STATUS: Record<SlotState3D, string> = {
   empty: mixHex(STATE_3D.empty.color, '#ffffff', 0.8),
   inUse: mixHex(STATE_3D.inUse.color, '#ffffff', 0.04),
   full: mixHex(STATE_3D.full.color, '#ffffff', 0.04),
+  reserved: mixHex(STATE_3D.reserved.color, '#ffffff', 0.04),
   blocked: mixHex(STATE_3D.blocked.color, '#ffffff', 0.55),
 };
 

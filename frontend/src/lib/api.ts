@@ -102,6 +102,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   throw lastErr instanceof Error ? lastErr : apiError(undefined);
 }
 
+// Server status (GET /health: liveness + database check, not rate limited)
+export interface HealthStatus { status: 'ok' | 'degraded'; database: 'up' | 'down'; uptime: number; timestamp: string }
+export const healthApi = {
+  get: () => request<HealthStatus>('/health'),
+};
+
 // Auth
 export const authApi = {
   login: (username: string, password: string) =>

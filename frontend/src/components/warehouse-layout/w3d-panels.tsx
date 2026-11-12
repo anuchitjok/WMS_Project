@@ -1,28 +1,26 @@
 'use client';
 
-// Panels around the 3D canvas: KPI cards, view-mode card, search + filter bar,
-// Location Details (Stock Info / History / Related) and the bottom summary.
+// Panels around the 3D canvas: view modes + area (used by the header in
+// w3d-tower.tsx), search + filter bar, Location Details (Stock Info / History / Related) and the bottom summary.
 // UI only: data arrives through props from warehouse-3d.tsx / use-w3d-data.ts.
 
-import Link from 'next/link';
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  Box, Boxes, CheckCircle2, Truck, Warehouse as WarehouseIcon, Columns3, Search, X, MapPin, Package, Loader2,
-  RotateCcw, Clock, Gauge, Crosshair, ExternalLink, History, Link2, AlertTriangle, Ruler,
+  Box, Warehouse as WarehouseIcon, Columns3, Search, X, MapPin, Package, Loader2,
+  RotateCcw, Clock, Gauge, Crosshair, ExternalLink, History, Link2, AlertTriangle,
 } from 'lucide-react';
 import { inventoryApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn, formatDate } from '@/lib/utils';
 import { getT, labelOf, useT } from '@/i18n';
-import { type WarehouseData, type RackData, type SlotData, type Metrics, slotItems, slotUtil } from './occupancy';
+import { type WarehouseData, type RackData, type SlotData, slotItems, slotUtil } from './occupancy';
 import { type SlotState3D, type EnvMode, STATE_3D, STATE_ORDER, slotState3D, NO_ZONE } from './scene-geometry';
 import { NOT_IN_LOCATION, type HistoryEntry, type RelatedSlot, type LoadState } from './use-w3d-data';
 import { floorAreaM2 } from './floor-geometry';
 
 export const ALL = '__all';
 const pad2 = (n: number) => String(n).padStart(2, '0');
-const pct1 = (n: number, total: number) => (total ? ((n / total) * 100).toFixed(1) : '0.0');
 const DAY = 86_400_000;
 
 export function StatusPill({ state, className }: { state: SlotState3D; className?: string }) {
@@ -42,39 +40,6 @@ function Meter({ value, tone = 'green' }: { value: number; tone?: 'green' | 'ora
   );
 }
 
-// ─── KPI cards ────────────────────────────────────────────────────────────────
-
-export function KpiCards({ metrics }: { metrics: Metrics }) {
-  const { m, t } = useT();
-  const K = m.layout3d.w3d.kpi;
-  const mt = metrics;
-  const ring = Math.min(100, mt.utilPct);
-  const cell = (icon: ReactNode, iconCls: string, label: string, value: string, sub: ReactNode) => (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <span className={cn('grid h-11 w-11 flex-shrink-0 place-items-center rounded-xl', iconCls)}>{icon}</span>
-      <div className="min-w-0">
-        <p className="text-xs text-slate-500">{label}</p>
-        <p className="text-2xl font-semibold leading-tight tabular-nums text-slate-900">{value}</p>
-        <p className="truncate text-xs text-slate-400">{sub}</p>
-      </div>
-    </div>
-  );
-  return (
-    <>
-      {cell(<Boxes className="h-6 w-6" />, 'bg-emerald-50 text-emerald-600', K.totalSlots, mt.total.toLocaleString(), K.totalSub)}
-      {cell(<Truck className="h-6 w-6" />, 'bg-blue-50 text-blue-600', K.inUse, mt.occupied.toLocaleString(), t(K.pctOfSlots, { pct: pct1(mt.occupied, mt.total) }))}
-      {cell(<CheckCircle2 className="h-6 w-6" />, 'bg-emerald-50 text-emerald-600', K.available, mt.available.toLocaleString(), t(K.pctOfSlots, { pct: pct1(mt.available, mt.total) }))}
-      {cell(
-        <span className="grid h-11 w-11 place-items-center rounded-full" style={{ background: `conic-gradient(#2563eb ${ring}%, #e5e7eb 0)` }}>
-          <span className="h-8 w-8 rounded-full bg-white" />
-        </span>,
-        '', K.occupancy, `${mt.utilPct}%`,
-        mt.blocked > 0 ? <span className="text-red-600">{t(K.blockedN, { n: mt.blocked })}</span> : t(K.pctOfSlots, { pct: pct1(mt.occupied, mt.total) }),
-      )}
-    </>
-  );
-}
-
 // ─── Warehouse area card (real size from Warehouse Master) ─────────────────────
 
 /**
@@ -89,68 +54,28 @@ export function warehouseArea(wh: Pick<WarehouseData, 'lengthCm' | 'widthCm' | '
   return { lengthM: l / 100, widthM: w / 100, areaM2: area, usableM2: (area * pct) / 100, pct };
 }
 
-export function WarehouseAreaCard({ wh }: { wh: WarehouseData }) {
-  const { m, t, fmt } = useT();
-  const K = m.layout3d.w3d.kpi;
-  const a = warehouseArea(wh);
-  return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <span className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-600"><Ruler className="h-6 w-6" /></span>
-      <div className="min-w-0">
-        <p className="truncate text-xs text-slate-500">
-          {a ? t(K.areaSize, { l: fmt.number(a.lengthM, 1), w: fmt.number(a.widthM, 1) }) : K.area}
-        </p>
-        {a ? (
-          <>
-            <p className="text-2xl font-semibold leading-tight tabular-nums text-slate-900">{t(K.areaValue, { value: fmt.number(a.areaM2, 0) })}</p>
-            <p className="truncate text-xs text-slate-400">{t(K.areaUsable, { value: fmt.number(a.usableM2, 0), pct: fmt.number(a.pct, 0) })}</p>
-          </>
-        ) : (
-          <>
-            <p className="text-base font-semibold leading-tight text-slate-400">{K.areaNotSet}</p>
-            <Link href="/warehouse-master" className="block break-words text-xs leading-snug text-emerald-700 underline-offset-2 hover:underline">{K.areaSetLink}</Link>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
+// ─── View modes (header switch) ───────────────────────────────────────────────
 
-// ─── View mode card ───────────────────────────────────────────────────────────
-
-const ENV_MODES: { id: EnvMode; icon: React.ElementType }[] = [
+export const ENV_MODES: { id: EnvMode; icon: React.ElementType }[] = [
   { id: 'open', icon: Box },
   { id: 'full', icon: WarehouseIcon },
   { id: 'rack', icon: Columns3 },
 ];
 
-export function ViewModeCard({ mode, onChange }: { mode: EnvMode; onChange: (m: EnvMode) => void }) {
-  const { m } = useT();
-  const V = m.layout3d.w3d.viewMode;
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-      <p className="px-2 pb-1 pt-0.5 text-xs text-slate-500">{V.title}</p>
-      <div className="flex flex-wrap gap-1 xl:flex-col" role="radiogroup" aria-label={V.aria}>
-        {ENV_MODES.map((x) => (
-          <button key={x.id} type="button" role="radio" aria-checked={mode === x.id} onClick={() => onChange(x.id)}
-            className={cn('flex flex-1 items-center gap-2 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-sm transition-colors',
-              mode === x.id ? 'bg-emerald-50 font-semibold text-emerald-700' : 'text-slate-700 hover:bg-slate-50')}>
-            <x.icon className={cn('h-4 w-4', mode === x.id ? 'text-emerald-600' : 'text-slate-400')} /> {V[x.id]}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ─── Search: location code (local), SKU / serial (existing /inventory search) ──
 
-interface SearchHit { key: string; slotId: string; title: string; sub: string; kind: 'location' | 'stock' }
+type SearchHit = { key: string; title: string; sub: string } & (
+  | { kind: 'location' | 'stock'; slotId: string }
+  | { kind: 'rack'; rackId: string }
+);
 
-function SlotSearch({ warehouseId, slots, onPick }: {
+function SlotSearch({ warehouseId, slots, racks, onPick, onPickRack }: {
   warehouseId: string;
   slots: Map<string, { slot: SlotData; rack: RackData }>;
+  racks: RackData[];
   onPick: (slotId: string) => void;
+  onPickRack: (rackId: string) => void;
 }) {
   const { m, t } = useT();
   const S = m.layout3d.search, V = m.layout3d.view, W = m.layout3d.w3d;
@@ -160,6 +85,19 @@ function SlotSearch({ warehouseId, slots, onPick }: {
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
   const boxRef = useRef<HTMLDivElement>(null);
   const term = q.trim();
+
+  // Rack codes first (PR8 Phase 2): an exact code on top, then codes that contain the term.
+  const rackHits = useMemo<SearchHit[]>(() => {
+    if (!term) return [];
+    const needle = term.toLowerCase();
+    return racks
+      .filter((r) => r.code.toLowerCase().includes(needle))
+      .sort((a, b) => Number(b.code.toLowerCase() === needle) - Number(a.code.toLowerCase() === needle)
+        || a.code.localeCompare(b.code, undefined, { numeric: true }))
+      .slice(0, 5)
+      .map((r) => ({ key: `r:${r.id}`, rackId: r.id, kind: 'rack' as const, title: r.code,
+        sub: [S.rackHit, r.zone ? t(V.zoneN, { zone: r.zone }) : '', t(S.rackSlots, { n: (r.slots ?? []).length })].filter(Boolean).join(' · ') }));
+  }, [term, racks, t, S, V]);
 
   const locations = useMemo<SearchHit[]>(() => {
     if (!term) return [];
@@ -211,8 +149,11 @@ function SlotSearch({ warehouseId, slots, onPick }: {
     return () => document.removeEventListener('mousedown', close);
   }, []);
 
-  const hits = [...locations, ...stock];
-  const pick = (h: SearchHit) => { onPick(h.slotId); setOpen(false); };
+  const hits = [...rackHits, ...locations, ...stock];
+  const pick = (h: SearchHit) => {
+    if (h.kind === 'rack') onPickRack(h.rackId); else onPick(h.slotId);
+    setOpen(false);
+  };
 
   return (
     <div ref={boxRef} className="relative min-w-0 flex-[1.6_1_16rem]">
@@ -240,7 +181,9 @@ function SlotSearch({ warehouseId, slots, onPick }: {
           {hits.map((h) => (
             <button key={h.key} type="button" onClick={() => pick(h)}
               className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-emerald-50">
-              {h.kind === 'location'
+              {h.kind === 'rack'
+                ? <Columns3 className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-600" />
+                : h.kind === 'location'
                 ? <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
                 : <Package className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />}
               <span className="min-w-0">
@@ -291,12 +234,15 @@ function FilterSelect({ label, value, onChange, options, render, width = 'flex-[
   );
 }
 
-export function FilterBar({ warehouses, wh, onWarehouse, slots, zones, zoneRacks, filters, onFilters, onPickSlot, onReset }: {
+export function FilterBar({ warehouses, wh, onWarehouse, slots, racks, zones, zoneRacks, filters, onFilters, onPickSlot, onPickRack, onReset }: {
   warehouses: WarehouseData[]; wh: WarehouseData; onWarehouse: (id: string) => void;
   slots: Map<string, { slot: SlotData; rack: RackData }>;
   zones: string[]; zoneRacks: RackData[];
   filters: Filters; onFilters: (f: Filters) => void;
   onPickSlot: (slotId: string) => void; onReset: () => void;
+  /** Every rack of the warehouse, for rack-code search. */
+  racks: RackData[];
+  onPickRack: (rackId: string) => void;
 }) {
   const { m, t } = useT();
   const F = m.layout3d.w3d.filters, V = m.layout3d.view, W = m.layout3d.w3d;
@@ -307,7 +253,7 @@ export function FilterBar({ warehouses, wh, onWarehouse, slots, zones, zoneRacks
 
   return (
     <div className="flex flex-wrap items-stretch gap-2">
-      <SlotSearch warehouseId={wh.id} slots={slots} onPick={onPickSlot} />
+      <SlotSearch warehouseId={wh.id} slots={slots} racks={racks} onPick={onPickSlot} onPickRack={onPickRack} />
       <FilterSelect label={F.warehouse} value={wh.id} onChange={(v) => v !== ALL && onWarehouse(v)} render={whLabel}
         options={warehouses.map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }))} width="flex-[1_1_10rem]" />
       <FilterSelect label={F.zone} value={filters.zone} render={zoneLabel}
@@ -357,7 +303,7 @@ export function summarizeSlot(slot: SlotData, detail: any): SlotStock {
 }
 
 export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageState, tab, onTab, history, related, slotCode,
-  onRetry, onClose, onFocusSlot, onFocusRack, onViewStock, onGoSlot }: {
+  onRetry, onClose, onFocusSlot, onFocusRack, onViewStock, onGoSlot, onOpenRack }: {
   wh: WarehouseData; rack: RackData | null; slot: SlotData | null;
   detail: any; detailState: 'idle' | 'loading' | 'error';
   age: { days: number; oldest: string } | null; ageState: LoadState;
@@ -367,6 +313,8 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
   slotCode: (slotId: string) => string | null;
   onRetry: () => void; onClose: () => void; onFocusSlot: () => void; onFocusRack: () => void;
   onViewStock: (slotId: string) => void; onGoSlot: (slotId: string) => void;
+  /** Back to the rack panel of this slot's rack. */
+  onOpenRack?: () => void;
 }) {
   const { m, t } = useT();
   const D = m.layout3d.w3d.details;
@@ -491,7 +439,10 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
       <dl className="space-y-1.5 px-4 py-3">
         <DRow k={D.warehouse} v={wh.code} />
         <DRow k={D.zone} v={rack?.zone || '—'} />
-        <DRow k={D.rack} v={rack?.code ?? '—'} />
+        <DRow k={D.rack} v={rack && onOpenRack ? (
+          <button type="button" onClick={onOpenRack} title={m.layout3d.w3d.rackPanel.open}
+            className="font-mono text-blue-700 underline-offset-2 hover:underline">{rack.code}</button>
+        ) : rack?.code ?? '—'} />
         <DRow k={D.level} v={pad2(slot.level)} />
         <DRow k={D.slot} v={pad2(slot.column)} />
       </dl>
@@ -513,6 +464,9 @@ export function LocationDetails({ wh, rack, slot, detail, detailState, age, ageS
             <DRow k={D.product} v={s.first?.product?.name ?? dash} />
             <DRow k={D.stockQty} v={loading ? '…' : `${s.qty.toLocaleString()}${more ? '+' : ''} ${s.first?.product?.unit ?? D.pcs}`} />
             <DRow k={D.capacity} v={t(D.capacityValue, { rows, capacity: slot.capacity })} />
+            {(slot.reservedRows ?? 0) > 0 && (
+              <DRow k={D.reserved} v={<span className="text-violet-700">{t(D.reservedValue, { rows: slot.reservedRows ?? 0, qty: (slot.reservedQty ?? 0).toLocaleString() })}</span>} />
+            )}
             <DRow k={D.occupancy} v={<span className="block"><span className="tabular-nums">{util}%</span><span className="mt-1 block"><Meter value={util} tone={util >= 90 ? 'orange' : 'green'} /></span></span>} />
             <DRow k={D.stockAge} v={age ? t(D.ageDays, { days: age.days }) : ageState === 'loading' ? D.ageLoading : '—'} />
             <DRow k={D.lastMove} v={s.lastMove ? formatDate(s.lastMove) : dash} />
