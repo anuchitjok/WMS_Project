@@ -141,6 +141,10 @@ export function PickLocationDialog({ requestId, refNumber, onClose, onApproved }
     return { sum, left: round(Math.max(0, l.quantity - sum)), ok: Math.abs(sum - l.quantity) <= EPS, notFifo };
   };
   const allOk = (data?.lines ?? []).every((l) => !choosing(l) || lineState(l).ok);
+  /** Everything the listed locations hold for this line. */
+  const availableOf = (l: Line) => round(l.options.reduce((s, o) => s + o.quantity, 0));
+  /** The listed locations cannot cover this line (and the list is not cut short). */
+  const tooLittle = (l: Line) => !l.more && availableOf(l) + EPS < l.quantity;
 
   /** Set how much to take from one location (clamped to what it has and what is still needed). */
   const setSpot = (l: Line, s: Spot, want: number) => {
@@ -222,7 +226,7 @@ export function PickLocationDialog({ requestId, refNumber, onClose, onApproved }
                           const active = (mode[l.itemId] ?? 'fifo') === v;
                           return (
                             <button key={v} type="button" role="radio" aria-checked={active}
-                              disabled={busy || (v === 'choose' && (!data.canPick || !l.options.length))}
+                              disabled={busy || (v === 'choose' && (!data.canPick || !l.options.length || tooLittle(l)))}
                               onClick={() => setMode((x) => ({ ...x, [l.itemId]: v }))}
                               className={cn('px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
                                 active ? 'bg-green-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50')}>
@@ -232,6 +236,12 @@ export function PickLocationDialog({ requestId, refNumber, onClose, onApproved }
                         })}
                       </div>
                     </div>
+
+                    {tooLittle(l) && (
+                      <p className="border-t border-slate-100 px-4 py-2 text-xs text-amber-700">
+                        {t(P.notEnough, { have: fmt.number(availableOf(l)), need: fmt.number(l.quantity) })}
+                      </p>
+                    )}
 
                     {on && (
                       <div className="space-y-2 border-t border-slate-100 px-3 py-3 sm:px-4">

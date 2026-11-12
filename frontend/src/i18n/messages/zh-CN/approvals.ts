@@ -101,6 +101,7 @@ export const approvals: Messages['approvals'] = {
     oneWarehouse: '所选库位必须在同一仓库（{wh}）。',
     otherWarehouse: '其他仓库',
     noOptions: '此物料没有可供选择的可用库存。',
+    notEnough: '所有库位合计仅 {have}，少于申请的 {need} — 需等到货后才能批准此项。',
     more: '仅显示最早的 {n} 行。',
     approve: '批准',
     approving: '正在批准…',

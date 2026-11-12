@@ -652,8 +652,10 @@ export class RequestsService {
             `;
             if (rows.length === 0) {
               // Throwing aborts the transaction → previously reserved rows revert
+              const p = (item as { product?: { code?: string | null; name?: string | null } }).product;
+              const which = [p?.code, p?.name].filter(Boolean).join(' · ') || item.productId;
               throw new BadRequestException(
-                `Insufficient available stock for product ${item.productId} (requested ${need}, available ${covered})`,
+                `Insufficient available stock for ${which} (requested ${need}, available ${covered})`,
               );
             }
             const row = rows[0];

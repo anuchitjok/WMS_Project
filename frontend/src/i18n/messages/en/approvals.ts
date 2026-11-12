@@ -99,6 +99,7 @@ export const approvals = {
     oneWarehouse: 'All chosen locations must be in one warehouse ({wh}).',
     otherWarehouse: 'Other warehouse',
     noOptions: 'No available stock you can choose for this item.',
+    notEnough: 'Only {have} available in all locations, less than the {need} requested — this item cannot be approved until more stock is received.',
     more: 'Showing the oldest {n} rows only.',
     approve: 'Approve',
     approving: 'Approving…',
