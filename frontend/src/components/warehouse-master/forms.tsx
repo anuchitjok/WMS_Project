@@ -1,7 +1,7 @@
 'use client';
 
 // Create/edit forms for warehouses and racks, and the rack delete dialog.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -9,9 +9,9 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseMasterApi } from '@/lib/api';
 import { warehouseSpaceApi, RACK_CATEGORIES, type RackCategory, type RackTypeMaster } from '@/lib/api-warehouse';
-import { labelOf, useT } from '@/i18n';
+import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { Field, ModalWrap, isPos, optNum, rackCategoryOf, selectClass } from './shared';
+import { Field, ModalWrap, isPos, optNum, rackCategoryOf } from './shared';
 import { type SizeCm, type SizeWarning, rackSizeWarnings, warehouseSizeWarnings, rackBiggerThanWarehouse } from './size-rules';
 import { FloorShapeField, initialShapeState, shapeResult, shapeTemplate, type ShapeState } from './floor-shape-field';
 import { outlineFromTemplate, validateOutline, normalizeOutline, polygonArea, type Pt } from '@/components/warehouse-layout/floor-geometry';
@@ -43,12 +43,14 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
   const { m, t, fmt } = useT();
   const w = m.warehouseMaster.form;
   const [form, setForm] = useState({
-    code: data?.code ?? '', name: data?.name ?? '', location: data?.location ?? '',
+    name: data?.name ?? '', location: data?.location ?? '',
     // Typed in metres (people think of a warehouse in m); stored in cm as before.
     lengthM: cmToMStr(data?.lengthCm), widthM: cmToMStr(data?.widthCm), heightM: cmToMStr(data?.heightCm),
     usableAreaPct: data ? str(data.usableAreaPct ?? 100) : '100',
   });
   const [busy, setBusy] = useState(false);
+  // The API owns the warehouse code; this is only what it would generate for the name typed so far.
+  const [codePreview, setCodePreview] = useState<string | null>(null);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
   // F2 floor shape. A saved shape not made by this form (CUSTOM) is kept as is.
   const [shape, setShape] = useState<ShapeState>(() => initialShapeState(data?.floorOutline));
@@ -64,9 +66,22 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
     ? t(w.computed, { area: fmt.number(area), usable: fmt.number((area * Math.min(100, Math.max(0, P))) / 100), volume: H && H > 0 ? fmt.number(area * H) : '—' })
     : w.computedNone;
 
+  useEffect(() => {
+    if (mode !== 'create') return;
+    const name = form.name.trim();
+    if (!name) { setCodePreview(null); return; }
+    let dropped = false;
+    const id = setTimeout(() => {
+      warehouseSpaceApi.previewWarehouseCode(name)
+        .then((r) => { if (!dropped) setCodePreview(r.preview); })
+        .catch(() => { if (!dropped) setCodePreview(null); });
+    }, 300);
+    return () => { dropped = true; clearTimeout(id); };
+  }, [form.name, mode]);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if ((mode === 'create' && !form.code.trim()) || !form.name.trim()) return toast.error(w.required);
+    if (!form.name.trim()) return toast.error(w.required);
     if (![L, W, H].every(isPos)) return toast.error(w.positive);
     const pctRaw = optNum(form.usableAreaPct);
     if (pctRaw !== undefined && !(pctRaw > 0 && pctRaw <= 100)) return toast.error(w.pctRange);
@@ -83,7 +98,7 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
     else if (shape.shape === 'CUSTOM') { delete sizes.lengthCm; delete sizes.widthCm; }
     setBusy(true);
     try {
-      if (mode === 'create') await warehouseSpaceApi.createWarehouse({ code: form.code.trim(), name: form.name.trim(), location: form.location.trim() || undefined, ...sizes });
+      if (mode === 'create') await warehouseSpaceApi.createWarehouse({ name: form.name.trim(), location: form.location.trim() || undefined, ...sizes });
       else await warehouseSpaceApi.updateWarehouse(data.id, { name: form.name.trim(), location: form.location.trim() || null, ...sizes });
       toast.success(mode === 'create' ? w.warehouseCreated : w.warehouseUpdated);
       onSaved();
@@ -93,8 +108,14 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
   return (
     <ModalWrap title={mode === 'create' ? w.createWarehouse : t(w.editWarehouse, { code: data?.code })} onClose={onClose} widthClass="max-w-lg">
       <form onSubmit={submit} className="space-y-3">
-        {mode === 'create' && <Field label={`${w.code} *`} hint={w.codeHint}><Input autoFocus placeholder="WH-A" value={form.code} onChange={F('code')} /></Field>}
-        <Field label={`${w.name} *`}><Input autoFocus={mode !== 'create'} value={form.name} onChange={F('name')} /></Field>
+        <Field label={`${w.name} *`}><Input autoFocus value={form.name} onChange={F('name')} /></Field>
+        <Field label={w.code} hint={mode === 'create' ? w.codeAutoHint : w.codeFixedHint}>
+          <div className="flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 font-mono text-sm text-slate-700" aria-readonly="true">
+            {mode === 'create'
+              ? (codePreview ?? <span className="font-sans text-slate-400">{w.codePreviewEmpty}</span>)
+              : data?.code}
+          </div>
+        </Field>
         <Field label={w.location}><Input value={form.location} onChange={F('location')} /></Field>
         <div>
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{w.sizeSectionM}</p>
@@ -130,11 +151,17 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   const { m, t, fmt } = useT();
   const w = m.warehouseMaster.form;
   const prefill = prefillTemplateId ? rackTypes.find((r) => r.id === prefillTemplateId) : undefined;
+  // The rack type is not picked here any more — Category is the one control. An
+  // existing link still fills the size and grid, so editing never loses them.
+  const linked = (data?.rackTypeMaster ?? undefined) as RackTypeMaster | undefined;
+  const linkedType = linked ?? prefill;
   const [form, setForm] = useState(() => ({
     code: data?.code ?? '', name: data?.name ?? '', zone: data?.zone ?? '', description: data?.description ?? '',
     rackTypeId: (data?.rackTypeId ?? prefill?.id ?? '') as string,
     category: (prefill?.category ?? (data ? rackCategoryOf(data) : 'STANDARD_RACK')) as RackCategory,
-    lengthCm: str(data?.lengthCm ?? prefill?.lengthCm), widthCm: str(data?.widthCm ?? prefill?.widthCm), heightCm: str(data?.heightCm ?? prefill?.heightCm),
+    lengthCm: str(data?.lengthCm ?? prefill?.lengthCm ?? data?.rackTypeMaster?.lengthCm),
+    widthCm: str(data?.widthCm ?? prefill?.widthCm ?? data?.rackTypeMaster?.widthCm),
+    heightCm: str(data?.heightCm ?? prefill?.heightCm ?? data?.rackTypeMaster?.heightCm),
     levels: str(data?.levels ?? prefill?.levels ?? 1), columns: str(data?.columns ?? prefill?.columns ?? 1),
   }));
   // Only send the category when the user changes it, so editing other fields
@@ -143,23 +170,10 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm({ ...form, [k]: e.target.value });
 
-  const options = useMemo(() => rackTypes.filter((r) => r.isActive || r.id === form.rackTypeId), [rackTypes, form.rackTypeId]);
   const preview = rackPreview(form, form.category === 'PALLET_ON_FLOOR');
-  const template = rackTypes.find((r) => r.id === form.rackTypeId);
   const sizeNow: SizeCm = { lengthCm: optNum(form.lengthCm), widthCm: optNum(form.widthCm), heightCm: optNum(form.heightCm) };
   const bigger = warehouse && rackBiggerThanWarehouse(sizeNow, warehouse) && warehouse.lengthCm && warehouse.widthCm
     ? { l: warehouse.lengthCm / 100, w: warehouse.widthCm / 100 } : null;
-
-  function chooseTemplate(id: string) {
-    setTypeTouched(true);
-    const tpl = rackTypes.find((r) => r.id === id);
-    if (!tpl) return setForm({ ...form, rackTypeId: '' });
-    setForm({
-      ...form, rackTypeId: tpl.id, category: tpl.category,
-      lengthCm: String(tpl.lengthCm), widthCm: String(tpl.widthCm), heightCm: String(tpl.heightCm),
-      levels: String(tpl.levels), columns: String(tpl.columns),
-    });
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -173,7 +187,11 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
       name: form.name.trim() || blank, zone: form.zone.trim() || blank, description: form.description.trim() || blank,
       levels, columns, lengthCm: L ?? blank, widthCm: W ?? blank, heightCm: H ?? blank,
     };
-    if (typeTouched) { payload.rackTypeId = form.rackTypeId || null; payload.category = form.category; }
+    if (typeTouched) {
+      // A rack keeps its rack-type link only while the chosen category still matches it.
+      payload.rackTypeId = form.rackTypeId && linkedType?.category === form.category ? form.rackTypeId : null;
+      payload.category = form.category;
+    }
     setBusy(true);
     try {
       if (mode === 'create') await warehouseSpaceApi.createRack({ warehouseId, code: form.code.trim(), ...payload });
@@ -186,28 +204,24 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   return (
     <ModalWrap title={mode === 'create' ? w.createRack : t(w.editRack, { code: data?.code })} onClose={onClose} widthClass="max-w-xl">
       <form onSubmit={submit} className="space-y-4">
-        <Field label={w.rackType} hint={w.rackTypeHint}>
-          <select className={selectClass} value={form.rackTypeId} onChange={(e) => chooseTemplate(e.target.value)}>
-            <option value="">{w.noRackType}</option>
-            {options.map((r) => (
-              <option key={r.id} value={r.id}>{r.code} · {r.name} ({labelOf(m.warehouseMaster.category, r.category)})</option>
-            ))}
-          </select>
-        </Field>
         <Field label={w.category}>
           <div className="grid grid-cols-2 gap-2">
             {RACK_CATEGORIES.map((c) => (
-              <button key={c} type="button" disabled={!!template}
+              <button key={c} type="button"
                 onClick={() => { setTypeTouched(true); setForm({ ...form, category: c, levels: c === 'PALLET_ON_FLOOR' ? '1' : form.levels }); }}
-                className={cn('rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed',
-                  form.category === c ? 'border-green-500 bg-green-50 ring-1 ring-green-500' : 'border-slate-200 hover:border-slate-300',
-                  template && form.category !== c && 'opacity-50')}>
+                className={cn('rounded-lg border px-3 py-2 text-left transition-colors',
+                  form.category === c ? 'border-green-500 bg-green-50 ring-1 ring-green-500' : 'border-slate-200 hover:border-slate-300')}>
                 <span className="block text-sm font-medium text-slate-800">{m.warehouseMaster.category[c]}</span>
                 <span className="block text-xs text-slate-500">{m.warehouseMaster.categoryHint[c]}</span>
               </button>
             ))}
           </div>
         </Field>
+        {linkedType && (
+          <p className="-mt-2 text-xs text-slate-500">
+            {t(w.rackTypeLinked, { type: `${linkedType.code} · ${linkedType.name}` })}
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-3">
           {mode === 'create' && <Field label={`${w.code} *`}><Input autoFocus placeholder="A01" value={form.code} onChange={F('code')} /></Field>}
           <Field label={w.name}><Input value={form.name} onChange={F('name')} /></Field>

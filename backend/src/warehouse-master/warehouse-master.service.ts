@@ -14,6 +14,7 @@ import type {
 } from './warehouse-master.dto';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 import { bbox, normalizeOutline, validateOutline, type FloorOutline, type Pt, type ShapeKind } from './floor-geometry';
+import { generateWarehouseCode, warehouseSlug } from './warehouse-code';
 
 // Stock statuses that count as "active inventory" occupying a location.
 const ACTIVE_STOCK = ['AVAILABLE', 'RESERVED', 'PICKED', 'QUARANTINE', 'PENDING_INSPECTION', 'RTV_PENDING'] as const;
@@ -23,6 +24,14 @@ const STOCK_NOW = { status: { notIn: NOT_IN_LOCATION } } satisfies Prisma.StockI
 /** A live slot with nothing in it now - the guard on every slot delete write. */
 const DELETABLE = { isDeleted: false, stockItems: { none: STOCK_NOW } } satisfies Prisma.SlotWhereInput;
 const slotDeleted = (userId: string) => ({ isActive: false, isDeleted: true, deletedAt: new Date(), deletedBy: userId });
+
+/** How many times a warehouse create recounts the running number after a collision. */
+const CODE_ATTEMPTS = 5;
+
+/** True for "a row with this Warehouse.code already exists" (the unique index fired). */
+function isDuplicateCode(e: unknown): boolean {
+  return e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
+}
 
 /** Racks the setup wizard creates in one go (zones × racks, slots from the Rack Type grid). */
 export interface SetupRacksResult {
@@ -357,21 +366,51 @@ export class WarehouseMasterService {
   }
 
   // ── Warehouse ─────────────────────────────────────────────────────────────────
+  /**
+   * What the code WOULD be for this name right now — for the create form only.
+   * The number can move before the user saves, so the real code is the one the create
+   * transaction writes.
+   */
+  async previewWarehouseCode(name: string): Promise<{ name: string; slug: string; preview: string }> {
+    const taken = await this.prisma.warehouse.findMany({ select: { code: true } });
+    const clean = String(name ?? '').trim();
+    return { name: clean, slug: warehouseSlug(clean), preview: generateWarehouseCode(clean, taken.map((w) => w.code)) };
+  }
+
+  /**
+   * The code is generated here and nowhere else (WH-<NAME SLUG>-<RUNNING NUMBER>).
+   * Two users creating a warehouse at the same moment are serialised by an advisory
+   * lock inside the transaction; the unique index on Warehouse.code plus this retry are
+   * the net if the lock is unavailable. Anything a caller sends as `code` is ignored.
+   */
   async createWarehouse(dto: CreateWarehouseDto, userId: string) {
-    if (!dto.code?.trim()) throw new ConflictException('Warehouse code is required');
     if (!dto.name?.trim()) throw new ConflictException('Warehouse name is required');
-    const code = dto.code.trim();
-    const exists = await this.prisma.warehouse.findUnique({ where: { code } });
-    if (exists) throw new ConflictException(`Warehouse code "${code}" already exists`);
+    const name = dto.name.trim();
     const shape = dto.floorOutline ? prepareOutline(dto.floorOutline) : null;
-    const wh = await this.prisma.warehouse.create({
-      data: {
-        code, name: dto.name.trim(), location: trimOrNull(dto.location),
-        ...pick(dto, [...SIZE_KEYS, 'usableAreaPct'] as const),
-        // A shape sets length × width to its outer box, so every old screen still has a size.
-        ...(shape ? { floorOutline: shape.outline as unknown as Prisma.InputJsonValue, lengthCm: shape.lengthCm, widthCm: shape.widthCm } : {}),
-      },
-    });
+    const data = {
+      name, location: trimOrNull(dto.location),
+      ...pick(dto, [...SIZE_KEYS, 'usableAreaPct'] as const),
+      // A shape sets length × width to its outer box, so every old screen still has a size.
+      ...(shape ? { floorOutline: shape.outline as unknown as Prisma.InputJsonValue, lengthCm: shape.lengthCm, widthCm: shape.widthCm } : {}),
+    };
+
+    let wh: { id: string; code: string } | null = null;
+    for (let attempt = 0; attempt < CODE_ATTEMPTS && !wh; attempt++) {
+      try {
+        wh = await this.prisma.$transaction(async (tx) => {
+          // One writer at a time decides the next number (Postgres advisory lock, released with the tx).
+          await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext('warehouse_code'))`);
+          // Every code, soft-deleted rows included, so a running number is never reused.
+          const taken = await tx.warehouse.findMany({ select: { code: true } });
+          const code = generateWarehouseCode(name, taken.map((w) => w.code));
+          return tx.warehouse.create({ data: { code, ...data } });
+        });
+      } catch (e) {
+        if (isDuplicateCode(e) && attempt < CODE_ATTEMPTS - 1) continue; // someone took it first — recount
+        throw e;
+      }
+    }
+    if (!wh) throw new ConflictException('Could not generate a warehouse code, please try again');
     await this.audit(userId, 'WAREHOUSE_CREATED', 'Warehouse', wh.id, null, wh);
     return wh;
   }

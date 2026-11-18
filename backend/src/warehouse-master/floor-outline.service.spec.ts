@@ -12,14 +12,18 @@ const L_SHAPE = outlineFromTemplate({ shape: 'L', length: 40, width: 30, cutLeng
 
 function makeSvc(before: any = null) {
   const prisma: any = {
+    // createWarehouse generates the code inside a transaction (see warehouse-code.ts).
+    $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     warehouse: {
       findUnique: jest.fn().mockResolvedValue(null),
       findFirst: jest.fn().mockResolvedValue(before),
+      findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn((a) => ({ id: 'w1', ...a.data })),
       update: jest.fn((a) => ({ ...before, ...a.data })),
     },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
+  prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
   return { prisma, svc: new WarehouseMasterService(prisma) };
 }
 
@@ -58,7 +62,7 @@ describe('prepareOutline', () => {
 describe('createWarehouse / updateWarehouse with a floor shape', () => {
   it('create stores the cleaned shape and sets length × width from it', async () => {
     const { prisma, svc } = makeSvc();
-    await svc.createWarehouse({ code: 'WL', name: 'L', lengthCm: 1, widthCm: 1, floorOutline: L_SHAPE as any }, 'u1');
+    await svc.createWarehouse({ name: 'L', lengthCm: 1, widthCm: 1, floorOutline: L_SHAPE as any }, 'u1');
     const data = prisma.warehouse.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ lengthCm: 4000, widthCm: 3000 });
     expect(data.floorOutline.points).toHaveLength(6);
@@ -66,13 +70,13 @@ describe('createWarehouse / updateWarehouse with a floor shape', () => {
 
   it('create without a shape is unchanged (no floorOutline written)', async () => {
     const { prisma, svc } = makeSvc();
-    await svc.createWarehouse({ code: 'WR', name: 'R', lengthCm: 2000, widthCm: 1000 }, 'u1');
+    await svc.createWarehouse({ name: 'R', lengthCm: 2000, widthCm: 1000 }, 'u1');
     expect(prisma.warehouse.create.mock.calls[0][0].data.floorOutline).toBeUndefined();
   });
 
   it('create with a broken shape writes nothing', async () => {
     const { prisma, svc } = makeSvc();
-    await expect(svc.createWarehouse({ code: 'WX', name: 'X', floorOutline: { points: [[0, 0], [1, 0]] } }, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(svc.createWarehouse({ name: 'X', floorOutline: { points: [[0, 0], [1, 0]] } }, 'u1')).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.warehouse.create).not.toHaveBeenCalled();
   });
 

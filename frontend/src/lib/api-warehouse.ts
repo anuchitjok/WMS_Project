@@ -202,6 +202,9 @@ export const warehouseSpaceApi = {
     request<CapacityPlan>(`/warehouse-master/space-planner?warehouseId=${encodeURIComponent(warehouseId)}&rackTypeId=${encodeURIComponent(rackTypeId)}`),
   simulate: (input: SimulateInput) => request<SimulationResult>('/warehouse-master/space-simulate', json('POST', input)),
 
+  /** Read-only: the code a warehouse with this name would get. The real code is set by the API on create. */
+  previewWarehouseCode: (name: string) =>
+    request<{ name: string; slug: string; preview: string }>(`/warehouse-master/warehouses/code-preview?name=${encodeURIComponent(name)}`),
   createWarehouse: (dto: Record<string, unknown>) => request<any>('/warehouse-master/warehouses', json('POST', dto)),
   updateWarehouse: (id: string, dto: Record<string, unknown>) => request<any>(`/warehouse-master/warehouses/${id}`, json('PATCH', dto)),
   createRack: (dto: Record<string, unknown>) => request<any>('/warehouse-master/racks', json('POST', dto)),
