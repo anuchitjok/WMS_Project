@@ -23,6 +23,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { ReceivingModule } from './receiving/receiving.module';
 import { PutawayModule } from './putaway/putaway.module';
+import { ContainersModule } from './containers/containers.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { RmaModule } from './rma/rma.module';
 import { DoaModule } from './doa/doa.module';
@@ -73,6 +74,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     RealtimeModule,
     ReceivingModule,
     PutawayModule,
+    ContainersModule,
     FulfillmentModule,
     RmaModule,
     DoaModule,
