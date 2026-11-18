@@ -12,7 +12,20 @@ import { warehouseSpaceApi, type BulkDeleteSlotsResult, type GenerateSlotsResult
 import { labelOf, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
+import { LengthInput, LengthUnitPicker, useLengthUnit } from '@/components/ui/length-input';
+import { formatLength, lengthUnitLabel } from '@/lib/length';
 import { Fact, Field, Pill, SLOT_STATUSES, SLOT_STATUS_STYLE, SLOT_TYPES, isPos, optNum, rackCategoryOf, selectClass } from './shared';
+
+/**
+ * "2.5 x 1 x 2.5 m" - stored centimetres shown in the unit the user picked (RQ1).
+ * Rack size and slot size share it so the two can never disagree about the unit.
+ */
+function Dims({ l, w, h }: { l?: number | null; w?: number | null; h?: number | null }) {
+  const { fmt } = useT();
+  const unit = useLengthUnit();
+  const n = (v?: number | null) => (v === null || v === undefined ? '—' : formatLength(v, unit, { withUnit: false, format: fmt.number }));
+  return <>{n(l)} × {n(w)} × {n(h)} {lengthUnitLabel(unit)}</>;
+}
 
 export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, onChanged }: {
   rack: any; warehouse: any; canEditLayout: boolean; onEdit: () => void; onDelete: () => void; onChanged: () => Promise<void> | void;
@@ -84,13 +97,13 @@ export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, o
           <Fact label={wm.rack.template}>{rack.rackTypeMaster ? `${rack.rackTypeMaster.code} · ${rack.rackTypeMaster.name}` : <span className="text-slate-500 font-normal">{wm.rack.noTemplate}</span>}</Fact>
           <Fact label={wm.rack.size}>
             {size.lengthCm != null && size.widthCm != null
-              ? <>{fmt.number(size.lengthCm)} × {fmt.number(size.widthCm)} × {size.heightCm != null ? fmt.number(size.heightCm) : '—'} cm{fromTemplate && <span className="block text-xs text-slate-500 font-normal">{wm.rack.sizeFromTemplate}</span>}</>
+              ? <><Dims l={size.lengthCm} w={size.widthCm} h={size.heightCm} />{fromTemplate && <span className="block text-xs text-slate-500 font-normal">{wm.rack.sizeFromTemplate}</span>}</>
               : <span className="text-slate-500 font-normal">{wm.warehouse.sizeUnknown}</span>}
           </Fact>
           <Fact label={wm.rack.grid}>{rack.levels} × {rack.columns} = {rack.levels * rack.columns}</Fact>
           <Fact label={wm.rack.slotSize}>
             {ss?.lengthCm != null && ss?.widthCm != null
-              ? <>{fmt.number(ss.lengthCm)} × {fmt.number(ss.widthCm)} × {ss.heightCm != null ? fmt.number(ss.heightCm) : '—'} cm
+              ? <><Dims l={ss.lengthCm} w={ss.widthCm} h={ss.heightCm} />
                   <span className="block text-xs text-slate-500 font-normal">{t(m.space.unit.m2, { value: fmt.number(ss.areaM2, 3) })}{ss.volumeM3 != null ? ` · ${t(m.space.unit.m3, { value: fmt.number(ss.volumeM3, 3) })}` : ''}</span></>
               : <span className="text-slate-500 font-normal text-xs">{wm.rack.slotSizeUnknown}</span>}
           </Fact>
@@ -333,7 +346,10 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
   const sl = m.warehouseMaster.slot;
   const [form, setForm] = useState({
     name: slot.name ?? '', slotType: slot.slotType ?? 'STANDARD', capacity: s2(slot.capacity), maxWeight: s2(slot.maxWeight),
-    lengthCm: s2(slot.lengthCm), widthCm: s2(slot.widthCm), heightCm: s2(slot.heightCm),
+  });
+  // Centimetres, as stored; <LengthInput> shows them in the user's unit (RQ1).
+  const [size, setSize] = useState<{ lengthCm?: number; widthCm?: number; heightCm?: number }>({
+    lengthCm: slot.lengthCm ?? undefined, widthCm: slot.widthCm ?? undefined, heightCm: slot.heightCm ?? undefined,
   });
   const [busy, setBusy] = useState(false);
   const [confirmDel, setConfirmDel] = useState(false);
@@ -342,7 +358,7 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    const L = optNum(form.lengthCm), W = optNum(form.widthCm), H = optNum(form.heightCm);
+    const { lengthCm: L, widthCm: W, heightCm: H } = size;
     if (![L, W, H].every(isPos)) return toast.error(m.warehouseMaster.form.positive);
     const cap = Number(form.capacity || 0);
     const mw = optNum(form.maxWeight);
@@ -373,6 +389,7 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-semibold text-slate-900">{t(sl.editTitle, { code: slot.code })}</h4>
         <div className="flex items-center gap-2 text-xs text-slate-500">
+          <LengthUnitPicker />
           <span>{t(sl.positionValue, { level: slot.level, column: slot.column })}</span>
           <Pill>{labelOf(m.warehouseMaster.slotStatus, slot.status)}</Pill>
           <span>{sl.stock}: {stock}</span>
@@ -386,9 +403,9 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
           </select>
         </Field>
         <Field label={sl.capacity}><Input type="number" min={0} value={form.capacity} onChange={F('capacity')} /></Field>
-        <Field label={sl.length}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
-        <Field label={sl.width}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
-        <Field label={sl.height}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
+        <Field label={sl.length}><LengthInput value={size.lengthCm} onChange={(cm) => setSize((s) => ({ ...s, lengthCm: cm }))} /></Field>
+        <Field label={sl.width}><LengthInput value={size.widthCm} onChange={(cm) => setSize((s) => ({ ...s, widthCm: cm }))} /></Field>
+        <Field label={sl.height}><LengthInput value={size.heightCm} onChange={(cm) => setSize((s) => ({ ...s, heightCm: cm }))} /></Field>
         <Field label={sl.maxWeight}><Input type="number" min={0} step="any" value={form.maxWeight} onChange={F('maxWeight')} /></Field>
       </fieldset>
       {canEdit && (
@@ -483,7 +500,9 @@ function BulkDelete({ ids, onDone }: { ids: string[]; onDone: () => Promise<void
 function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<void> | void }) {
   const { m, t } = useT();
   const sl = m.warehouseMaster.slot;
-  const [form, setForm] = useState({ slotType: '', capacity: '', maxWeight: '', lengthCm: '', widthCm: '', heightCm: '' });
+  const [form, setForm] = useState({ slotType: '', capacity: '', maxWeight: '' });
+  // Blank keeps what each slot already has; a number is centimetres, as stored (RQ1).
+  const [size, setSize] = useState<{ lengthCm?: number; widthCm?: number; heightCm?: number }>({});
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
 
@@ -496,7 +515,7 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
     const mw = optNum(form.maxWeight);
     if (mw !== undefined) { if (!(mw >= 0)) return toast.error(m.warehouseMaster.form.positive); changes.maxWeight = mw; }
     for (const k of ['lengthCm', 'widthCm', 'heightCm'] as const) {
-      const v = optNum(form[k]);
+      const v = size[k];
       if (v !== undefined) { if (!isPos(v)) return toast.error(m.warehouseMaster.form.positive); changes[k] = v; }
     }
     if (!Object.keys(changes).length) return;
@@ -504,14 +523,18 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
     try {
       const r = await warehouseSpaceApi.bulkUpdateSlots(ids, changes);
       toast.success(t(sl.bulkSaved, { count: r.updated }));
-      setForm({ slotType: '', capacity: '', maxWeight: '', lengthCm: '', widthCm: '', heightCm: '' });
+      setForm({ slotType: '', capacity: '', maxWeight: '' });
+      setSize({});
       await onSaved();
     } catch (err: any) { toast.error(err.message); } finally { setBusy(false); }
   }
 
   return (
     <form onSubmit={save} className="mt-4 rounded-lg border border-green-200 bg-green-50/30 p-4 space-y-3">
-      <h4 className="text-sm font-semibold text-slate-900">{t(sl.bulkTitle, { count: ids.length })}</h4>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold text-slate-900">{t(sl.bulkTitle, { count: ids.length })}</h4>
+        <LengthUnitPicker />
+      </div>
       <p className="text-sm text-slate-500">{sl.bulkHint}</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Field label={sl.type}>
@@ -522,9 +545,9 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
         </Field>
         <Field label={sl.capacity}><Input type="number" min={0} placeholder={sl.keep} value={form.capacity} onChange={F('capacity')} /></Field>
         <Field label={sl.maxWeight}><Input type="number" min={0} step="any" placeholder={sl.keep} value={form.maxWeight} onChange={F('maxWeight')} /></Field>
-        <Field label={sl.length}><Input type="number" min={0} step="any" placeholder={sl.keep} value={form.lengthCm} onChange={F('lengthCm')} /></Field>
-        <Field label={sl.width}><Input type="number" min={0} step="any" placeholder={sl.keep} value={form.widthCm} onChange={F('widthCm')} /></Field>
-        <Field label={sl.height}><Input type="number" min={0} step="any" placeholder={sl.keep} value={form.heightCm} onChange={F('heightCm')} /></Field>
+        <Field label={sl.length}><LengthInput value={size.lengthCm} onChange={(cm) => setSize((s) => ({ ...s, lengthCm: cm }))} /></Field>
+        <Field label={sl.width}><LengthInput value={size.widthCm} onChange={(cm) => setSize((s) => ({ ...s, widthCm: cm }))} /></Field>
+        <Field label={sl.height}><LengthInput value={size.heightCm} onChange={(cm) => setSize((s) => ({ ...s, heightCm: cm }))} /></Field>
       </div>
       <div className="flex justify-end">
         <Button type="submit" size="sm" className="bg-green-600 hover:bg-green-700 text-white" disabled={busy}>{busy ? m.common.actions.saving : m.common.actions.save}</Button>

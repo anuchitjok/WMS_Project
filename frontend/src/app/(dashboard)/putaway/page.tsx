@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { LengthInput, LengthUnitPicker } from '@/components/ui/length-input';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { hasUnsavedChanges } from '@/lib/utils';
 import { useT } from '@/i18n';
@@ -19,6 +20,9 @@ import { useT } from '@/i18n';
 type FitResult = Awaited<ReturnType<typeof putawayApi.fitCheck>> | null;
 
 const BLANK_BOX_FORM = { length: '', width: '', height: '' };
+
+/** Box-size text (centimetres, as the fit check expects) -> a number for <LengthInput>. */
+const cmOf = (v: string) => (v === '' || !Number.isFinite(Number(v)) ? undefined : Number(v));
 const BLANK_LOC = { warehouseId: '', rackId: '', slotId: '' };
 type Loc = typeof BLANK_LOC;
 const SELECT_CLS = 'h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm disabled:bg-slate-50 disabled:text-slate-400';
@@ -148,11 +152,15 @@ export default function PutawayPage() {
             </div>
 
             <div>
-              <Label className="text-xs mb-1 block">{P.boxSize}</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label className="text-xs mb-1 block">{P.boxSize}</Label>
+                <LengthUnitPicker />
+              </div>
               <div className="grid grid-cols-3 gap-2">
-                <Input type="number" min={0} placeholder={P.length} value={box.length} onChange={(e) => { setBox((f) => ({ ...f, length: e.target.value })); setFit(null); }} />
-                <Input type="number" min={0} placeholder={P.width} value={box.width} onChange={(e) => { setBox((f) => ({ ...f, width: e.target.value })); setFit(null); }} />
-                <Input type="number" min={0} placeholder={P.height} value={box.height} onChange={(e) => { setBox((f) => ({ ...f, height: e.target.value })); setFit(null); }} />
+                {/* Centimetres, as the fit check expects; shown in the user's unit (RQ1). */}
+                <LengthInput aria-label={P.length} value={cmOf(box.length)} onChange={(cm) => { setBox((f) => ({ ...f, length: cm === undefined ? '' : String(cm) })); setFit(null); }} />
+                <LengthInput aria-label={P.width} value={cmOf(box.width)} onChange={(cm) => { setBox((f) => ({ ...f, width: cm === undefined ? '' : String(cm) })); setFit(null); }} />
+                <LengthInput aria-label={P.height} value={cmOf(box.height)} onChange={(cm) => { setBox((f) => ({ ...f, height: cm === undefined ? '' : String(cm) })); setFit(null); }} />
               </div>
             </div>
 

@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseSpaceApi, type CapacityPlan, type RackTypeMaster, type WarehouseSpaceSummary } from '@/lib/api-warehouse';
 import { getT, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { useLengthUnit } from '@/components/ui/length-input';
+import { formatLength, lengthUnitLabel } from '@/lib/length';
 import { Fact, Pill, rackCategoryOf, selectClass } from './shared';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
 import { SetupHealthCard } from '@/components/warehouse-layout/setup-health-card';
@@ -26,10 +28,13 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
   onSelectRack: (rackId: string) => void;
 }) {
   const { m, t, fmt } = useT();
+  const unit = useLengthUnit();
   const wm = m.warehouseMaster;
   const sp = m.space;
   const m2 = (v: number | null | undefined, dp = 1) => (v == null ? '—' : t(sp.unit.m2, { value: fmt.number(v, dp) }));
-  const cmToM = (v: number | null | undefined) => (v == null ? '—' : fmt.number(v / 100, 2));
+  // Stored centimetres shown in the unit the user picked (RQ1) — no private conversion.
+  const len = (v: number | null | undefined) =>
+    (v == null ? '—' : formatLength(v, unit, { withUnit: false, format: fmt.number }));
   const w = warehouse;
   const hasSize = w.lengthCm != null && w.widthCm != null;
 
@@ -75,7 +80,7 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
           <Ruler className="w-4 h-4 text-slate-400 mt-0.5" />
           {hasSize ? (
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1">
-              <Fact label={wm.warehouse.dimensions}>{cmToM(w.lengthCm)} × {cmToM(w.widthCm)} × {cmToM(w.heightCm)} m</Fact>
+              <Fact label={wm.warehouse.dimensions}>{len(w.lengthCm)} × {len(w.widthCm)} × {len(w.heightCm)} {lengthUnitLabel(unit)}</Fact>
               <Fact label={sp.summary.totalArea}>{m2(space?.totalAreaM2)}</Fact>
               <Fact label={sp.summary.usableArea}>{m2(space?.usableAreaM2)} <span className="text-xs text-slate-500">({t(sp.summary.usablePct, { pct: fmt.number(space?.dimensions.usableAreaPct ?? w.usableAreaPct ?? 100) })})</span></Fact>
               <Fact label={sp.summary.volume}>{space?.volumeM3 == null ? '—' : t(sp.unit.m3, { value: fmt.number(space.volumeM3, 1) })}</Fact>

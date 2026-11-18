@@ -14,6 +14,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DiscardChangesDialog } from '@/components/ui/discard-changes-dialog';
+import { LengthInput, LengthUnitPicker } from '@/components/ui/length-input';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { cn, hasUnsavedChanges } from '@/lib/utils';
 import { getT, labelOf, useT } from '@/i18n';
@@ -140,6 +141,18 @@ export function ProductFormDialog({ open, product, brands, onBrandCreated, onClo
   const numInput = (k: keyof Form, extra?: string) => (
     <Input type="number" min={0} inputMode="decimal" value={form[k] as string} onChange={onText(k)} className={extra} />
   );
+
+  /** A size field: centimetres in the form, shown in the unit the user picked (RQ1). */
+  const lenInput = (k: 'lengthCm' | 'widthCm' | 'heightCm') => {
+    const raw = form[k] as string;
+    const cm = raw === '' ? undefined : Number(raw);
+    return (
+      <LengthInput
+        value={Number.isFinite(cm as number) ? (cm as number) : undefined}
+        onChange={(v) => set(k, v === undefined ? '' : String(v))}
+      />
+    );
+  };
 
   return (
     <>
@@ -275,11 +288,14 @@ export function ProductFormDialog({ open, product, brands, onBrandCreated, onClo
                   <div className="space-y-1"><Label htmlFor="pf-vpn">{F.vendorPart}</Label><Input id="pf-vpn" value={form.vendorPartNumber} onChange={onText('vendorPartNumber')} /><Hint>{F.vendorPartHint}</Hint></div>
                   <div className="space-y-1"><Label>{F.minStock}</Label>{numInput('minStock')}<Hint>{F.minStockHint}</Hint></div>
                   <div className="space-y-1">
-                    <Label>{F.boxSize}</Label>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label>{F.boxSize}</Label>
+                      <LengthUnitPicker />
+                    </div>
                     <div className="grid grid-cols-3 gap-2">
                       {(['lengthCm', 'widthCm', 'heightCm'] as const).map((k, i) => (
                         <div key={k} className="space-y-0.5">
-                          {numInput(k)}
+                          {lenInput(k)}
                           <p className="text-xs text-slate-500 text-center">{[F.length, F.width, F.height][i]}</p>
                         </div>
                       ))}

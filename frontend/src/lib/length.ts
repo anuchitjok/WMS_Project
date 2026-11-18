@@ -37,11 +37,12 @@ export const LENGTH_UNITS: readonly LengthUnit[] = ['m', 'cm', 'mm'] as const;
 /**
  * The unit a user sees until they pick another one.
  *
- * Centimetres, because that is what is stored: what you type is what is saved,
- * with no conversion in between. Switching to metres is one click and is
- * remembered for every size field afterwards.
+ * Metres: the standard the owner set for the whole WMS (RQ1). Storage stays in
+ * centimetres and nothing in the database is converted — 4000 cm on file is
+ * shown and edited as 40 m, the same physical warehouse as before. A user who
+ * prefers cm or mm picks it once and it is remembered for every size field.
  */
-export const DEFAULT_LENGTH_UNIT: LengthUnit = 'cm';
+export const DEFAULT_LENGTH_UNIT: LengthUnit = 'm';
 
 /** Centimetres in one of each unit. */
 const CM_PER_UNIT: Record<LengthUnit, number> = { m: 100, cm: 1, mm: 0.1 };
