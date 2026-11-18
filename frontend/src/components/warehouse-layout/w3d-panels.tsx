@@ -216,9 +216,11 @@ export const NO_FILTERS: Filters = { zone: ALL, rackId: ALL, status: ALL, fill: 
 /** Where filter dropdowns open. The stage passes itself while fullscreen, since body is not shown then. */
 export const PopupContainer = createContext<HTMLElement | null>(null);
 
-function FilterSelect({ label, value, onChange, options, render, width = 'flex-[1_1_8.5rem]' }: {
+function FilterSelect({ label, value, onChange, options, render, width = 'flex-[1_1_8.5rem]', roomy }: {
   label: string; value: string; onChange: (v: string) => void;
   options: { value: string; label: string }[]; render: (v: string) => string; width?: string;
+  /** Long option labels (warehouse code + name): let the list be wider than the box instead of cutting the text off. */
+  roomy?: boolean;
 }) {
   const container = useContext(PopupContainer);
   return (
@@ -228,7 +230,8 @@ function FilterSelect({ label, value, onChange, options, render, width = 'flex-[
         <SelectTrigger aria-label={label} className="h-8 w-full border-0 bg-transparent px-0 text-sm font-medium shadow-none focus-visible:ring-0">
           <SelectValue>{(v: string) => render(v)}</SelectValue>
         </SelectTrigger>
-        <SelectContent container={container ?? undefined}>
+        <SelectContent container={container ?? undefined}
+          className={cn(roomy && 'w-auto min-w-(--anchor-width) max-w-[min(30rem,calc(100vw-2rem))]')}>
           {options.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
         </SelectContent>
       </Select>
@@ -256,7 +259,7 @@ export function FilterBar({ warehouses, wh, onWarehouse, slots, racks, zones, zo
   return (
     <div className="flex flex-wrap items-stretch gap-2">
       <SlotSearch warehouseId={wh.id} slots={slots} racks={racks} onPick={onPickSlot} onPickRack={onPickRack} />
-      <FilterSelect label={F.warehouse} value={wh.id} onChange={(v) => v !== ALL && onWarehouse(v)} render={whLabel}
+      <FilterSelect label={F.warehouse} value={wh.id} onChange={(v) => v !== ALL && onWarehouse(v)} render={whLabel} roomy
         options={warehouses.map((w) => ({ value: w.id, label: `${w.code} · ${w.name}` }))} width="flex-[1_1_10rem]" />
       <FilterSelect label={F.zone} value={filters.zone} render={zoneLabel}
         onChange={(v) => onFilters({ ...filters, zone: v, rackId: ALL })}
