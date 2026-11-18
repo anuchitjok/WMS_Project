@@ -3,7 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { StockStatus } from '@prisma/client';
 import { boxFitsSlot } from './putaway-fit.util';
+import { suggestSlots, type SlotCandidate } from './putaway-suggest';
 import { LocationInput, resolveLocation, transitionStock } from '../common/stock-state';
+import { NOT_IN_LOCATION } from '../common/stock-presence';
 import { ScopePrincipal, assertWarehouseAccess, scopedWarehouseIds } from '../common/warehouse-scope';
 
 @Injectable()
@@ -37,6 +39,86 @@ export class PutawayService {
       slot: { id: slot.id, code: slot.code, lengthCm: slot.lengthCm, widthCm: slot.widthCm, heightCm: slot.heightCm },
       occupied: slot._count.stockItems,
       capacity: slot.capacity,
+    };
+  }
+
+  /**
+   * RQ15 — what this quantity needs, and where it could go.
+   *
+   * Read-only. It ranks slots the person may use and says plainly when a size
+   * is missing instead of guessing one: a product with no dimensions still gets
+   * suggestions, ordered by free space alone, with `hasProductSize: false`.
+   *
+   * Scope: only warehouses the caller may use. By default the search stays in
+   * the item's own warehouse (or the one passed in) — a putaway is a walk
+   * across one building, not a transfer.
+   */
+  async suggestions(stockItemId: string, opts: { warehouseId?: string; limit?: number } = {}, scope?: ScopePrincipal) {
+    const item = await this.prisma.stockItem.findFirst({
+      where: { id: stockItemId },
+      include: { product: { select: { id: true, code: true, name: true, lengthCm: true, widthCm: true, heightCm: true } } },
+    });
+    if (!item) throw new NotFoundException('Stock item not found');
+
+    const warehouseId = opts.warehouseId || item.warehouseId || undefined;
+    if (warehouseId) assertWarehouseAccess(scope, warehouseId, 'warehouse');
+    const allowed = scopedWarehouseIds(scope);
+
+    const slots = await this.prisma.slot.findMany({
+      where: {
+        isDeleted: false,
+        isActive: true,
+        rack: {
+          isDeleted: false,
+          isActive: true,
+          ...(warehouseId ? { warehouseId } : allowed ? { warehouseId: { in: allowed } } : {}),
+          warehouse: { isDeleted: false, isActive: true },
+        },
+      },
+      select: {
+        id: true, code: true, status: true, capacity: true,
+        lengthCm: true, widthCm: true, heightCm: true,
+        rack: { select: { id: true, code: true, zone: true, warehouseId: true, warehouse: { select: { code: true } } } },
+        stockItems: { where: { status: { notIn: NOT_IN_LOCATION } }, select: { productId: true } },
+      },
+      take: 500, // a putaway screen never needs more; the ranking keeps the best
+    });
+
+    const candidates: SlotCandidate[] = slots.map((s) => ({
+      slotId: s.id,
+      slotCode: s.code,
+      rackId: s.rack.id,
+      rackCode: s.rack.code,
+      zone: s.rack.zone,
+      warehouseId: s.rack.warehouseId,
+      warehouseCode: s.rack.warehouse.code,
+      status: s.status,
+      capacity: s.capacity,
+      used: s.stockItems.length,
+      lengthCm: s.lengthCm,
+      widthCm: s.widthCm,
+      heightCm: s.heightCm,
+      holdsSameProduct: s.stockItems.some((x) => x.productId === item.productId),
+    }));
+
+    const result = suggestSlots(
+      item.quantity,
+      { lengthCm: item.product?.lengthCm ?? null, widthCm: item.product?.widthCm ?? null, heightCm: item.product?.heightCm ?? null },
+      candidates,
+      opts.limit ?? 8,
+    );
+
+    return {
+      item: {
+        id: item.id,
+        quantity: item.quantity,
+        productCode: item.product?.code ?? null,
+        productName: item.product?.name ?? null,
+        box: { lengthCm: item.product?.lengthCm ?? null, widthCm: item.product?.widthCm ?? null, heightCm: item.product?.heightCm ?? null },
+      },
+      warehouseId: warehouseId ?? null,
+      slotsConsidered: candidates.length,
+      ...result,
     };
   }
 

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { MapPin, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
-import { putawayApi, warehouseApi } from '@/lib/api';
+import { putawayApi, warehouseApi, type PutawaySuggestion, type PutawaySuggestions } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,9 @@ export default function PutawayPage() {
   // the location recorded at receiving, and changeable here.
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loc, setLoc] = useState<Loc>(BLANK_LOC);
+  // RQ15/RQ21: where this quantity could go, worked out by the server.
+  const [sug, setSug] = useState<PutawaySuggestions | null>(null);
+  const [sugLoading, setSugLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +60,20 @@ export default function PutawayPage() {
     setBox(BLANK_BOX_FORM);
     setFit(null);
     setLoc({ warehouseId: item.warehouseId ?? '', rackId: item.rackId ?? '', slotId: item.slotId ?? '' });
+    // Suggestions are advisory: a failure here must never stop someone putting
+    // stock away, so the list simply stays empty.
+    setSug(null);
+    setSugLoading(true);
+    putawayApi.suggestions(item.id, item.warehouseId ?? undefined)
+      .then((r) => setSug(r))
+      .catch(() => setSug(null))
+      .finally(() => setSugLoading(false));
+  }
+
+  /** Take a suggestion: it carries the whole Warehouse -> Rack -> Slot path. */
+  function useSuggestion(s: PutawaySuggestion) {
+    setLoc({ warehouseId: s.warehouseId, rackId: s.rackId, slotId: s.slotId });
+    setFit(null);
   }
 
   function changeLoc(next: Partial<Loc>) {
@@ -123,6 +140,63 @@ export default function PutawayPage() {
             <DialogTitle>{t(P.dialogTitle, { code: target?.product?.code ?? '' })}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            {/* RQ15 + RQ21 — the room this needs, and where it fits. Advisory: the
+                three selects below still accept any live slot. */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <Label className="text-xs font-semibold text-slate-700">{P.suggest.title}</Label>
+                {sug && sug.hasProductSize && sug.need.totalVolumeM3 != null && (
+                  <span className="text-xs text-slate-500">
+                    {t(P.suggest.needs, {
+                      qty: sug.need.quantity,
+                      l: sug.item.box.lengthCm ?? '—', w: sug.item.box.widthCm ?? '—', h: sug.item.box.heightCm ?? '—',
+                      volume: sug.need.totalVolumeM3.toFixed(3),
+                    })}
+                  </span>
+                )}
+              </div>
+
+              {sugLoading && <p className="mt-2 text-xs text-slate-500">{P.suggest.loading}</p>}
+
+              {!sugLoading && sug && !sug.hasProductSize && (
+                <p className="mt-1 text-xs text-amber-700">{P.suggest.noProductSize}</p>
+              )}
+
+              {!sugLoading && sug && sug.suggestions.length === 0 && (
+                <p className="mt-2 text-xs text-amber-700">{P.suggest.none}</p>
+              )}
+
+              {!sugLoading && sug && sug.suggestions.length > 0 && (
+                <ul className="mt-2 space-y-1.5">
+                  {sug.suggestions.slice(0, 5).map((x) => {
+                    const chosen = loc.slotId === x.slotId;
+                    return (
+                      <li key={x.slotId}
+                        className={`flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-2.5 py-1.5 text-xs ${chosen ? 'border-green-300 bg-green-50' : 'border-slate-200 bg-white'}`}>
+                        <span className="font-mono font-medium text-slate-800">{x.slotCode}</span>
+                        <span className="text-slate-400">{[x.rackCode, x.zone].filter(Boolean).join(' · ')}</span>
+                        <span className="text-slate-500">{t(P.suggest.free, { free: x.free, capacity: x.capacity })}</span>
+                        {x.holdsSameProduct && <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">{P.suggest.sameProduct}</span>}
+                        {x.fits === true && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{P.suggest.fits}{x.unitsBySize ? ` · ${t(P.suggest.holdsUnits, { n: x.unitsBySize })}` : ''}</span>}
+                        {x.fits === null && <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">{P.suggest.sizeUnknown}</span>}
+                        <Button type="button" size="sm" variant={chosen ? 'default' : 'outline'}
+                          className={`ml-auto h-6 px-2 text-[11px] ${chosen ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-white'}`}
+                          onClick={() => useSuggestion(x)}>
+                          {P.suggest.use}
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {!sugLoading && sug && (sug.skipped.full + sug.skipped.blocked + sug.skipped.tooSmall) > 0 && (
+                <p className="mt-1.5 text-[11px] text-slate-400">
+                  {t(P.suggest.skipped, { full: sug.skipped.full, blocked: sug.skipped.blocked, tooSmall: sug.skipped.tooSmall })}
+                </p>
+              )}
+            </div>
+
             <div>
               <Label className="text-xs mb-1 block">{P.destination}</Label>
               <div className="grid grid-cols-3 gap-2">

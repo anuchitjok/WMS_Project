@@ -1,6 +1,21 @@
 import type { Messages } from '../en';
 
 export const putaway: Messages['putaway'] = {
+  suggest: {
+    title: '建议存放位置',
+    loading: '正在查找空间…',
+    none: '该仓库没有放得下的库位。请先腾出空间，或在下方自行选择。',
+    needs: '本次上架：{qty} × {l}×{w}×{h} 厘米，共约 {volume} 立方米。',
+    noProductSize: '该商品未记录尺寸，因此仅按空余位置排序。',
+    free: '空余 {free} / {capacity}',
+    sameProduct: '已存放该商品',
+    fits: '尺寸放得下',
+    sizeUnknown: '库位尺寸未知',
+    holdsUnits: '约可放 {n}',
+    use: '使用',
+    skipped: '未显示：已满 {full}，封锁 {blocked}，放不下 {tooSmall}。',
+    manual: '或自行选择位置',
+  },
   title: '上架管理',
   subtitle: '分配库位并确认存放',
   table: {

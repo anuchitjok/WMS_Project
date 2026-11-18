@@ -661,8 +661,34 @@ export const receivingApi = {
 };
 
 // Putaway
+/** RQ15 — one place the item could go, with the reason it is being offered. */
+export interface PutawaySuggestion {
+  slotId: string; slotCode: string; rackId: string; rackCode: string; zone: string | null;
+  warehouseId: string; warehouseCode: string;
+  capacity: number; used: number; free: number;
+  /** true / false by size, or null when the product or the slot has no size. */
+  fits: boolean | null;
+  unitsBySize: number | null;
+  holdsSameProduct: boolean;
+  reason: 'SAME_PRODUCT' | 'EMPTY' | 'HAS_ROOM';
+}
+
+export interface PutawaySuggestions {
+  item: { id: string; quantity: number; productCode: string | null; productName: string | null;
+          box: { lengthCm: number | null; widthCm: number | null; heightCm: number | null } };
+  warehouseId: string | null;
+  slotsConsidered: number;
+  hasProductSize: boolean;
+  need: { quantity: number; unitVolumeM3: number | null; totalVolumeM3: number | null; unitFootprintM2: number | null };
+  suggestions: PutawaySuggestion[];
+  skipped: { full: number; blocked: number; tooSmall: number };
+}
+
 export const putawayApi = {
   pending: () => request<any[]>('/putaway/pending'),
+  /** RQ15: room this quantity needs + the slots that suit it. Read only. */
+  suggestions: (stockItemId: string, warehouseId?: string) =>
+    request<PutawaySuggestions>(`/putaway/${stockItemId}/suggestions${warehouseId ? `?warehouseId=${encodeURIComponent(warehouseId)}` : ''}`),
   confirm: (stockItemId: string, loc: { warehouseId?: string; rackId?: string; slotId?: string }) =>
     request<any>(`/putaway/${stockItemId}/confirm`, { method: 'PATCH', body: JSON.stringify(loc) }),
   fitCheck: (slotId: string, box: { length: number; width: number; height: number }) =>

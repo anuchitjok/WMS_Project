@@ -1,5 +1,5 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { PutawayService } from './putaway.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -28,6 +28,22 @@ export class PutawayController {
   @Roles(UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER, UserRole.WAREHOUSE_SUPERVISOR, UserRole.WAREHOUSE_STAFF)
   fitCheck(@Body() body: { slotId: string; length: number; width: number; height: number }) {
     return this.service.checkFit(body.slotId, { length: body.length, width: body.width, height: body.height });
+  }
+
+  @Get(':stockItemId/suggestions')
+  @ApiOperation({ summary: 'RQ15: room this quantity needs, and the slots that suit it (read only)' })
+  suggestions(
+    @Param('stockItemId') stockItemId: string,
+    @Query('warehouseId') warehouseId: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    const n = Number(limit);
+    return this.service.suggestions(
+      stockItemId,
+      { warehouseId: warehouseId || undefined, limit: Number.isFinite(n) && n > 0 ? Math.min(50, Math.trunc(n)) : undefined },
+      user,
+    );
   }
 
   @Patch(':stockItemId/confirm')
