@@ -456,6 +456,9 @@ export interface LayoutObject {
   updatedAt: string;
 }
 
+/** RQ13 — where a floor plan is in its approval. */
+export type LayoutStatus = 'DRAFT' | 'PENDING' | 'PUBLISHED';
+
 export interface WarehouseLayout {
   id: string;
   warehouseId: string;
@@ -470,6 +473,23 @@ export interface WarehouseLayout {
   metersPerUnit?: number | null;
   floorOriginX?: number | null;
   floorOriginZ?: number | null;
+  /** RQ13 lifecycle. DRAFT until the plan has been through an approval. */
+  status?: LayoutStatus;
+  submittedAt?: string | null;
+  submittedById?: string | null;
+  publishedAt?: string | null;
+  publishedById?: string | null;
+  rejectedReason?: string | null;
+}
+
+/** RQ13 — the approval chain for a plan (the shared engine, entityType 'WarehouseLayout'). */
+export interface LayoutApproval {
+  id: string;
+  status: string; // PENDING | APPROVED | REJECTED | CANCELLED | ESCALATED
+  requestedById?: string | null;
+  completedById?: string | null;
+  completedAt?: string | null;
+  steps?: { stepOrder: number; stepName: string; status: string; actorName?: string | null; decidedAt?: string | null; notes?: string | null }[];
 }
 
 /** F6: one rack's position from the 3D arrange mode (metres; rotation 0/90/180/270). */
@@ -479,6 +499,8 @@ export interface LayoutResponse {
   warehouse: { id: string; code: string; name: string; isActive: boolean };
   layout: WarehouseLayout | null; // null = this warehouse has no layout yet
   objects: LayoutObject[];
+  /** RQ13: the latest approval chain, or null before the plan is first sent. */
+  approval?: LayoutApproval | null;
 }
 
 export const layoutApi = {
@@ -489,6 +511,14 @@ export const layoutApi = {
   /** F6: back to auto layout — removes the rack drawings 3D created. */
   resetRackPositions: (warehouseId: string, version: number) =>
     request<{ layout: WarehouseLayout; objects: LayoutObject[]; removed: number; kept: number }>(`/warehouse-layout/${warehouseId}/rack-positions/reset`, { method: 'POST', body: JSON.stringify({ version }) }),
+  /** RQ13: send the plan for approval (DRAFT -> PENDING). It is frozen while it waits. */
+  submitPlan: (warehouseId: string) =>
+    request<{ layout: WarehouseLayout; approval: LayoutApproval }>(`/warehouse-layout/${warehouseId}/submit`, { method: 'POST' }),
+  /** RQ13: approve the plan (-> PUBLISHED) or send it back (-> DRAFT). Never the person who sent it. */
+  decidePlan: (warehouseId: string, approved: boolean, notes?: string) =>
+    request<{ layout: WarehouseLayout; approval: LayoutApproval }>(`/warehouse-layout/${warehouseId}/decision`, {
+      method: 'POST', body: JSON.stringify({ approved, notes }),
+    }),
   create: (warehouseId: string, dto: Partial<WarehouseLayout> = {}) =>
     request<WarehouseLayout>(`/warehouse-layout/${warehouseId}`, { method: 'POST', body: JSON.stringify(dto) }),
   updateCanvas: (layoutId: string, dto: Partial<WarehouseLayout>) =>

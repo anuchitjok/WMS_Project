@@ -301,3 +301,14 @@ export class ResetRackPositionsDto {
   @IsInt() @Min(0)
   version: number;
 }
+
+/** RQ13 — approve a plan, or send it back with a reason. */
+export class LayoutDecisionDto {
+  @ApiProperty({ description: 'true approves the plan, false sends it back to the people drawing it' })
+  @IsBoolean()
+  approved: boolean;
+
+  @ApiPropertyOptional({ description: 'Why. Shown on the plan after it is sent back.' })
+  @IsOptional() @IsString() @MaxLength(500)
+  notes?: string;
+}

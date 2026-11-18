@@ -3,6 +3,20 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import { LayoutObjectType } from '@prisma/client';
 import { WarehouseLayoutService } from './warehouse-layout.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApprovalService } from '../approval/approval.service';
+
+// RQ13: the layout service asks the approval engine for a plan's chain, so every
+// test module needs one. The lifecycle itself is tested in
+// warehouse-layout-lifecycle.service.spec.ts with a stub that records calls.
+const APPROVAL_STUB = {
+  provide: ApprovalService,
+  useValue: {
+    getByEntity: jest.fn().mockResolvedValue(null),
+    ensurePendingInstance: jest.fn().mockResolvedValue({ id: 'ai1', currentStep: 1, steps: [{ stepOrder: 1, status: 'PENDING' }] }),
+    decide: jest.fn().mockResolvedValue({ status: 'APPROVED' }),
+  },
+};
+
 
 // Phase 3: RQ10 (plan warnings) and RQ27 (place a batch of racks).
 //
@@ -80,7 +94,7 @@ function makePrisma(opts: { layout?: any; objects?: any[]; racks?: any[] } = {})
 
 async function serviceWith(db: ReturnType<typeof makePrisma>) {
   const mod = await Test.createTestingModule({
-    providers: [WarehouseLayoutService, { provide: PrismaService, useValue: db.p }],
+    providers: [WarehouseLayoutService, { provide: PrismaService, useValue: db.p }, APPROVAL_STUB],
   }).compile();
   return mod.get(WarehouseLayoutService);
 }

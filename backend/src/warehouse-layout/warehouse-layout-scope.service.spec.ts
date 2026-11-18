@@ -2,7 +2,21 @@ import { Test } from '@nestjs/testing';
 import { ForbiddenException } from '@nestjs/common';
 import { WarehouseLayoutService } from './warehouse-layout.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApprovalService } from '../approval/approval.service';
 import { LayoutObjectType } from '@prisma/client';
+
+// RQ13: the layout service asks the approval engine for a plan's chain, so every
+// test module needs one. The lifecycle itself is tested in
+// warehouse-layout-lifecycle.service.spec.ts with a stub that records calls.
+const APPROVAL_STUB = {
+  provide: ApprovalService,
+  useValue: {
+    getByEntity: jest.fn().mockResolvedValue(null),
+    ensurePendingInstance: jest.fn().mockResolvedValue({ id: 'ai1', currentStep: 1, steps: [{ stepOrder: 1, status: 'PENDING' }] }),
+    decide: jest.fn().mockResolvedValue({ status: 'APPROVED' }),
+  },
+};
+
 
 // Sprint 7: per-user warehouse scoping.
 //
@@ -39,7 +53,7 @@ describe('WarehouseLayoutService — warehouse scoping', () => {
   beforeEach(async () => {
     prisma = makePrisma();
     const mod = await Test.createTestingModule({
-      providers: [WarehouseLayoutService, { provide: PrismaService, useValue: prisma }],
+      providers: [WarehouseLayoutService, { provide: PrismaService, useValue: prisma }, APPROVAL_STUB],
     }).compile();
     service = mod.get(WarehouseLayoutService);
     prisma.warehouseLayout.findFirst.mockResolvedValue(LAYOUT);

@@ -20,11 +20,12 @@ import {
   layoutApi, localizeError,
   type LayoutResponse, type LayoutObject, type LayoutObjectType, type LayoutOccupancy,
   type LayoutProblem, type LayoutProblemsResponse, type PlaceRacksResult, type RackPlacementSkipReason,
+  type WarehouseLayout,
 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useT } from '@/i18n';
+import { getT, useT } from '@/i18n';
 import { useAuthStore } from '@/store/auth.store';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { useRealtime } from '@/hooks/use-realtime';
@@ -37,6 +38,7 @@ import { LayoutToolbar, SaveDrawingDialog } from './layout-toolbar';
 import { PropertyPanel } from './property-panel';
 import { useLayoutEditor } from './use-layout-editor';
 import { LinkSlotDialog } from './link-slot-dialog';
+import { PlanStatusBar } from './plan-status';
 import { LocationInventoryPanel } from './location-inventory-panel';
 import { printFloorPlan } from './print-floor-plan';
 
@@ -424,9 +426,15 @@ function PlaceRacksDialog({ open, onOpenChange, warehouseId, version, onPlaced }
   );
 }
 
-export function FloorPlan({ warehouseId }: { warehouseId: string }) {
+export function FloorPlan({ warehouseId, onPreview3D }: {
+  warehouseId: string;
+  /** RQ13: show the plan — including unsaved edits — in the 3D tab. Nothing is saved. */
+  onPreview3D?: (plan: { layout: WarehouseLayout; objects: LayoutObject[] }) => void;
+}) {
   const user = useAuthStore((s) => s.user);
   const canEdit = !!user && EDIT_ROLES.includes(user.role);
+  // RQ13: the same two roles may decide a plan; the API refuses self-approval.
+  const canApprove = canEdit;
 
   const [data, setData] = useState<LayoutResponse | null>(null);
   const [version, setVersion] = useState(0);
@@ -448,7 +456,10 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   const [problemsError, setProblemsError] = useState<string | null>(null);
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
   const [placeOpen, setPlaceOpen] = useState(false);
+  // RQ13 plan lifecycle (send for approval / decide).
+  const [lifeBusy, setLifeBusy] = useState(false);
   const planRef = useRef<HTMLDivElement>(null);
+
 
   const { m, t, fmt } = useT();
   const F = m.layout3d.floor;
@@ -505,6 +516,28 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   }, [warehouseId]);
 
   useEffect(() => { setEditing(false); load(); void loadProblems(); }, [load, loadProblems]);
+
+  // RQ13 — send the plan for approval, and decide one. Both reload, because the
+  // server owns the status and the approval chain.
+  const submitPlan = useCallback(async () => {
+    setLifeBusy(true);
+    try {
+      await layoutApi.submitPlan(warehouseId);
+      toast.success(getT().m.layout3d.floor.lifecycle.submitted);
+      await load();
+    } catch (e: any) { toast.error(localizeError(e)); } finally { setLifeBusy(false); }
+  }, [warehouseId, load]);
+
+  const decidePlan = useCallback(async (approved: boolean, notes?: string) => {
+    setLifeBusy(true);
+    try {
+      await layoutApi.decidePlan(warehouseId, approved, notes);
+      const L = getT().m.layout3d.floor.lifecycle;
+      toast.success(approved ? L.approved : L.sentBack);
+      await load();
+    } catch (e: any) { toast.error(localizeError(e)); } finally { setLifeBusy(false); }
+  }, [warehouseId, load]);
+
 
   /** RQ10: jump from a problem to the object it is about. */
   const focusObject = useCallback((objectId: string) => {
@@ -756,6 +789,8 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   }
 
   const { layout } = data;
+  // RQ13: a plan waiting for a decision is frozen — the API refuses writes too.
+  const planPending = layout.status === 'PENDING';
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
@@ -810,7 +845,9 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
                 </Button>
               ) : (
                 <Button size="sm" className="hidden lg:inline-flex h-8 gap-1.5 bg-green-600 hover:bg-green-700 text-white text-xs"
-                  onClick={() => setEditing(true)}>
+                  onClick={() => setEditing(true)}
+                  disabled={planPending}
+                  title={planPending ? F.lifecycle.frozen : undefined}>
                   <Pencil className="w-3.5 h-3.5" /> Edit layout
                 </Button>
               )
@@ -822,6 +859,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             </Button>
           </div>
         </div>
+
+        <PlanStatusBar
+          layout={layout}
+          approval={data.approval}
+          canEdit={canEdit}
+          canApprove={canApprove}
+          isDirty={ed.isDirty}
+          currentUserId={user?.id}
+          busy={lifeBusy}
+          onSubmit={submitPlan}
+          onDecide={decidePlan}
+          onPreview3D={onPreview3D ? () => onPreview3D({ layout, objects: ed.objects }) : undefined}
+        />
 
         {orphanCount > 0 && (
           <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">

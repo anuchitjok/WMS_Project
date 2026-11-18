@@ -1248,6 +1248,13 @@ enum LayoutObjectType {
   DOOR
 }
 
+/// RQ13 — the approval state of a warehouse floor plan.
+enum LayoutStatus {
+  DRAFT
+  PENDING
+  PUBLISHED
+}
+
 enum LayoutObjectStatus {
   ACTIVE
   INACTIVE
@@ -1265,6 +1272,17 @@ model WarehouseLayout {
   unitLabel   String    @default("m") // display only
   version     Int       @default(0) // optimistic lock for batch saves (mirrors FulfillmentTask.version)
   notes       String?   @db.Text
+  // RQ13 (38_layout_lifecycle.sql) — who signed this plan off, and when.
+  // DRAFT: being drawn, edits allowed. PENDING: waiting for approval, edits refused.
+  // PUBLISHED: approved; any later edit drops it back to DRAFT.
+  // Plans that existed before this feature start as DRAFT — nobody approved them.
+  status          LayoutStatus @default(DRAFT)
+  submittedAt     DateTime?
+  submittedById   String?
+  publishedAt     DateTime?
+  publishedById   String?
+  /// Why the last submission was sent back. Cleared when a new one is submitted.
+  rejectedReason  String?   @db.Text
   // F6 (35_layout_meters_per_unit.sql): metres per plan unit, and where the floor's
   // top-left corner sits on the plan (m). NULL = not saved from 3D yet.
   metersPerUnit Float?

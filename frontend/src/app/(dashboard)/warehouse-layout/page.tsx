@@ -10,7 +10,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Warehouse, RefreshCw, Grid3x3, Map, AlertTriangle, Box } from 'lucide-react';
-import { warehouseApi } from '@/lib/api';
+import { warehouseApi, type LayoutObject, type WarehouseLayout } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -104,6 +104,10 @@ export default function WarehouseOperationsPage() {
   const [tabState, setTab] = useState('control');
   // Never leave a hidden tab selected.
   const tab = !showFloor && tabState === 'floor' ? 'control' : tabState;
+  // RQ13: "Preview in 3D" hands the plan being drawn — unsaved edits included —
+  // to the 3D tab. It is never saved; leaving the preview goes back to the
+  // stored plan.
+  const [preview, setPreview] = useState<{ layout: WarehouseLayout; objects: LayoutObject[] } | null>(null);
   // "View Stock Detail" in the 3D tab hands a slot to the Racks & slots tab.
   const [focus, setFocus] = useState<{ slotId: string; n: number } | null>(null);
   const viewStock = useCallback((slotId: string) => {
@@ -183,7 +187,12 @@ export default function WarehouseOperationsPage() {
 
         {showFloor && (
           <TabsContent value="floor" className="mt-4">
-            {tab === 'floor' && <FloorPlan warehouseId={selectedWhId} />}
+            {tab === 'floor' && (
+              <FloorPlan
+                warehouseId={selectedWhId}
+                onPreview3D={(plan) => { setPreview(plan); setTab('3d'); }}
+              />
+            )}
           </TabsContent>
         )}
 
@@ -191,8 +200,9 @@ export default function WarehouseOperationsPage() {
           {/* Mounted only while open: three.js loads on first visit to this tab. */}
           {tab === '3d' && (
             <Warehouse3D key={selectedWhId} warehouses={warehouses} wh={selectedWh}
-              onSelectWarehouse={(id) => { setSelectedWhId(id); setFocus(null); }}
-              loading={loading && warehouses.length === 0} onReload={load} onViewStock={viewStock} />
+              onSelectWarehouse={(id) => { setSelectedWhId(id); setFocus(null); setPreview(null); }}
+              loading={loading && warehouses.length === 0} onReload={load} onViewStock={viewStock}
+              previewPlan={preview} onExitPreview={() => { setPreview(null); setTab('floor'); }} />
           )}
         </TabsContent>
       </Tabs>

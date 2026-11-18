@@ -2,8 +2,9 @@ import { NOT_IN_LOCATION } from '../common/stock-presence';
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
-import { StockStatus, LayoutObjectType } from '@prisma/client';
+import { StockStatus, LayoutObjectType, LayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApprovalService } from '../approval/approval.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
   BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto, PlaceRacksDto,
@@ -48,7 +49,10 @@ export interface LayoutScope {
 
 @Injectable()
 export class WarehouseLayoutService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private approval: ApprovalService,
+  ) {}
 
   // Mirrors warehouse-master: detail carries a before/after pair.
   private audit(userId: string, action: string, entityType: string, entityId: string, before: any, after: any) {
@@ -103,6 +107,108 @@ export class WarehouseLayoutService {
     return obj;
   }
 
+  // ── Plan lifecycle (RQ13) ───────────────────────────────────────────────────
+  // DRAFT is the working state. PENDING is frozen while someone decides. An
+  // approved plan that is changed goes back to DRAFT, so the status never claims
+  // an approval that no longer covers what is on the screen. Nothing here reads
+  // or writes stock — approval governs the drawing only (decision C5).
+
+  private async layoutOfWarehouseOrThrow(warehouseId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
+    if (!layout) throw new NotFoundException('This warehouse has no layout');
+    return layout;
+  }
+
+  /** Guard every write to a plan. Returns nothing; throws when the plan is frozen. */
+  private async assertEditable(layoutId: string, userId: string) {
+    const layout = await this.getLayoutOrThrow(layoutId);
+    if (layout.status === LayoutStatus.PENDING) {
+      throw new ConflictException({
+        code: 'LAYOUT_PENDING_APPROVAL',
+        message: 'This plan is waiting for approval. Approve it or send it back before changing it.',
+      });
+    }
+    if (layout.status === LayoutStatus.PUBLISHED) {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layoutId },
+        data: { status: LayoutStatus.DRAFT, publishedAt: null, publishedById: null },
+      });
+      await this.audit(userId, 'LAYOUT_UNPUBLISHED', 'WarehouseLayout', layoutId, layout, after);
+    }
+  }
+
+  /** The same guard for endpoints addressed by warehouse. No plan yet = nothing to guard. */
+  private async assertEditableWarehouse(warehouseId: string, userId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({
+      where: { warehouseId, isDeleted: false }, select: { id: true },
+    });
+    if (layout) await this.assertEditable(layout.id, userId);
+  }
+
+  /**
+   * Send the plan for approval. The chain itself is the shared approval engine
+   * (entityType 'WarehouseLayout'), so an admin can set steps and roles in
+   * Approval Rules; with no rule, one step open to whoever may decide.
+   */
+  async submitForApproval(warehouseId: string, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const layout = await this.layoutOfWarehouseOrThrow(warehouseId);
+    if (layout.status === LayoutStatus.PENDING) {
+      throw new ConflictException('This plan is already waiting for approval');
+    }
+    if (layout.status === LayoutStatus.PUBLISHED) {
+      throw new ConflictException('This plan is already approved. Change it first, then send it again.');
+    }
+    const drawn = await this.prisma.layoutObject.count({ where: { layoutId: layout.id, isDeleted: false } });
+    if (drawn === 0) throw new BadRequestException('Draw the plan before sending it for approval');
+
+    const after = await this.prisma.warehouseLayout.update({
+      where: { id: layout.id },
+      data: { status: LayoutStatus.PENDING, submittedAt: new Date(), submittedById: userId, rejectedReason: null },
+    });
+    const approval = await this.approval.ensurePendingInstance('WarehouseLayout', layout.id, userId);
+    await this.audit(userId, 'LAYOUT_SUBMITTED', 'WarehouseLayout', layout.id, layout, after);
+    return { layout: after, approval };
+  }
+
+  /**
+   * Approve or send back. The engine owns the rules — including that the person
+   * who asked for approval cannot grant it — and may hold the plan at PENDING
+   * when a rule has more than one step. The plan only becomes PUBLISHED once the
+   * whole chain is APPROVED.
+   */
+  async decideApproval(warehouseId: string, approved: boolean, notes: string | undefined, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const layout = await this.layoutOfWarehouseOrThrow(warehouseId);
+    if (layout.status !== LayoutStatus.PENDING) {
+      throw new ConflictException('This plan is not waiting for approval');
+    }
+    const instance: any = await this.approval.ensurePendingInstance(
+      'WarehouseLayout', layout.id, layout.submittedById ?? userId,
+    );
+    const step = instance.steps?.find((x: any) => x.status === 'PENDING')?.stepOrder ?? instance.currentStep ?? 1;
+    const decided: any = await this.approval.decide(instance.id, step, userId, approved, notes, { internal: true });
+
+    if (decided?.status === 'APPROVED') {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layout.id },
+        data: { status: LayoutStatus.PUBLISHED, publishedAt: new Date(), publishedById: userId, rejectedReason: null },
+      });
+      await this.audit(userId, 'LAYOUT_PUBLISHED', 'WarehouseLayout', layout.id, layout, after);
+      return { layout: after, approval: decided };
+    }
+    if (decided?.status === 'REJECTED') {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layout.id },
+        data: { status: LayoutStatus.DRAFT, submittedAt: null, submittedById: null, rejectedReason: notes?.trim() || 'Sent back without a reason' },
+      });
+      await this.audit(userId, 'LAYOUT_REJECTED', 'WarehouseLayout', layout.id, layout, after);
+      return { layout: after, approval: decided };
+    }
+    // More steps to go: the plan stays PENDING and the next approver is notified.
+    return { layout, approval: decided };
+  }
+
   // ── Reads ───────────────────────────────────────────────────────────────────
 
   // Returns the canvas plus a FLAT array of objects; the client assembles the
@@ -125,7 +231,10 @@ export class WarehouseLayoutService {
       where: { layoutId: layout.id, isDeleted: false },
       orderBy: [{ zIndex: 'asc' }, { displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    return { warehouse, layout, objects };
+    // RQ13: the latest approval chain for this plan, so the screen can show who
+    // asked, who decided and when. Null until the plan is first submitted.
+    const approval = await this.approval.getByEntity('WarehouseLayout', layout.id);
+    return { warehouse, layout, objects, approval };
   }
 
   // ── Layout (canvas) ─────────────────────────────────────────────────────────
@@ -156,6 +265,7 @@ export class WarehouseLayoutService {
   async updateCanvas(layoutId: string, dto: UpdateLayoutCanvasDto, userId: string, scope?: LayoutScope) {
     const before = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     const after = await this.prisma.warehouseLayout.update({ where: { id: layoutId }, data: { ...dto } });
     await this.audit(userId, 'LAYOUT_UPDATED', 'WarehouseLayout', layoutId, before, after);
     return after;
@@ -216,6 +326,7 @@ export class WarehouseLayoutService {
   async createObject(layoutId: string, dto: CreateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     this.assertValidJson(dto.metadata);
     if (dto.parentObjectId) await this.validateParent(dto.parentObjectId, layout.id);
 
@@ -232,6 +343,7 @@ export class WarehouseLayoutService {
   async updateObject(id: string, dto: UpdateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
     this.assertValidJson(dto.metadata);
 
     if (dto.parentObjectId !== undefined && dto.parentObjectId !== null) {
@@ -253,6 +365,7 @@ export class WarehouseLayoutService {
   async deleteObject(id: string, cascade: boolean, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
 
     const childCount = await this.prisma.layoutObject.count({
       where: { parentObjectId: id, isDeleted: false },
@@ -290,6 +403,7 @@ export class WarehouseLayoutService {
   async batchSave(layoutId: string, dto: BatchSaveDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     if (layout.version !== dto.version) {
       throw new ConflictException(
         `This layout changed elsewhere (your version ${dto.version}, current ${layout.version}). Reload before saving.`,
@@ -393,6 +507,7 @@ export class WarehouseLayoutService {
 
   async saveRackPositions(warehouseId: string, dto: SaveRackPositionsDto, userId: string, scope?: LayoutScope) {
     this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
     const wh = await this.prisma.warehouse.findFirst({
       where: { id: warehouseId, isDeleted: false },
       select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
@@ -526,6 +641,7 @@ export class WarehouseLayoutService {
   // any 3D drawing that has objects under it.
   async resetRackPositions(warehouseId: string, dto: ResetRackPositionsDto, userId: string, scope?: LayoutScope) {
     this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
     const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
     if (!layout) throw new NotFoundException('This warehouse has no layout');
     if (layout.version !== dto.version) throw new ConflictException('This layout changed elsewhere. Reload before saving.');
@@ -610,6 +726,7 @@ export class WarehouseLayoutService {
   // rack's own size, so what is drawn is the size the rack really is.
   async placeRacks(warehouseId: string, dto: PlaceRacksDto, userId: string, scope?: LayoutScope) {
     this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
     const wh = await this.prisma.warehouse.findFirst({
       where: { id: warehouseId, isDeleted: false },
       select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
@@ -734,6 +851,7 @@ export class WarehouseLayoutService {
   async duplicateObject(id: string, dto: DuplicateObjectDto, userId: string, scope?: LayoutScope) {
     const source = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(source.layoutId, scope);
+    await this.assertEditable(source.layoutId, userId);
     const dx = dto.offsetX ?? 2;
     const dy = dto.offsetY ?? 2;
 
@@ -790,6 +908,7 @@ export class WarehouseLayoutService {
   async linkObject(id: string, dto: { slotId?: string; rackId?: string }, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
     const wantSlot = !!dto.slotId;
     const wantRack = !!dto.rackId;
 
@@ -854,6 +973,7 @@ export class WarehouseLayoutService {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
     if (!before.slotId && !before.rackId) return before;
+    await this.assertEditable(before.layoutId, userId);
     const after = await this.prisma.layoutObject.update({
       where: { id },
       data: { slotId: null, rackId: null },
@@ -949,6 +1069,7 @@ export class WarehouseLayoutService {
   async generateBinsFromRack(id: string, userId: string, scope?: LayoutScope) {
     const parent = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(parent.layoutId, scope);
+    await this.assertEditable(parent.layoutId, userId);
     if (parent.objectType !== LayoutObjectType.RACK) {
       throw new ConflictException('Only a rack object can generate bins');
     }
