@@ -66,6 +66,12 @@ export class WarehouseMasterController {
   }
 
   // ── Warehouse (SYSTEM_ADMIN) ────────────────────────────────────────────────
+  @Get('warehouses/code-preview') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ADMIN_ROLES)
+  @ApiOperation({ summary: 'Preview the code a warehouse with this name would get (read only)' })
+  previewWarehouseCode(@Query('name') name: string) {
+    return this.service.previewWarehouseCode(name ?? '');
+  }
+
   @Post('warehouses') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ADMIN_ROLES)
   createWarehouse(@Body() dto: CreateWarehouseDto, @CurrentUser('id') userId: string) {
     return this.service.createWarehouse(dto, userId);

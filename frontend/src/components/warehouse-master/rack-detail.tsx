@@ -156,6 +156,11 @@ function GeneratePanel({ rack, onDone }: { rack: any; onDone: () => Promise<void
 
   const lv = Number(levels), cl = Number(columns);
   const valid = [lv, cl].every((n) => Number.isInteger(n) && n >= 1 && n <= 99);
+  // The shape the rack itself is set to. Generating a different grid is what leaves a rack
+  // with more slots than it has places for, so say so before anything is created.
+  const rackLv = Math.max(1, Number(rack.levels ?? 1)), rackCl = Math.max(1, Number(rack.columns ?? 1));
+  const offGrid = valid && (lv !== rackLv || cl !== rackCl);
+  const useRackGrid = () => { setLevels(String(rackLv)); setColumns(String(rackCl)); setPreview(null); };
 
   async function run(isPreview: boolean) {
     if (!valid) return toast.error(m.warehouseMaster.form.gridRange);
@@ -172,6 +177,7 @@ function GeneratePanel({ rack, onDone }: { rack: any; onDone: () => Promise<void
     <section className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
       <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2"><Wand2 className="w-4 h-4 text-slate-400" /> {g.title}</h3>
       <p className="mt-1 text-sm text-slate-500">{t(g.hint, { example: `${rack.code}-01-08` })}</p>
+      <p className="mt-1 text-sm text-slate-500">{t(g.rackGrid, { levels: rackLv, columns: rackCl, n: rackLv * rackCl })}</p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <Field label={g.levels}><Input type="number" min={1} max={99} value={levels} onChange={(e) => { setLevels(e.target.value); setPreview(null); }} className="w-24" /></Field>
         <Field label={g.columns}><Input type="number" min={1} max={99} value={columns} onChange={(e) => { setColumns(e.target.value); setPreview(null); }} className="w-24" /></Field>
@@ -180,6 +186,14 @@ function GeneratePanel({ rack, onDone }: { rack: any; onDone: () => Promise<void
           <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => run(false)} disabled={busy}>{t(g.create, { count: preview.toCreate })}</Button>
         )}
       </div>
+      {offGrid && (
+        <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <p>{t(g.offGrid, { levels: lv, columns: cl, rackLevels: rackLv, rackColumns: rackCl })}</p>
+          <button type="button" onClick={useRackGrid} className="mt-1 text-xs font-medium underline">
+            {t(g.useRackGrid, { levels: rackLv, columns: rackCl })}
+          </button>
+        </div>
+      )}
       {preview && (
         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
           <p className="text-sm text-slate-700">{t(g.summary, { total: preview.total, toCreate: preview.toCreate, existing: preview.existing })}</p>

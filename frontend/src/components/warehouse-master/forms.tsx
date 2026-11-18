@@ -106,21 +106,30 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
   const { m, t, fmt } = useT();
   const w = m.warehouseMaster.form;
   const [form, setForm] = useState({
-    code: data?.code ?? '', name: data?.name ?? '', location: data?.location ?? '',
+    name: data?.name ?? '', location: data?.location ?? '',
     usableAreaPct: data ? str(data.usableAreaPct ?? 100) : '100',
   });
   // Centimetres, as stored. The unit on screen is the user's own choice (RQ1).
   const [size, setSize] = useState<SizeState>(() => sizeOf(data));
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
-  // RQ2 — the name follows Code + Location until the user writes their own.
-  // Only on create: an existing warehouse's name is already on labels and reports.
-  const [nameTouched, setNameTouched] = useState(mode !== 'create');
-  const suggestedName = mode === 'create' ? suggestName(form.code, form.location) : '';
+  // The API owns the warehouse code (WH-<NAME SLUG>-<RUNNING NUMBER>): the user
+  // types the name, this is only a preview of what the code would be. RQ2's
+  // name-from-code suggestion does not apply here any more — it would run the
+  // other way round — but Rack Types still use it (RQ6).
+  const [codePreview, setCodePreview] = useState<string | null>(null);
   useEffect(() => {
-    if (nameTouched) return;
-    setForm((f) => (f.name === suggestedName ? f : { ...f, name: suggestedName }));
-  }, [suggestedName, nameTouched]);
+    if (mode !== 'create') return;
+    const name = form.name.trim();
+    if (!name) { setCodePreview(null); return; }
+    let dropped = false;
+    const id = setTimeout(() => {
+      warehouseSpaceApi.previewWarehouseCode(name)
+        .then((r) => { if (!dropped) setCodePreview(r.preview); })
+        .catch(() => { if (!dropped) setCodePreview(null); });
+    }, 300);
+    return () => { dropped = true; clearTimeout(id); };
+  }, [form.name, mode]);
   // F2 floor shape. A saved shape not made by this form (CUSTOM) is kept as is.
   const [shape, setShape] = useState<ShapeState>(() => initialShapeState(data?.floorOutline));
   const savedPoints: Pt[] | null = data?.floorOutline && validateOutline(data.floorOutline.points).length === 0
@@ -138,7 +147,7 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if ((mode === 'create' && !form.code.trim()) || !form.name.trim()) return toast.error(w.required);
+    if (!form.name.trim()) return toast.error(w.required);
     if (![size.lengthCm, size.widthCm, size.heightCm].every(isPos)) return toast.error(w.positive);
     const pctRaw = optNum(form.usableAreaPct);
     if (pctRaw !== undefined && !(pctRaw > 0 && pctRaw <= 100)) return toast.error(w.pctRange);
@@ -155,7 +164,7 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
     else if (shape.shape === 'CUSTOM') { delete sizes.lengthCm; delete sizes.widthCm; }
     setBusy(true);
     try {
-      if (mode === 'create') await warehouseSpaceApi.createWarehouse({ code: form.code.trim(), name: form.name.trim(), location: form.location.trim() || undefined, ...sizes });
+      if (mode === 'create') await warehouseSpaceApi.createWarehouse({ name: form.name.trim(), location: form.location.trim() || undefined, ...sizes });
       else await warehouseSpaceApi.updateWarehouse(data.id, { name: form.name.trim(), location: form.location.trim() || null, ...sizes });
       toast.success(mode === 'create' ? w.warehouseCreated : w.warehouseUpdated);
       onSaved();
@@ -165,16 +174,14 @@ export function WarehouseForm({ mode, data, onClose, onSaved }: { mode: 'create'
   return (
     <ModalWrap title={mode === 'create' ? w.createWarehouse : t(w.editWarehouse, { code: data?.code })} onClose={onClose} widthClass="max-w-lg">
       <form onSubmit={submit} className="space-y-3">
-        {mode === 'create' && <Field label={`${w.code} *`} hint={w.codeHint}><Input autoFocus placeholder="WH-A" value={form.code} onChange={F('code')} /></Field>}
-        {mode === 'create' ? (
-          <AutoNameField
-            label={`${w.name} *`} value={form.name} suggestion={suggestedName} auto={!nameTouched} hint={w.nameAutoWarehouse}
-            onType={(v) => { setNameTouched(true); setForm((f) => ({ ...f, name: v })); }}
-            onUseSuggestion={() => { setNameTouched(false); setForm((f) => ({ ...f, name: suggestedName })); }}
-          />
-        ) : (
-          <Field label={`${w.name} *`}><Input autoFocus value={form.name} onChange={F('name')} /></Field>
-        )}
+        <Field label={`${w.name} *`}><Input autoFocus value={form.name} onChange={F('name')} /></Field>
+        <Field label={w.code} hint={mode === 'create' ? w.codeAutoHint : w.codeFixedHint}>
+          <div className="flex h-9 items-center rounded-md border border-slate-200 bg-slate-50 px-3 font-mono text-sm text-slate-700" aria-readonly="true">
+            {mode === 'create'
+              ? (codePreview ?? <span className="font-sans text-slate-400">{w.codePreviewEmpty}</span>)
+              : data?.code}
+          </div>
+        </Field>
         <Field label={w.location}><Input value={form.location} onChange={F('location')} /></Field>
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">

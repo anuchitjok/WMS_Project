@@ -21,7 +21,12 @@ export class WarehouseSizeFields {
 }
 
 export class CreateWarehouseDto extends WarehouseSizeFields {
-  @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(50) code: string;
+  /**
+   * Deprecated and IGNORED — the API generates the code (WH-<NAME SLUG>-<RUNNING NUMBER>).
+   * Still accepted so older clients that post it do not break on the strict validator.
+   */
+  @ApiPropertyOptional({ deprecated: true, description: 'Ignored — the server generates the warehouse code' })
+  @IsOptional() @IsString() @MaxLength(50) code?: string;
   @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(200) name: string;
   @ApiPropertyOptional() @IsOptional() @IsString() @MaxLength(300) location?: string | null;
 }

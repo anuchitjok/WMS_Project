@@ -244,6 +244,20 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
       }),
     };
   }, [arr, issues, scene]);
+  // F6: racks listed in the arrange bar, so a rack can be found by code instead of hunted for on the floor.
+  const arrangeRacks = useMemo(
+    () => scene.racks.map((p) => ({ id: p.rack.id, code: p.rack.code, zone: p.zone ?? null })),
+    [scene]);
+  const findArrangeRack = useCallback((rackId: string) => {
+    setArr((a) => {
+      if (!a) return a;
+      const zone = scene.racks.find((p) => p.rack.id === rackId)?.zone;
+      const ids = a.zoneMode ? scene.racks.filter((p) => p.zone === zone).map((p) => p.rack.id) : [rackId];
+      return { ...a, sel: ids };
+    });
+    setPreset(null);
+    api.current?.focusRack(rackId);
+  }, [scene]);
   const madeBy3d = useMemo(() => (plan?.objects ?? []).some((o) => {
     if (o.objectType !== 'RACK' || !o.rackId || !o.metadata) return false;
     try { return JSON.parse(o.metadata)?.source === '3d'; } catch { return false; }
@@ -653,6 +667,7 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
                 hideBoxes={hideBoxes} onHideBoxes={setHideBoxes} />
               {arr && issues && (
                 <ArrangeBar top={overlayTop + 52} snap={ARRANGE_SNAP} selected={arr.sel.length}
+                  racks={arrangeRacks} pickedRack={arr.sel.length === 1 ? arr.sel[0] : ''} onFindRack={findArrangeRack}
                   zoneMode={arr.zoneMode} onZoneMode={(zoneMode) => setArr((a) => a && { ...a, zoneMode, sel: [] })}
                   onRotate={() => setArr((a) => a && { ...a, draft: rotatePoses(a.draft, a.sel) })}
                   outside={issues.outside.length} overlap={issues.overlap.length} hasFloor={!!floorPolygonOf(scene.floor)}

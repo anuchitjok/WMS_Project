@@ -12,6 +12,12 @@ import { CreateWarehouseDto, UpdateWarehouseDto } from './warehouse-master.dto';
  * in import files, labels and printed documents, so a reused or re-pointed code
  * would silently re-label history.
  *
+ * Since the auto-code change the server also OWNS the code: it is generated from
+ * the warehouse name (WH-<NAME SLUG>-<RUNNING NUMBER>, see warehouse-code.ts) and
+ * anything a caller sends as `code` is ignored. The four guards that assumed a
+ * typed code now lock the generated behaviour instead; the immutability guards
+ * below are unchanged.
+ *
  * Immutability is enforced today by `updateWarehouse` simply never reading
  * `dto.code` (and `UpdateWarehouseDto` not declaring one). These guards fail if
  * a future refactor starts honouring a code on update.
@@ -23,11 +29,15 @@ const WH = {
   floorOutline: null, isActive: true, isDeleted: false,
 };
 
-function makePrisma(existingByCode: any = null, before: any = WH) {
+function makePrisma(existingByCode: any = null, before: any = WH, takenCodes?: string[]) {
+  const codes = takenCodes ?? (existingByCode ? [existingByCode.code] : []);
   const prisma: any = {
+    // createWarehouse generates the code inside one transaction (advisory lock + recount).
+    $executeRawUnsafe: jest.fn().mockResolvedValue(1),
     warehouse: {
       findUnique: jest.fn().mockResolvedValue(existingByCode),
       findFirst: jest.fn().mockResolvedValue(before),
+      findMany: jest.fn().mockResolvedValue(codes.map((code) => ({ code }))),
       create: jest.fn((a: any) => ({ id: 'w9', ...a.data })),
       // The stored row: only what `data` carries can change.
       update: jest.fn((a: any) => ({ ...before, ...a.data })),
@@ -37,47 +47,46 @@ function makePrisma(existingByCode: any = null, before: any = WH) {
     slot: { count: jest.fn().mockResolvedValue(0) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
+  prisma.$transaction = jest.fn(async (cb: any) => cb(prisma));
   return { prisma, svc: new WarehouseMasterService(prisma) };
 }
 
-describe('RQ3 — warehouse code is unique', () => {
-  it('RQ3: creating a warehouse with a code that already exists is rejected', async () => {
-    const { prisma, svc } = makePrisma(WH);
+describe('RQ3 — the server owns the warehouse code', () => {
+  it('RQ3: a code sent by the caller is ignored — the server builds it from the name', async () => {
+    const { prisma, svc } = makePrisma(null);
 
-    await expect(svc.createWarehouse({ code: 'WH-MAIN', name: 'Another main' } as CreateWarehouseDto, 'u1'))
-      .rejects.toThrow(new ConflictException('Warehouse code "WH-MAIN" already exists'));
+    const wh = await svc.createWarehouse({ code: 'WH-MAIN', name: 'Another main' } as CreateWarehouseDto, 'u1');
+
+    expect(prisma.warehouse.create.mock.calls[0][0].data.code).toBe('WH-ANOTHER-MAIN-001');
+    expect(wh.code).not.toBe('WH-MAIN');
+  });
+
+  it('RQ3: the name is trimmed before the code is built', async () => {
+    const { prisma, svc } = makePrisma(null);
+
+    const wh = await svc.createWarehouse({ name: '  North  ' } as CreateWarehouseDto, 'u1');
+
+    expect(prisma.warehouse.create.mock.calls[0][0].data).toMatchObject({ code: 'WH-NORTH-001', name: 'North' });
+    expect(wh.code).toBe('WH-NORTH-001');
+  });
+
+  it('RQ3: a running number already in use is never handed out twice', async () => {
+    const { svc } = makePrisma(null, WH, ['WH-MAIN', 'WH-NORTH-001', 'WH-SOUTH-002']);
+
+    const wh = await svc.createWarehouse({ name: 'North' } as CreateWarehouseDto, 'u1');
+
+    // Legacy codes (WH-MAIN) are not counted; the generated sequence continues at 003.
+    expect(wh.code).toBe('WH-NORTH-003');
+  });
+
+  it('RQ3: a blank name is refused outright — the code is built from the name', async () => {
+    const { prisma, svc } = makePrisma(null);
+
+    await expect(svc.createWarehouse({ name: '   ' } as CreateWarehouseDto, 'u1'))
+      .rejects.toThrow(new ConflictException('Warehouse name is required'));
 
     expect(prisma.warehouse.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
-  });
-
-  it('RQ3: the duplicate check is on the trimmed code, so " WH-MAIN " is the same code', async () => {
-    const { prisma, svc } = makePrisma(WH);
-
-    await expect(svc.createWarehouse({ code: '  WH-MAIN  ', name: 'Padded' } as CreateWarehouseDto, 'u1'))
-      .rejects.toThrow(ConflictException);
-
-    expect(prisma.warehouse.findUnique).toHaveBeenCalledWith({ where: { code: 'WH-MAIN' } });
-    expect(prisma.warehouse.create).not.toHaveBeenCalled();
-  });
-
-  it('RQ3: a free code is stored trimmed, exactly as given', async () => {
-    const { prisma, svc } = makePrisma(null);
-
-    const wh = await svc.createWarehouse({ code: ' WH-NEW ', name: ' North ' } as CreateWarehouseDto, 'u1');
-
-    expect(prisma.warehouse.create.mock.calls[0][0].data).toMatchObject({ code: 'WH-NEW', name: 'North' });
-    expect(wh.code).toBe('WH-NEW');
-  });
-
-  it('RQ3: a blank code is refused outright — a warehouse always has a code', async () => {
-    const { prisma, svc } = makePrisma(null);
-
-    await expect(svc.createWarehouse({ code: '   ', name: 'Nameless' } as CreateWarehouseDto, 'u1'))
-      .rejects.toThrow(new ConflictException('Warehouse code is required'));
-
-    expect(prisma.warehouse.findUnique).not.toHaveBeenCalled();
-    expect(prisma.warehouse.create).not.toHaveBeenCalled();
   });
 });
 
@@ -168,27 +177,25 @@ describe('RQ3 — the HTTP layer rejects a code on update', () => {
 });
 
 describe('RQ3 — a retired warehouse keeps its code taken', () => {
-  it('RQ3: the code of a deactivated warehouse cannot be reused by a new warehouse', async () => {
-    const retired = { ...WH, isActive: false };
-    const { prisma, svc } = makePrisma(retired, retired);
+  it('RQ3: the code of a deactivated warehouse is never handed out again', async () => {
+    const retired = { ...WH, code: 'WH-REBORN-001', isActive: false };
+    const { prisma, svc } = makePrisma(retired, retired, ['WH-REBORN-001']);
 
-    await expect(svc.createWarehouse({ code: 'WH-MAIN', name: 'Reborn' } as CreateWarehouseDto, 'u1'))
-      .rejects.toThrow(new ConflictException('Warehouse code "WH-MAIN" already exists'));
+    const wh = await svc.createWarehouse({ name: 'Reborn' } as CreateWarehouseDto, 'u1');
 
-    // The existence check must not narrow by isActive / isDeleted, or a retired
-    // code would come back up for grabs.
-    expect(prisma.warehouse.findUnique).toHaveBeenCalledWith({ where: { code: 'WH-MAIN' } });
-    expect(prisma.warehouse.create).not.toHaveBeenCalled();
+    // The code query must not narrow by isActive / isDeleted, or a retired code
+    // would come back up for grabs.
+    expect(prisma.warehouse.findMany.mock.calls[0][0]).toEqual({ select: { code: true } });
+    expect(wh.code).toBe('WH-REBORN-002');
   });
 
   it('RQ3: a soft-deleted warehouse keeps its code taken too', async () => {
-    const removed = { ...WH, isActive: false, isDeleted: true };
-    const { prisma, svc } = makePrisma(removed, removed);
+    const removed = { ...WH, code: 'WH-REBORN-001', isActive: false, isDeleted: true };
+    const { svc } = makePrisma(removed, removed, ['WH-REBORN-001']);
 
-    await expect(svc.createWarehouse({ code: 'WH-MAIN', name: 'Reborn' } as CreateWarehouseDto, 'u1'))
-      .rejects.toThrow(ConflictException);
+    const wh = await svc.createWarehouse({ name: 'Reborn' } as CreateWarehouseDto, 'u1');
 
-    expect(prisma.warehouse.create).not.toHaveBeenCalled();
+    expect(wh.code).toBe('WH-REBORN-002');
   });
 
   it('RQ3: retiring a warehouse leaves the row (and its code) in place — it is not deleted', async () => {
