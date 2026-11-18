@@ -10,6 +10,7 @@ import type { LayoutScope } from './warehouse-layout.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
   BatchSaveDto, DuplicateObjectDto, LinkObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
+  PlaceRacksDto,
 } from './dto/layout.dto';
 
 // Write access: SYSTEM_ADMIN + WAREHOUSE_MANAGER — identical to warehouse-master.
@@ -76,6 +77,22 @@ export class WarehouseLayoutController {
   @ApiOperation({ summary: 'Live per-bin rollup derived from StockItem. Reads only — never writes inventory.' })
   occupancy(@Param('warehouseId') warehouseId: string, @CurrentUser() user: any) {
     return this.service.occupancy(warehouseId, scopeOf(user));
+  }
+
+  // RQ10: geometry warnings for the 2D plan. A GET, open to any authenticated
+  // user like the other reads, and deliberately NOT part of any save path — the
+  // plan is a drawing, so a problem here never refuses a save.
+  @Get(':warehouseId/problems')
+  @ApiOperation({ summary: 'Boundary / overlap / blocked-aisle warnings for the floor plan. Read-only; never blocks a save.' })
+  problems(@Param('warehouseId') warehouseId: string, @CurrentUser() user: any) {
+    return this.service.problems(warehouseId, scopeOf(user));
+  }
+
+  // RQ27: draw every unplaced rack of the warehouse onto its plan at once.
+  @Post(':warehouseId/place-racks') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: "Auto-place the warehouse's unplaced racks on the Floor Plan at their real size (drawings only)" })
+  placeRacks(@Param('warehouseId') warehouseId: string, @Body() dto: PlaceRacksDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.placeRacks(warehouseId, dto, userId, scopeOf(user));
   }
 
   // F6: racks arranged in the 3D view → RACK drawings on the Floor Plan (drawings only).

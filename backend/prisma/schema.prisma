@@ -1241,6 +1241,11 @@ enum LayoutObjectType {
   WORK_AREA
   STORAGE_AREA
   CUSTOM_AREA
+  // RQ8 (migration 37). Appended last on purpose: Postgres `ALTER TYPE ... ADD
+  // VALUE` without BEFORE/AFTER appends, so this order mirrors the live enum's
+  // sort order. A DOOR is a drawing of an opening — it must stay clear of racks,
+  // which layout-geometry.ts reports as a warning, never a block.
+  DOOR
 }
 
 enum LayoutObjectStatus {

@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiBearerAuth } from '@nestjs/swagger';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { RequestsService } from './requests.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
@@ -23,7 +23,12 @@ export class RequestsController {
     return this.requestsService.getOpenRtvCases();
   }
 
+  // RQ22: every product, each with `requestable` (true = the ACTIVE rows this
+  // route used to return) and `availableQty`. The request form needs the
+  // non-requestable rows too, so it can show a brand that exists and say why it
+  // cannot be picked instead of dropping it from the Brand list without a word.
   @Get('products-available')
+  @ApiOperation({ summary: 'Products for the request form, with requestable flag and available units' })
   getProductsWithAvailableQty(@Query('brandId') brandId?: string) {
     return this.requestsService.getProductsWithAvailableQty(brandId);
   }

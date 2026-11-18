@@ -4,6 +4,7 @@ import { RackType, SlotStatus, SlotType } from '@prisma/client';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
 import { diffFields, describeChanges, type ChangeSet } from '../common/audit-diff';
+import { assertRackSizeFromType } from '../common/rack-size-rule';
 import { effectiveRackSize, type RackLike } from '../warehouse-master/space-math';
 
 // Each rack carries `effectiveSize`: its own size with every missing value taken
@@ -178,18 +179,27 @@ export class WarehouseService {
 
   // ─── Rack CRUD ────────────────────────────────────────────────────────────
 
+  // RQ7 runs on this route too. It is the older of the two rack write paths (the
+  // Warehouse Layout control centre still posts here), so a rule enforced only in
+  // Warehouse Master would simply be walked around from that screen. Same shared
+  // helper, same 400 RACK_SIZE_FROM_TYPE — see common/rack-size-rule.ts.
   async createRack(dto: {
     warehouseId: string;
     code: string;
     name?: string;
     zone?: string;
     rackType?: RackType;
+    rackTypeId?: string | null;
     capacity?: number;
     levels?: number;
     columns?: number;
+    lengthCm?: number | null;
+    widthCm?: number | null;
+    heightCm?: number | null;
     description?: string;
   }, actorId?: string, scope?: ScopePrincipal) {
     assertWarehouseAccess(scope, dto.warehouseId, 'this warehouse');
+    assertRackSizeFromType(dto);
     const exists = await this.prisma.rack.findUnique({
       where: { warehouseId_code: { warehouseId: dto.warehouseId, code: dto.code } },
     });
@@ -201,8 +211,11 @@ export class WarehouseService {
 
   // Only descriptive fields: moving a rack between warehouses or deactivating it
   // goes through deleteRack (which refuses racks holding stock), never a PATCH.
-  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string }>, actorId?: string, scope?: ScopePrincipal) {
-    await this.scopedRack(id, scope);
+  // A rack that follows a Rack Type cannot have its size or grid changed here (RQ7);
+  // scopedRack already loaded the stored rack, so the rule costs no extra query.
+  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; rackTypeId: string | null; capacity: number; levels: number; columns: number; lengthCm: number | null; widthCm: number | null; heightCm: number | null; description: string }>, actorId?: string, scope?: ScopePrincipal) {
+    const before = await this.scopedRack(id, scope);
+    assertRackSizeFromType(dto, before);
     const updated = await this.prisma.rack.update({ where: { id }, data: dto });
     await this.audit(actorId, 'RACK_UPDATED', 'Rack', id, updated.code);
     return updated;

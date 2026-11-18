@@ -6,28 +6,41 @@ import { WarehouseMasterService } from './warehouse-master.service';
 const TYPE = { id: 't1', code: 'RT-250', name: 'Shelf 250', category: 'STANDARD_RACK', lengthCm: 250, widthCm: 100, heightCm: 400, levels: 3, columns: 4, slotCapacity: 2, isActive: true };
 const WH = { id: 'w1', code: 'WH', lengthCm: 2000, widthCm: 1000, usableAreaPct: 50, isDeleted: false };
 
-function makePrisma(existing: any[] = []) {
-  let n = 0;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function makePrisma(existing: any[] = [], pattern?: 'zone-r01' | 'rack-001') {
+  let n = 0, t = 0;
   const tx: any = {
     rack: { create: jest.fn((a) => ({ id: `r${++n}`, code: a.data.code })) },
     slot: { createMany: jest.fn((a) => ({ count: a.data.length })) },
+    rackTypeMaster: { create: jest.fn((a) => ({ id: `auto${++t}`, ...a.data })) },
     auditLog: { create: jest.fn().mockResolvedValue({}) },
   };
   const prisma: any = {
     warehouse: { findFirst: jest.fn().mockResolvedValue(WH) },
-    rackTypeMaster: { findUnique: jest.fn().mockResolvedValue(TYPE) },
+    rackTypeMaster: {
+      findUnique: jest.fn().mockResolvedValue(TYPE),
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     rack: { findMany: jest.fn().mockResolvedValue(existing) },
     $transaction: jest.fn((fn) => fn(tx)),
   };
-  return { prisma, tx, svc: new WarehouseMasterService(prisma) };
+  // No SystemSettingsService = every setting keeps its built-in default.
+  const settings = pattern ? ({ rackCodePattern: jest.fn().mockResolvedValue(pattern) } as any) : undefined;
+  return { prisma, tx, settings, svc: new WarehouseMasterService(prisma, settings) };
 }
 
 describe('setupRacks (setup wizard)', () => {
   it('preview plans codes per zone, slots from the type grid, writes nothing', async () => {
     const { prisma, tx, svc } = makePrisma();
     const r = await svc.setupRacks('w1', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }, { name: 'B', racks: 1 }], preview: true }, 'u1');
-    expect(r.racks).toEqual([{ code: 'A-R01', zone: 'A' }, { code: 'A-R02', zone: 'A' }, { code: 'B-R01', zone: 'B' }]);
+    expect(r.racks.map((x) => ({ code: x.code, zone: x.zone }))).toEqual([{ code: 'A-R01', zone: 'A' }, { code: 'A-R02', zone: 'A' }, { code: 'B-R01', zone: 'B' }]);
     expect(r).toMatchObject({ slotsPerRack: 12, totalRacks: 3, totalSlots: 36, newFootprintM2: 7.5, usableAreaM2: 100, warnings: [], preview: true, created: 0 });
+    // RQ26: the per-rack row the preview table shows, and the total it adds up to.
+    expect(r.racks[0]).toEqual({ code: 'A-R01', zone: 'A', lengthCm: 250, widthCm: 100, footprintM2: 2.5 });
+    expect(r.rackFootprintM2).toBe(2.5);
+    expect(round2(r.racks.reduce((a, x) => a + (x.footprintM2 ?? 0), 0))).toBe(r.newFootprintM2);
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(tx.rack.create).not.toHaveBeenCalled();
   });

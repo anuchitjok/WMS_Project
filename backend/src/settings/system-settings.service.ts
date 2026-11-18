@@ -1,9 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  DEFAULT_RACK_CODE_PATTERN,
   HIDDEN_MODULES_KEY,
   MODULE_KEYS,
   ModuleKey,
+  RACK_CODE_PATTERN_KEY,
+  RackCodePattern,
   SETTING_BY_KEY,
   SettingValue,
   hiddenModulesFrom,
@@ -63,6 +66,18 @@ export class SystemSettingsService {
     return v.state === 'configured'
       ? (v.value as 'weekly' | 'monthly' | 'quarterly')
       : null;
+  }
+
+  /**
+   * Rack code pattern for racks created from now on (C4). Falls back to the
+   * built-in `<Zone>-R01` while the setting is missing, disabled or invalid.
+   * Never applies to racks that already exist.
+   */
+  async rackCodePattern(): Promise<RackCodePattern> {
+    const v = await this.get(RACK_CODE_PATTERN_KEY);
+    return v.state === 'configured'
+      ? (v.value as RackCodePattern)
+      : DEFAULT_RACK_CODE_PATTERN;
   }
 
   /**

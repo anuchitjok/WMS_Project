@@ -15,6 +15,11 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 export class RmaController {
   constructor(private readonly service: RmaService) {}
 
+  /**
+   * RQ23: answers with `{ rows, scope, pendingElsewhere }` instead of a bare array,
+   * so the page can say whether an empty list means "none of yours" (scope 'own')
+   * or "none in the system" (scope 'all'). Who sees what is unchanged.
+   */
   @Get('pending-usage')
   pendingUsage(@CurrentUser() user: any) {
     return this.service.pendingUsage(user);

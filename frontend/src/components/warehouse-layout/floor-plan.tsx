@@ -11,13 +11,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // `Map` is aliased: the bare name would shadow the global Map constructor,
 // which this file uses for the occupancy lookup.
-import { Map as MapIcon, AlertTriangle, RefreshCw, Link2Off, Info, Pencil, Eye, Plus, Link2, Unlink, Rows3, Printer } from 'lucide-react';
+import {
+  Map as MapIcon, AlertTriangle, RefreshCw, Link2Off, Info, Pencil, Eye, Plus, Link2, Unlink,
+  Rows3, Printer, ListChecks, LayoutGrid, Loader2, ArrowRight, CheckCircle2,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  layoutApi, type LayoutResponse, type LayoutObject, type LayoutObjectType, type LayoutOccupancy,
+  layoutApi, localizeError,
+  type LayoutResponse, type LayoutObject, type LayoutObjectType, type LayoutOccupancy,
+  type LayoutProblem, type LayoutProblemsResponse, type PlaceRacksResult, type RackPlacementSkipReason,
 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useT } from '@/i18n';
 import { useAuthStore } from '@/store/auth.store';
 import { useDiscardGuard } from '@/hooks/use-discard-guard';
 import { useRealtime } from '@/hooks/use-realtime';
@@ -26,7 +33,7 @@ import type { UserRole } from '@/types';
 import { cn } from '@/lib/utils';
 import { LayoutCanvas } from './layout-canvas';
 import { OBJECT_STYLES } from './layout-object';
-import { LayoutToolbar } from './layout-toolbar';
+import { LayoutToolbar, SaveDrawingDialog } from './layout-toolbar';
 import { PropertyPanel } from './property-panel';
 import { useLayoutEditor } from './use-layout-editor';
 import { LinkSlotDialog } from './link-slot-dialog';
@@ -41,6 +48,9 @@ const DEFAULT_SIZE: Partial<Record<LayoutObjectType, [number, number]>> = {
   ZONE: [20, 14], RACK: [12, 4], SHELF: [6, 2], BIN: [2, 2], AISLE: [16, 2.5],
   STORAGE_AREA: [16, 10], RECEIVING_AREA: [12, 5], SHIPPING_AREA: [12, 5],
   STAGING_AREA: [10, 6], QC_AREA: [8, 5], WORK_AREA: [8, 5], CUSTOM_AREA: [8, 5],
+  // RQ8 — a door is an OPENING, so it starts at the size of a real one: a 1.2 m
+  // leaf in a 30 cm wall, not an area-sized box the user has to shrink.
+  DOOR: [1.2, 0.3],
 };
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
@@ -101,7 +111,8 @@ function Legend() {
     ['Outbound', ['SHIPPING_AREA']],
     ['Handling', ['STAGING_AREA', 'WORK_AREA']],
     ['Quality', ['QC_AREA']],
-    ['Structure', ['ZONE', 'AISLE', 'CUSTOM_AREA']],
+    // RQ8 — DOOR joins AISLE under Structure: both are kept clear, neither is a region.
+    ['Structure', ['ZONE', 'AISLE', 'DOOR', 'CUSTOM_AREA']],
   ];
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
@@ -127,6 +138,292 @@ function Legend() {
   );
 }
 
+/** "Name (CODE)" — the way a supervisor would say which object is meant. */
+function objectLabel(name?: string | null, code?: string | null): string {
+  const n = (name ?? '').trim();
+  const c = (code ?? '').trim();
+  if (n && c && n !== c) return `${n} (${c})`;
+  return n || c || '—';
+}
+
+/**
+ * RQ10 — the list of geometry problems on the plan.
+ *
+ * Every row is a WARNING (decision C5: the plan is a drawing, and a wrong
+ * drawing never stops a save), so nothing in here blocks anything. The text is
+ * built from the problem's `kind`, not from the server's English `message` —
+ * that is kept only as the fallback for a kind this build does not know.
+ *
+ * Clicking a row selects the object and brings it into view on the canvas; for
+ * the pair problems the SECOND object is its own button, so both sides are
+ * reachable and named.
+ */
+function PlanProblemsDialog({ open, onOpenChange, data, loading, error, onRetry, onFocus }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  data: LayoutProblemsResponse | null;
+  loading: boolean;
+  error: string | null;
+  onRetry: () => void;
+  /** Select the object and scroll it into view; also closes this dialog. */
+  onFocus: (objectId: string) => void;
+}) {
+  const { m, t, fmt } = useT();
+  const P = m.layout3d.floor.problems;
+  const KIND = P.kind as Record<string, string | undefined>;
+  const KIND_LABEL = P.kindLabel as Record<string, string | undefined>;
+
+  const describe = (p: LayoutProblem) => {
+    const template = KIND[p.kind];
+    // An unknown kind (a newer server than this build) still has to say
+    // something useful, so the server's own sentence is the fallback.
+    if (!template) return p.message;
+    return t(template, {
+      name: objectLabel(p.objectName, p.objectCode),
+      other: objectLabel(p.otherName, p.otherCode),
+    });
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-slate-900">
+            <ListChecks className="w-4 h-4 text-amber-600" /> {P.title}
+          </DialogTitle>
+        </DialogHeader>
+
+        {loading ? (
+          <p className="flex items-center gap-2 py-6 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> {P.loading}
+          </p>
+        ) : error ? (
+          <div className="py-4">
+            <p className="text-sm text-slate-600">{error}</p>
+            <Button variant="outline" size="sm" className="mt-3 gap-1.5 bg-white" onClick={onRetry}>
+              <RefreshCw className="w-4 h-4" /> {P.retry}
+            </Button>
+          </div>
+        ) : !data || data.layoutId === null ? (
+          <p className="py-6 text-sm text-slate-500">{P.noLayout}</p>
+        ) : (
+          <div className="space-y-3">
+            {/* 5 — when the extent is unknown the boundary check was skipped, and
+                the user must not read an empty list as "everything is inside". */}
+            {data.floor.source === 'NONE' && (
+              <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                <AlertTriangle className="mt-px h-4 w-4 flex-shrink-0" />
+                <span>{P.noFloor}</span>
+              </p>
+            )}
+            {data.floor.source === 'CANVAS' && (
+              <p className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <Info className="mt-px h-4 w-4 flex-shrink-0" />
+                <span>{P.floorCanvas}</span>
+              </p>
+            )}
+
+            {data.counts.total === 0 ? (
+              <p className="flex items-start gap-2 py-4 text-sm text-slate-600">
+                <CheckCircle2 className="mt-px h-4 w-4 flex-shrink-0 text-green-600" />
+                <span>{P.clean}</span>
+              </p>
+            ) : (
+              <ul className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+                {data.problems.map((p, i) => (
+                  <li key={`${p.kind}-${p.objectId}-${p.otherId ?? i}`}
+                    className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                          {KIND_LABEL[p.kind] ?? p.kind}
+                        </span>
+                        <p className="mt-1.5 text-sm leading-relaxed text-slate-700">{describe(p)}</p>
+                        {/* 3 — both sides of a pair problem, each one reachable. */}
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                          <button type="button" onClick={() => onFocus(p.objectId)}
+                            title={P.goTo}
+                            className="rounded-md border border-slate-200 px-2 py-0.5 font-medium text-slate-600 hover:border-green-300 hover:bg-green-50 hover:text-green-700">
+                            {TYPE_LABEL(p.objectType)}: {objectLabel(p.objectName, p.objectCode)}
+                          </button>
+                          {p.otherId && (
+                            <>
+                              <ArrowRight className="h-3 w-3 flex-shrink-0 text-slate-300" />
+                              <button type="button" onClick={() => onFocus(p.otherId!)}
+                                title={t(P.showOther, { name: objectLabel(p.otherName, p.otherCode) })}
+                                className="rounded-md border border-slate-200 px-2 py-0.5 font-medium text-slate-600 hover:border-green-300 hover:bg-green-50 hover:text-green-700">
+                                {TYPE_LABEL(p.otherType ?? '')}: {objectLabel(p.otherName, p.otherCode)}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="flex items-start gap-2 border-t border-slate-100 pt-3 text-[11px] leading-relaxed text-slate-500">
+              <Info className="mt-px h-3.5 w-3.5 flex-shrink-0" />
+              <span>{P.subtitle}</span>
+            </p>
+            {data.counts.total > 0 && (
+              <p className="text-[11px] tabular-nums text-slate-400">
+                {t(P.badgeAria, { count: fmt.number(data.counts.total, 0) })}
+              </p>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{P.close}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+const SKIP_ORDER: RackPlacementSkipReason[] = ['ALREADY_DRAWN', 'NO_SIZE', 'NO_ROOM'];
+
+/**
+ * RQ27 — place every unplaced rack on the plan in one action.
+ *
+ * The dry run always goes first: opening this dialog computes the positions and
+ * writes NOTHING, so the user sees how many would be drawn and how many skipped
+ * (and why) before committing. Only the confirm button writes.
+ *
+ * It also says plainly that there is no one-click undo: auto-placed racks are
+ * tagged `source: "auto-place"`, and "Back to auto layout" removes only the
+ * drawings the 3D view made.
+ */
+function PlaceRacksDialog({ open, onOpenChange, warehouseId, version, onPlaced }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  warehouseId: string;
+  /** Layout version last read; sent so a stale write comes back as 409. */
+  version: number;
+  onPlaced: (res: PlaceRacksResult) => void;
+}) {
+  const { m, t, fmt } = useT();
+  const R = m.layout3d.floor.placeRacks;
+  const REASON = R.reason as Record<string, string | undefined>;
+
+  const [preview, setPreview] = useState<PlaceRacksResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [placing, setPlacing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const dryRun = useCallback(async () => {
+    setBusy(true); setError(null); setPreview(null);
+    try {
+      setPreview(await layoutApi.placeRacks(warehouseId, { version, dryRun: true }));
+    } catch (e: any) {
+      setError(e?.status === 409 ? R.stale : localizeError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [warehouseId, version, R.stale]);
+
+  // Re-run on every open: racks and the plan may have changed since last time.
+  useEffect(() => { if (open) void dryRun(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const commit = useCallback(async () => {
+    setPlacing(true); setError(null);
+    try {
+      const res = await layoutApi.placeRacks(warehouseId, { version, dryRun: false });
+      toast.success(t(R.done, {
+        placed: fmt.number(res.placed.length, 0),
+        skipped: fmt.number(res.skipped.length, 0),
+      }));
+      onPlaced(res);
+      onOpenChange(false);
+    } catch (e: any) {
+      // 5 — a version clash means someone else saved first. Say so rather than
+      // silently overwriting or losing the user's work.
+      setError(e?.status === 409 ? R.stale : localizeError(e));
+    } finally {
+      setPlacing(false);
+    }
+  }, [warehouseId, version, onPlaced, onOpenChange, R.stale, R.done, t, fmt]);
+
+  const willPlace = preview?.placed.length ?? 0;
+  const skipped = preview?.skipped ?? [];
+  const byReason = SKIP_ORDER
+    .map((reason) => ({ reason, count: skipped.filter((s) => s.reason === reason).length }))
+    .filter((r) => r.count > 0);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-slate-900">
+            <LayoutGrid className="w-4 h-4 text-green-600" /> {R.title}
+          </DialogTitle>
+        </DialogHeader>
+
+        {busy ? (
+          <p className="flex items-center gap-2 py-6 text-sm text-slate-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> {R.checking}
+          </p>
+        ) : error ? (
+          <div className="py-4">
+            <p className="text-sm text-slate-600">{error}</p>
+            <Button variant="outline" size="sm" className="mt-3 gap-1.5 bg-white" onClick={dryRun}>
+              <RefreshCw className="w-4 h-4" /> {R.retry}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3 text-sm text-slate-600">
+            <p className="font-medium text-slate-800">
+              {willPlace > 0 ? t(R.willPlace, { count: fmt.number(willPlace, 0) }) : R.willPlaceNone}
+            </p>
+
+            {byReason.length > 0 && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold text-slate-700">
+                  {t(R.skippedTitle, { count: fmt.number(skipped.length, 0) })}
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  {byReason.map((r) => (
+                    <li key={r.reason} className="text-xs text-slate-600">
+                      {t(R.reasonCount, {
+                        label: REASON[r.reason] ?? r.reason,
+                        count: fmt.number(r.count, 0),
+                      })}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <p className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">
+              <Info className="mt-px h-4 w-4 flex-shrink-0" />
+              <span>{R.drawingOnly}</span>
+            </p>
+
+            {willPlace > 0 && (
+              <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900">
+                <AlertTriangle className="mt-px h-4 w-4 flex-shrink-0" />
+                <span>{R.noUndo}</span>
+              </p>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={placing}>{R.cancel}</Button>
+          <Button className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => { void commit(); }}
+            disabled={busy || placing || !!error || willPlace === 0}>
+            {placing ? R.placing : t(R.confirm, { count: fmt.number(willPlace, 0) })}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   const user = useAuthStore((s) => s.user);
   const canEdit = !!user && EDIT_ROLES.includes(user.role);
@@ -141,7 +438,20 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
   const [creating, setCreating] = useState(false);
   const [occupancy, setOccupancy] = useState<LayoutOccupancy[]>([]);
   const [linkOpen, setLinkOpen] = useState(false);
+  // RQ11: every save route — the button and Ctrl+S — goes through the dialog
+  // that says the save is a drawing only.
+  const [confirmSave, setConfirmSave] = useState(false);
+  // RQ10 geometry warnings, and RQ27 bulk rack placement.
+  const [problems, setProblems] = useState<LayoutProblemsResponse | null>(null);
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  const [problemsLoading, setProblemsLoading] = useState(false);
+  const [problemsError, setProblemsError] = useState<string | null>(null);
+  const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const [placeOpen, setPlaceOpen] = useState(false);
   const planRef = useRef<HTMLDivElement>(null);
+
+  const { m, t, fmt } = useT();
+  const F = m.layout3d.floor;
 
   const ed = useLayoutEditor();
 
@@ -177,7 +487,31 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
     }
   }, [warehouseId]); // eslint-disable-line
 
-  useEffect(() => { setEditing(false); load(); }, [load]);
+  /**
+   * RQ10. A separate read on purpose: these are warnings, so a failure here must
+   * never stop the plan from loading, being edited or being saved (decision C5).
+   */
+  const loadProblems = useCallback(async () => {
+    if (!warehouseId) return;
+    setProblemsLoading(true); setProblemsError(null);
+    try {
+      setProblems(await layoutApi.problems(warehouseId));
+    } catch (e: unknown) {
+      setProblems(null);
+      setProblemsError(localizeError(e));
+    } finally {
+      setProblemsLoading(false);
+    }
+  }, [warehouseId]);
+
+  useEffect(() => { setEditing(false); load(); void loadProblems(); }, [load, loadProblems]);
+
+  /** RQ10: jump from a problem to the object it is about. */
+  const focusObject = useCallback((objectId: string) => {
+    ed.select([objectId]);
+    setFocus({ id: objectId, nonce: Date.now() });
+    setProblemsOpen(false);
+  }, [ed]);
 
   // Keep the bins current. `inventory:update` covers receiving, putaway, status
   // changes and picking; `request:update` covers allocation, which flips stock to
@@ -202,6 +536,9 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
       ed.saved(res.objects);
       setData((d) => (d && d.layout ? { ...d, layout: { ...d.layout, version: res.version }, objects: res.objects } : d));
       toast.success('Floor plan saved');
+      // The drawing changed, so the warnings may have too. Never awaited: the
+      // save has already succeeded whatever this read does.
+      void loadProblems();
     } catch (e: any) {
       // A version clash means someone else saved while we were editing. Never
       // overwrite silently — tell the user and let them reload.
@@ -209,7 +546,7 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
     } finally {
       setSaving(false);
     }
-  }, [data, ed, version]);
+  }, [data, ed, version, loadProblems]);
 
   const discardAll = useCallback(() => {
     ed.reset(data?.objects ?? []);
@@ -259,7 +596,7 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? ed.redo() : ed.undo(); return; }
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); ed.redo(); return; }
       if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); return; }
-      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); return; }
+      if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); if (ed.isDirty) setConfirmSave(true); return; }
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
       if (e.key === 'Escape') ed.select([]);
     }
@@ -289,6 +626,19 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
     }
   }, [warehouseId, load]);
 
+  /**
+   * RQ27 — show the result straight away: the response carries the whole object
+   * list, so the plan is refreshed from it rather than re-fetched. Safe because
+   * the action is offered only with no unsaved edits (see the button below).
+   */
+  const applyPlaced = useCallback((res: PlaceRacksResult) => {
+    if (res.layout) setVersion(res.layout.version);
+    setData((d) => (d ? { ...d, layout: res.layout ?? d.layout, objects: res.objects } : d));
+    ed.reset(res.objects);
+    void loadProblems();
+    layoutApi.occupancy(warehouseId).then(setOccupancy).catch(() => {});
+  }, [ed, loadProblems, warehouseId]);
+
   const printPlan = useCallback(() => {
     if (!data?.layout) return;
     const ok = printFloorPlan({
@@ -312,6 +662,28 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
     [ed.objects],
   );
   const orphanCount = useMemo(() => occupancy.filter((o) => o.orphaned).length, [occupancy]);
+  const problemCount = problems?.counts.total ?? 0;
+
+  // RQ11: of the objects this save is about to write, how many hold stock right
+  // now — counted through parentObjectId, because a rack's stock sits in the
+  // bins drawn inside it. Read-only: it only shapes what the dialog says.
+  const dirtyWithStock = useMemo(() => {
+    const live = new Set(occupancy.filter((o) => !o.orphaned && o.items > 0).map((o) => o.objectId));
+    if (!live.size) return 0;
+    const byId = new Map(ed.objects.map((o) => [o.id, o]));
+    const holdsStock = (id: string) => {
+      if (live.has(id)) return true;
+      // Any descendant with stock counts: walk down from this object.
+      return ed.objects.some((o) => {
+        if (!live.has(o.id)) return false;
+        let cur = o.parentObjectId;
+        const seen = new Set<string>();
+        while (cur && !seen.has(cur)) { if (cur === id) return true; seen.add(cur); cur = byId.get(cur)?.parentObjectId ?? null; }
+        return false;
+      });
+    };
+    return ed.state.dirty.filter(holdsStock).length;
+  }, [occupancy, ed.objects, ed.state.dirty]);
 
   // ── Linking ────────────────────────────────────────────────────────────────
 
@@ -396,6 +768,35 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             {!editing && (
               <span className="rounded-full px-2 py-0.5 text-[10px] font-bold bg-slate-100 text-slate-500">Read-only</span>
             )}
+            {/* RQ10 — the count is on the control itself, so a plan with
+                problems announces it without the user going looking. Amber, not
+                red: these are warnings and the plan still saves. */}
+            <Button variant="outline" size="sm"
+              className={cn('h-8 gap-1.5 text-xs',
+                problemCount > 0
+                  ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:text-amber-900'
+                  : 'bg-white')}
+              onClick={() => setProblemsOpen(true)}
+              title={problemCount > 0 ? t(F.problems.badgeAria, { count: fmt.number(problemCount, 0) }) : F.problems.open}>
+              {problemCount > 0 ? <AlertTriangle className="w-3.5 h-3.5" /> : <ListChecks className="w-3.5 h-3.5" />}
+              {F.problems.open}
+              {problemCount > 0 && (
+                <span className="ml-0.5 rounded-full bg-amber-600 px-1.5 text-[10px] font-bold tabular-nums text-white">
+                  {fmt.number(problemCount, 0)}
+                </span>
+              )}
+            </Button>
+            {/* RQ27 — write roles only; the API enforces the same two roles.
+                Disabled while there are unsaved edits, because the response
+                replaces the whole object list. */}
+            {canEdit && (
+              <Button variant="outline" size="sm"
+                className="hidden lg:inline-flex h-8 gap-1.5 bg-white text-xs"
+                onClick={() => setPlaceOpen(true)} disabled={ed.isDirty}
+                title={ed.isDirty ? F.placeRacks.dirty : F.placeRacks.open}>
+                <LayoutGrid className="w-3.5 h-3.5" /> {F.placeRacks.open}
+              </Button>
+            )}
             <Button variant="outline" size="sm" className="h-8 gap-1.5 bg-white text-xs" onClick={printPlan}
               title="Print or save the whole floor plan as PDF">
               <Printer className="w-3.5 h-3.5" /> Print
@@ -438,12 +839,11 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
             onAdd={addObject}
             onUndo={ed.undo} onRedo={ed.redo}
             onDuplicate={duplicateSelected} onDelete={deleteSelected}
-            onSave={save} onDiscard={discardAll}
+            onSave={() => setConfirmSave(true)} onDiscard={discardAll}
             canUndo={ed.canUndo} canRedo={ed.canRedo}
             hasSelection={ed.state.selection.length > 0}
             isDirty={ed.isDirty} saving={saving}
             snapEnabled={snapEnabled} onToggleSnap={() => setSnapEnabled((v) => !v)}
-            unitLabel={layout.unitLabel}
           />
         )}
 
@@ -467,6 +867,7 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
               onCheckpoint={ed.checkpoint}
               onPatch={ed.patch}
               occupancyByObject={occByObject}
+              focus={focus}
             />
           </div>
         )}
@@ -499,6 +900,31 @@ export function FloorPlan({ warehouseId }: { warehouseId: string }) {
           The floor plan shows where things physically sit. Stock quantities always come from the WMS location on the Control Center tab.
         </p>
       </div>
+
+      <SaveDrawingDialog
+        open={confirmSave}
+        onOpenChange={setConfirmSave}
+        onConfirm={() => { void save(); }}
+        dirtyWithStock={dirtyWithStock}
+      />
+
+      <PlanProblemsDialog
+        open={problemsOpen}
+        onOpenChange={setProblemsOpen}
+        data={problems}
+        loading={problemsLoading}
+        error={problemsError}
+        onRetry={() => { void loadProblems(); }}
+        onFocus={focusObject}
+      />
+
+      <PlaceRacksDialog
+        open={placeOpen}
+        onOpenChange={setPlaceOpen}
+        warehouseId={warehouseId}
+        version={version}
+        onPlaced={applyPlaced}
+      />
 
       <DiscardChangesDialog
         open={guard.confirming}

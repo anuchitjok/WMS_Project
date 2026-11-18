@@ -14,6 +14,16 @@ export const requests = {
   itemNo: 'Item #{n}',
   brand: 'Brand',
   selectBrand: 'Select brand…',
+  // RQ22: brands are no longer hidden when nothing can be requested from them —
+  // they are listed, greyed out, with the reason next to the name.
+  brandNone: 'No brands have been set up yet',
+  brandGreyHint: 'Greyed-out brands have no items you can request right now.',
+  brandNoBrandItems: '{count} items have no brand yet, so they cannot be requested.',
+  brandWhy: {
+    noProducts: 'no items under this brand',
+    noActive: 'no items available',
+    noStock: 'out of stock',
+  },
   sku: 'SKU',
   searchSku: 'Search SKU…',
   selectBrandFirst: 'Select brand first',

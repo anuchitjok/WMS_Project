@@ -14,6 +14,9 @@ const ISSUED_UNIT_STATUSES: StockStatus[] = [StockStatus.SHIPPED, StockStatus.IS
 
 type Principal = AccessPrincipal & { id: string };
 
+/** Whose requests the pending-usage list covers: only the viewer's own, or everybody's. */
+export type PendingUsageScope = 'own' | 'all';
+
 @Injectable()
 export class RmaService {
   constructor(
@@ -23,10 +26,29 @@ export class RmaService {
 
   /**
    * Requests awaiting usage confirmation. A requester sees their own requests;
-   * people who may confirm on behalf of others see all of them.
+   * people who may confirm on behalf of others see all of them (unchanged).
+   *
+   * RQ23: the rows come back with the scope they were read under, because an empty
+   * list has two different meanings and the page cannot tell them apart on its own —
+   * nothing anywhere awaits confirmation, or the viewer only sees their own requests
+   * and has none. `pendingElsewhere` answers the second case: it is only read (one
+   * count) when the viewer's own list came back empty, and is null otherwise because
+   * nothing else needs explaining.
    */
-  pendingUsage(user?: Principal) {
-    const own = user && !hasAccess(user, ACCESS.rmaUsageOnBehalf) ? { requesterId: user.id } : {};
+  async pendingUsage(user?: Principal) {
+    // Exactly the old rule: no principal (internal call) or on-behalf access → everything.
+    const scope: PendingUsageScope = !user || hasAccess(user, ACCESS.rmaUsageOnBehalf) ? 'all' : 'own';
+    const rows = await this.pendingUsageRows(scope === 'own' ? { requesterId: user!.id } : {});
+    const pendingElsewhere =
+      scope === 'own' && rows.length === 0
+        ? (await this.prisma.withdrawalRequest.count({
+            where: { status: { in: USAGE_PENDING_STATUSES }, requesterId: { not: user!.id } },
+          })) > 0
+        : null;
+    return { rows, scope, pendingElsewhere };
+  }
+
+  private pendingUsageRows(own: { requesterId?: string }) {
     return this.prisma.withdrawalRequest.findMany({
       where: { status: { in: USAGE_PENDING_STATUSES }, ...own },
       include: {

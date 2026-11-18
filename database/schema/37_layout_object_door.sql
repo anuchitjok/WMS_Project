@@ -1,0 +1,40 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 37_layout_object_door.sql
+-- Phase 3 / RQ8: a Door can be drawn on the warehouse floor plan.
+--
+--   "LayoutObjectType"  += 'DOOR'
+--
+-- ADDITIVE and IDEMPOTENT. One new enum label, appended after 'CUSTOM_AREA'.
+-- No table, column, constraint or row is touched, so nothing that exists today
+-- reads or writes differently after this runs. Re-running is a no-op: the
+-- `IF NOT EXISTS` clause (Postgres 9.6+) makes the second run do nothing instead
+-- of raising `duplicate_object`.
+--
+-- ─── READ THIS BEFORE RUNNING ────────────────────────────────────────────────
+--
+-- 1. NO TRANSACTION BLOCK. There is deliberately no BEGIN/COMMIT here, unlike
+--    every other migration in this directory. `ALTER TYPE ... ADD VALUE` cannot
+--    run inside a transaction block on Postgres 11 and older, and on 12+ the new
+--    label still cannot be USED by any statement in the same transaction. A
+--    single statement outside a transaction is correct on every version and is
+--    atomic by itself, so there is nothing to roll back halfway.
+--    Do not wrap this file in BEGIN/COMMIT, and do not merge it into another
+--    migration that has one.
+--
+-- 2. ORDER: run this BEFORE deploying the API that can write DOOR. Adding a
+--    label an old API never sends is harmless, so this is safe to apply at any
+--    time ahead of the deploy; deploying first is what breaks (the API would
+--    send a label the database does not know and every write would fail).
+--
+-- 3. NOT REVERSIBLE in place. Postgres cannot drop an enum label. Undoing it
+--    means recreating the type and every column that uses it, so there is no
+--    rollback script. The label is inert until a row uses it, which is why this
+--    is acceptable: if Phase 3 is dropped, leave the unused label behind.
+--
+-- 4. Apply on STAGING first. Do NOT use `prisma db push` against a shared
+--    database — it would try to rewrite the whole type.
+--
+-- Matches backend/prisma/schema.prisma at this change (enum LayoutObjectType).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+ALTER TYPE "LayoutObjectType" ADD VALUE IF NOT EXISTS 'DOOR';

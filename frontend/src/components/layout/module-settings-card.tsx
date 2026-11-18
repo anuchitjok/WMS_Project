@@ -6,13 +6,15 @@ import { useEffect, useState } from 'react';
 import { LayoutGrid } from 'lucide-react';
 import { toast } from 'sonner';
 import { settingsApi } from '@/lib/api';
-import { MODULE_KEYS, refreshModuleVisibility, type ModuleKey } from '@/lib/feature-flags';
+import { MODULE_KEYS, isModuleVisibleDefault, refreshModuleVisibility, type ModuleKey } from '@/lib/feature-flags';
 import { getT, useT } from '@/i18n';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 export const HIDDEN_MODULES_KEY = 'ui.hiddenModules';
-const DEFAULT_HIDDEN: ModuleKey[] = ['warranty', 'mrp', 'floorPlan2d'];
+// Derived, never a second hand-written list: this card used to keep its own copy
+// of the defaults, which is one more place to forget when a module ships.
+const DEFAULT_HIDDEN: ModuleKey[] = MODULE_KEYS.filter((k) => !isModuleVisibleDefault(k));
 
 /** Hidden modules in force for a settings row (default while missing/invalid). */
 function hiddenFrom(row: any): ModuleKey[] {

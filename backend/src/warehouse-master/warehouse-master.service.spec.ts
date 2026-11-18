@@ -90,8 +90,9 @@ describe('WarehouseMasterService', () => {
     it('template category decides the stored rackType (PALLET_ON_FLOOR → PALLET)', async () => {
       const { prisma } = makePrisma();
       prisma.rackTypeMaster.findUnique.mockResolvedValue(PLT);
-      const rack = await new WarehouseMasterService(prisma).createRack({ warehouseId: 'w1', code: ' P01 ', rackTypeId: 't2', levels: 1, columns: 4 }, 'u1');
-      expect(rack).toMatchObject({ code: 'P01', rackType: 'PALLET', rackTypeId: 't2', columns: 4 });
+      // RQ7: the grid is no longer passed in, it comes from the Rack Type (PLT = 1 × 1).
+      const rack = await new WarehouseMasterService(prisma).createRack({ warehouseId: 'w1', code: ' P01 ', rackTypeId: 't2' }, 'u1');
+      expect(rack).toMatchObject({ code: 'P01', rackType: 'PALLET', rackTypeId: 't2', levels: 1, columns: 1 });
     });
     it('a legacy rackType like DRIVE_IN is stored as STANDARD', async () => {
       const { prisma } = makePrisma();

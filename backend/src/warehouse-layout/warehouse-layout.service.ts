@@ -6,9 +6,13 @@ import { StockStatus, LayoutObjectType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
-  BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
+  BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto, PlaceRacksDto,
 } from './dto/layout.dto';
 import { type Pt, type FloorRect, bbox, outlineOf, rectCorners, rectInPolygon, rectsOverlap } from '../warehouse-master/floor-geometry';
+import {
+  type PlanObject, type RackToPlace, type PlanFloor, type LayoutProblem,
+  PLAN_ROLE, countProblems, isWalkway, layoutProblems, planFloor, planRect, placeRacks as fitRacks,
+} from './layout-geometry';
 
 // Physical Layout is the *drawing* of the warehouse floor. It never owns
 // inventory and never writes Warehouse / Rack / Slot / StockItem — this service
@@ -548,6 +552,180 @@ export class WarehouseLayoutService {
       { version: result.layout.version, removed: result.removed, kept: result.kept },
     );
     return result;
+  }
+
+  // ─── RQ10: geometry problems on the 2D plan ─────────────────────────────────
+  //
+  // READ ONLY. Returns warnings; it is a separate endpoint precisely so that
+  // saving a plan never depends on it. C5 "Separate": the layout is a drawing,
+  // and a wrong drawing does not make stock wrong, so the editor must be able to
+  // save an imperfect plan and come back to it. Nothing here refuses a save and
+  // nothing here writes at all — not even an audit row.
+  // The return type is explicit on purpose. Without it TypeScript infers the
+  // union of the two returns below, and the no-layout one gives `problems: never[]`
+  // — so `res.problems[0].severity` stops type-checking for every caller and for
+  // the specs. It is also the contract the editor is written against, so it should
+  // be stated here rather than inferred.
+  async problems(
+    warehouseId: string,
+    scope?: LayoutScope,
+  ): Promise<{
+    warehouseId: string;
+    layoutId: string | null;
+    floor: PlanFloor;
+    counts: ReturnType<typeof countProblems>;
+    problems: LayoutProblem[];
+  }> {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const wh = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, isDeleted: false },
+      select: { id: true, code: true, name: true, lengthCm: true, widthCm: true, floorOutline: true },
+    });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
+    if (!layout) {
+      return {
+        warehouseId, layoutId: null, floor: { source: 'NONE' as const, points: null },
+        counts: countProblems([]), problems: [],
+      };
+    }
+    const objects = await this.prisma.layoutObject.findMany({
+      where: { layoutId: layout.id, isDeleted: false },
+      orderBy: this.sameOrder,
+    });
+    const floor = planFloor(wh, layout);
+    const problems = layoutProblems(objects as PlanObject[], floor.points);
+    return { warehouseId, layoutId: layout.id, floor, counts: countProblems(problems), problems };
+  }
+
+  // ─── RQ27: place a batch of unplaced racks on the plan ──────────────────────
+  //
+  // DRAWINGS ONLY. It creates LayoutObject rows pointing at racks that already
+  // exist, and bumps WarehouseLayout. No Rack is created, renamed, resized or
+  // moved; no Slot and no StockItem is touched. Moving real stock stays with
+  // Putaway and the Relocation Request workflow.
+  //
+  // Footprints come from the Rack Type (decision C3), falling back to a legacy
+  // rack's own size, so what is drawn is the size the rack really is.
+  async placeRacks(warehouseId: string, dto: PlaceRacksDto, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const wh = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, isDeleted: false },
+      select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
+    });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    const racks = await this.prisma.rack.findMany({
+      where: {
+        warehouseId, isDeleted: false, isActive: true,
+        ...(dto.rackIds?.length ? { id: { in: dto.rackIds } } : {}),
+      },
+      select: {
+        id: true, code: true, lengthCm: true, widthCm: true,
+        rackTypeMaster: { select: { lengthCm: true, widthCm: true } },
+      },
+      orderBy: { code: 'asc' },
+    });
+    if (dto.rackIds?.length) {
+      const found = new Set(racks.map((r) => r.id));
+      const unknown = dto.rackIds.filter((id) => !found.has(id));
+      if (unknown.length) throw new BadRequestException(`Not an active rack of this warehouse: ${codeList(unknown)}`);
+    }
+
+    const layout = await this.prisma.warehouseLayout.findUnique({ where: { warehouseId } });
+    const live = layout && !layout.isDeleted ? layout : null;
+    if (live ? live.version !== dto.version : dto.version !== undefined && dto.version !== null) {
+      throw new ConflictException('This layout changed elsewhere. Reload before saving.');
+    }
+
+    const existing = live
+      ? await this.prisma.layoutObject.findMany({ where: { layoutId: live.id, isDeleted: false }, orderBy: this.sameOrder })
+      : [];
+    const drawn = new Set(existing.filter((o) => o.objectType === LayoutObjectType.RACK && o.rackId).map((o) => o.rackId!));
+
+    // Same frame as the 3D arrange path: metres per plan unit and the floor's
+    // top-left anchor. Recorded here when the plan has none yet, exactly as
+    // saveRackPositions does, so 3D and the plan keep agreeing afterwards.
+    const mpu = live?.metersPerUnit ?? dto.metersPerUnit ?? 1;
+    const originX = live?.floorOriginX ?? 0;
+    const originZ = live?.floorOriginZ ?? 0;
+    const widthUnits = live?.widthUnits ?? 100;
+    const heightUnits = live?.heightUnits ?? 60;
+    const floor = planFloor(wh, { widthUnits, heightUnits, metersPerUnit: mpu, floorOriginX: originX, floorOriginZ: originZ });
+
+    const skipped: { rackId: string; code: string; reason: 'ALREADY_DRAWN' | 'NO_SIZE' | 'NO_ROOM' }[] = [];
+    const todo: RackToPlace[] = [];
+    for (const r of racks) {
+      if (drawn.has(r.id)) { skipped.push({ rackId: r.id, code: r.code, reason: 'ALREADY_DRAWN' }); continue; }
+      const L = r.rackTypeMaster?.lengthCm ?? r.lengthCm;
+      const W = r.rackTypeMaster?.widthCm ?? r.widthCm;
+      if (!L || !W || L <= 0 || W <= 0) { skipped.push({ rackId: r.id, code: r.code, reason: 'NO_SIZE' }); continue; }
+      todo.push({ rackId: r.id, code: r.code, width: L / 100 / mpu, height: W / 100 / mpu });
+    }
+
+    // A new rack may stand inside a zone or an area, but not on another drawn
+    // object, an aisle, a door or a zone marked as a walkway.
+    const blockers: FloorRect[] = existing
+      .filter((o) => PLAN_ROLE[o.objectType] === 'SOLID' || PLAN_ROLE[o.objectType] === 'KEEP_CLEAR' || isWalkway(o))
+      .map((o) => planRect(o));
+
+    const fit = fitRacks(todo, floor.points, blockers, { gap: dto.gap ?? 0.5 });
+    for (const r of fit.noRoom) skipped.push({ rackId: r.rackId, code: r.code, reason: 'NO_ROOM' });
+
+    if (dto.dryRun) {
+      return {
+        dryRun: true, layout: live, objects: existing,
+        placed: fit.placed.map((p) => ({ ...p, objectId: null })),
+        skipped,
+      };
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const lay = live
+        ?? (layout
+          ? await tx.warehouseLayout.update({ where: { id: layout.id }, data: { isDeleted: false, deletedAt: null, deletedBy: null } })
+          : await tx.warehouseLayout.create({ data: { warehouseId } }));
+
+      const made: { rackId: string; code: string; objectId: string; x: number; y: number; width: number; height: number }[] = [];
+      let maxX = 0, maxY = 0;
+      for (const p of fit.placed) {
+        const o = await tx.layoutObject.create({
+          data: {
+            layoutId: lay.id, objectType: LayoutObjectType.RACK, name: p.code, code: p.code, rackId: p.rackId,
+            x: p.x, y: p.y, width: p.width, height: p.height, rotation: 0,
+            metadata: JSON.stringify({ source: 'auto-place' }),
+          },
+        });
+        made.push({ rackId: p.rackId, code: p.code, objectId: o.id, x: p.x, y: p.y, width: p.width, height: p.height });
+        maxX = Math.max(maxX, p.x + p.width); maxY = Math.max(maxY, p.y + p.height);
+      }
+      if (floor.points) for (const [x, y] of floor.points) { maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+
+      const after = await tx.warehouseLayout.update({
+        where: { id: lay.id },
+        data: {
+          version: { increment: 1 },
+          ...(lay.metersPerUnit == null ? { metersPerUnit: mpu } : {}),
+          ...(lay.floorOriginX == null || lay.floorOriginZ == null ? { floorOriginX: originX, floorOriginZ: originZ } : {}),
+          widthUnits: Math.max(lay.widthUnits, Math.ceil(maxX + 2)),
+          heightUnits: Math.max(lay.heightUnits, Math.ceil(maxY + 2)),
+        },
+      });
+      const objects = await tx.layoutObject.findMany({ where: { layoutId: lay.id, isDeleted: false }, orderBy: this.sameOrder });
+      return { layout: after, objects, made };
+    });
+
+    await this.audit(
+      userId, 'LAYOUT_RACKS_PLACED', 'WarehouseLayout', result.layout.id,
+      { version: live?.version ?? null },
+      {
+        version: result.layout.version, considered: racks.length,
+        placed: result.made.length, skipped: skipped.length,
+        reasons: skipped.reduce<Record<string, number>>((a, s) => ({ ...a, [s.reason]: (a[s.reason] ?? 0) + 1 }), {}),
+      },
+    );
+    return { dryRun: false, layout: result.layout, objects: result.objects, placed: result.made, skipped };
   }
 
   // ─── Sprint 5: duplicate ────────────────────────────────────────────────────

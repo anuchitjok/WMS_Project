@@ -3,7 +3,7 @@
 // Right panel for a rack: template, size, slot size, slot generation, slot grid
 // with inline single and bulk editing (plan P1 1.4).
 import { useEffect, useMemo, useState } from 'react';
-import { Grid3x3, Pencil, Trash2, Wand2, CheckSquare, Square } from 'lucide-react';
+import { Grid3x3, Pencil, Power, PowerOff, Trash2, Wand2, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +26,21 @@ export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, o
   const slots: any[] = rack.slots ?? [];
   const [selected, setSelected] = useState<string[]>([]);
   const [multi, setMulti] = useState(false);
+  // RQ5 — inactive is not deleted: the rack stays here with its slots and stock.
+  const active = rack.isActive !== false;
+  const [busyActive, setBusyActive] = useState(false);
+
+  async function toggleActive() {
+    setBusyActive(true);
+    try {
+      if (active) { await warehouseSpaceApi.deactivateRack(rack.id); toast.success(m.warehouseMaster.form.rackDeactivated); }
+      else { await warehouseSpaceApi.activateRack(rack.id); toast.success(m.warehouseMaster.form.rackActivated); }
+      await onChanged();
+    } catch (err: any) {
+      // 409: something still depends on this rack — show what the server says.
+      toast.error(err.message);
+    } finally { setBusyActive(false); }
+  }
 
   // Drop selections that no longer exist after a reload / rack change.
   useEffect(() => { setSelected([]); setMulti(false); }, [rack.id]);
@@ -47,16 +62,24 @@ export function RackDetail({ rack, warehouse, canEditLayout, onEdit, onDelete, o
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg font-semibold text-slate-900">{rack.code}</h2>
               <Pill tone="green">{wm.category[cat]}</Pill>
+              {!active && <Pill>{wm.detail.inactive}</Pill>}
             </div>
             {(rack.name || rack.zone) && <p className="text-sm text-slate-600">{[rack.name, rack.zone && `${wm.detail.zone} ${rack.zone}`].filter(Boolean).join(' · ')}</p>}
           </div>
           {canEditLayout && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" className="gap-1.5" onClick={onEdit}><Pencil className="w-4 h-4" /> {wm.actions.editRack}</Button>
+              <Button size="sm" variant="outline" className="gap-1.5" disabled={busyActive} onClick={toggleActive}>
+                {active ? <><PowerOff className="w-4 h-4" /> {wm.actions.deactivateRack}</> : <><Power className="w-4 h-4" /> {wm.actions.activateRack}</>}
+              </Button>
               <Button size="sm" variant="outline" className="gap-1.5 text-red-600 hover:text-red-700" onClick={onDelete}><Trash2 className="w-4 h-4" /> {wm.actions.deleteRack}</Button>
             </div>
           )}
         </div>
+        {!active && (
+          <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{wm.rack.inactiveNote}</p>
+        )}
+        {canEditLayout && active && <p className="mt-2 text-xs text-slate-500">{wm.rack.deactivateVsDelete}</p>}
         <dl className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Fact label={wm.rack.template}>{rack.rackTypeMaster ? `${rack.rackTypeMaster.code} · ${rack.rackTypeMaster.name}` : <span className="text-slate-500 font-normal">{wm.rack.noTemplate}</span>}</Fact>
           <Fact label={wm.rack.size}>

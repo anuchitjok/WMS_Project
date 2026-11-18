@@ -257,15 +257,20 @@ describe('Phase 5 returns, RTV and scrap', () => {
       const { req } = await issued(1);
       const other = await fx.user(UserRole.REQUESTER, 'REQUESTER');
       expect(
-        (await fx.as(other).get('/rma/pending-usage')).body.some(
+        // RQ23: the endpoint now answers with an envelope ({ rows, scope,
+        // pendingElsewhere }) so the page can say WHY the list is empty.
+        // Visibility itself is unchanged — a requester still sees only their own.
+        (await fx.as(other).get('/rma/pending-usage')).body.rows.some(
           (r: any) => r.id === req.id,
         ),
       ).toBe(false);
       expect(
-        (await fx.as(requester).get('/rma/pending-usage')).body.some(
+        (await fx.as(requester).get('/rma/pending-usage')).body.rows.some(
           (r: any) => r.id === req.id,
         ),
       ).toBe(true);
+      // A requester without on-behalf access is told they are seeing only their own.
+      expect((await fx.as(other).get('/rma/pending-usage')).body.scope).toBe('own');
       await fx.as(other).get(`/rma/${req.id}/units`).expect(403);
       // Pending returns: a requester sees only their own; the warehouse sees all.
       expectStatus(

@@ -51,8 +51,33 @@ export interface SettingDefinition {
 export const MODULE_KEYS = ['warranty', 'mrp', 'floorPlan2d'] as const;
 export type ModuleKey = (typeof MODULE_KEYS)[number];
 export const HIDDEN_MODULES_KEY = 'ui.hiddenModules';
-/** Built-in behaviour while the setting is missing or invalid: all three hidden. */
-export const DEFAULT_HIDDEN_MODULES: readonly ModuleKey[] = ['warranty', 'mrp', 'floorPlan2d'];
+/**
+ * Built-in behaviour while the setting is missing or invalid.
+ *
+ * Phase 3 (RQ8–RQ12, RQ27): `floorPlan2d` is no longer hidden. The 2D editor was
+ * parked by P1 1.8 while it was unfinished; the Door object type, the plan checks,
+ * the measuring tool and bulk rack placement are what it was waiting for.
+ * `warranty` and `mrp` stay hidden — nothing changed for them.
+ *
+ * NOTE: this default only applies while NO `ui.hiddenModules` row exists (or it is
+ * invalid). An installation that already stores a list keeps whatever it stores, so
+ * revealing the editor there is an admin action in System Settings, not a deploy.
+ */
+export const DEFAULT_HIDDEN_MODULES: readonly ModuleKey[] = ['warranty', 'mrp'];
+
+/**
+ * Rack code pattern for racks the setup wizard creates (C4). Existing racks are
+ * NEVER renamed: a rack code is embedded in every slot code and in the printed
+ * QR payload, so a pattern change applies to new racks only.
+ *
+ *  - `zone-r01` — `<Zone>-R01` (the built-in behaviour, and the default)
+ *  - `rack-001` — `RACK-001`, warehouse-wide numbering with no zone in the code
+ */
+export const RACK_CODE_PATTERNS = ['zone-r01', 'rack-001'] as const;
+export type RackCodePattern = (typeof RACK_CODE_PATTERNS)[number];
+export const RACK_CODE_PATTERN_KEY = 'warehouse.rackCodePattern';
+/** Built-in behaviour while the setting is missing or invalid: unchanged from before the setting existed. */
+export const DEFAULT_RACK_CODE_PATTERN: RackCodePattern = 'zone-r01';
 
 export const DISABLED = 'disabled';
 
@@ -151,6 +176,17 @@ export const SETTING_DEFINITIONS: SettingDefinition[] = [
     list: MODULE_KEYS,
     description:
       'Modules taken out of the menu. Their pages show a "not enabled" notice instead. Data and code are kept, so a module can be switched back on at any time.',
+  },
+  {
+    key: RACK_CODE_PATTERN_KEY,
+    label: 'Rack code pattern (new racks)',
+    category: 'inventory',
+    effect: 'enforced',
+    seed: DEFAULT_RACK_CODE_PATTERN,
+    accepts: `${RACK_CODE_PATTERNS.join(' or ')}`,
+    options: [...RACK_CODE_PATTERNS],
+    description:
+      'Code given to racks created by the rack setup wizard. "zone-r01" produces <Zone>-R01 (the default, zone readable on the label); "rack-001" produces RACK-001, numbered across the whole warehouse with no zone in the code. Racks that already exist are never renamed — their code is part of every slot code and of the QR labels already printed.',
   },
   {
     key: 'notification.template',

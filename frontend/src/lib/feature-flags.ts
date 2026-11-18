@@ -18,7 +18,10 @@ export type ModuleKey = 'floorPlan2d' | 'warranty' | 'mrp';
 export const MODULE_KEYS: readonly ModuleKey[] = ['warranty', 'mrp', 'floorPlan2d'];
 
 const DEFAULT_VISIBLE: Record<ModuleKey, boolean> = {
-  floorPlan2d: false, // P1 1.8 — 2D floor plan editor hidden; 3D view stays
+  floorPlan2d: true,  // Phase 3 — the 2D editor is finished and on by default
+                      // (was hidden by P1 1.8 while it was still incomplete).
+                      // Must match DEFAULT_HIDDEN_MODULES in
+                      // backend/src/settings/setting-definitions.ts.
   warranty: false,    // P7 7.1
   mrp: false,         // P7 7.1 — Material Planning, back in a later phase
 };

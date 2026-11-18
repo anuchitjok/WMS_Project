@@ -99,6 +99,16 @@ export const common = {
     items: '{count} items',
     lines: '{count} lines',
   },
+  // Length units for every size field (RQ1). Sizes are stored in centimetres;
+  // this is only what the user types in and reads.
+  length: {
+    m: 'm',
+    cm: 'cm',
+    mm: 'mm',
+    value: '{value} {unit}',
+    showIn: 'Show in',
+    unitLabel: 'Length unit',
+  },
   pagination: {
     pageOf: 'Page {page} of {pages}',
     showing: 'Showing {from}–{to} of {total}',

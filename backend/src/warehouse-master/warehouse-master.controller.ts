@@ -56,6 +56,10 @@ export class WarehouseMasterController {
     return this.service.listRackTypes(includeInactive === 'true');
   }
 
+  // Declared before :entity/:id/impact so "deleted" is never read as an entity name.
+  @Get('deleted') @ApiOperation({ summary: 'Soft-deleted warehouses and racks that can be restored (warehouse-scoped, read only)' })
+  listDeleted(@CurrentUser() user: any) { return this.service.listDeleted(user); }
+
   @Get(':entity/:id/impact') @ApiOperation({ summary: 'Dependency / impact check for delete & deactivate' })
   getImpact(@Param('entity') entity: 'warehouse' | 'rack' | 'slot', @Param('id') id: string) {
     return this.service.getImpact(entity, id);
@@ -77,6 +81,10 @@ export class WarehouseMasterController {
 
   @Patch('warehouses/:id/deactivate') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ADMIN_ROLES)
   deactivate(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deactivateWarehouse(id, userId); }
+
+  @Patch('warehouses/:id/restore') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ADMIN_ROLES)
+  @ApiOperation({ summary: 'Undo a warehouse delete; it comes back inactive (RQ5)' })
+  restoreWarehouse(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.restoreWarehouse(id, userId); }
 
   // ── Rack Type Master (SYSTEM_ADMIN) ─────────────────────────────────────────
   @Post('rack-types') @UseGuards(RolesGuard) @Roles(...STRUCTURE_ADMIN_ROLES)
@@ -100,12 +108,25 @@ export class WarehouseMasterController {
     return this.service.updateRack(id, dto, userId);
   }
 
+  @Patch('racks/:id/activate') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Put a rack back in use (isActive only, never the delete flag)' })
+  activateRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.activateRack(id, userId); }
+
+  @Patch('racks/:id/deactivate') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Take a rack out of use (isActive only, never the delete flag)' })
+  deactivateRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deactivateRack(id, userId); }
+
+  @Patch('racks/:id/restore') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Undo a rack delete with the slots it took with it; it comes back inactive (RQ5)' })
+  restoreRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.restoreRack(id, userId); }
+
   @Delete('racks/:id') @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
+  @ApiOperation({ summary: 'Soft delete a rack and its slots in one go; stock and history block it, slots do not' })
   deleteRack(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.service.deleteRack(id, userId); }
 
   // Setup wizard: preview or create whole zones of racks + slots in one transaction.
   @Post('warehouses/:id/setup-racks') @HttpCode(200) @UseGuards(RolesGuard) @Roles(...LAYOUT_WRITE_ROLES)
-  @ApiOperation({ summary: 'Create racks for zones from a Rack Type, with their slots (preview: true = plan only)' })
+  @ApiOperation({ summary: 'Create racks for zones from a Rack Type id, or from a size the system turns into one (C3), with their slots. preview: true = plan only. Codes follow the warehouse.rackCodePattern setting; existing racks are never renamed.' })
   setupRacks(@Param('id') id: string, @Body() dto: SetupRacksDto, @CurrentUser() user: any) {
     return this.service.setupRacks(id, dto, user.id, user);
   }

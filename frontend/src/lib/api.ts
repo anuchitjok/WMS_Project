@@ -428,10 +428,14 @@ export const warehouseMasterApi = {
 
 // Physical Warehouse Layout (Sprint 3 API). Read-only surface is all the Floor
 // Plan tab needs today; the write calls exist for the Sprint 5 editor.
+// RQ8: DOOR is appended last, mirroring the Prisma enum — Postgres
+// `ALTER TYPE ... ADD VALUE` without BEFORE/AFTER appends, so the live enum sorts
+// it last too. Like AISLE it is a "keep clear" opening, not an area.
 export type LayoutObjectType =
   | 'ZONE' | 'RACK' | 'SHELF' | 'BIN' | 'AISLE'
   | 'RECEIVING_AREA' | 'SHIPPING_AREA' | 'STAGING_AREA'
-  | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA';
+  | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA'
+  | 'DOOR';
 export type LayoutObjectStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED' | 'PLANNED';
 
 export interface LayoutObject {
@@ -512,7 +516,78 @@ export const layoutApi = {
     request<{ created: number; skipped: number }>(`/warehouse-layout/objects/${id}/generate-bins`, { method: 'POST' }),
   occupancy: (warehouseId: string) =>
     request<LayoutOccupancy[]>(`/warehouse-layout/${warehouseId}/occupancy`),
+  /**
+   * RQ10: geometry warnings for the plan. READ ONLY, and every problem is a
+   * WARNING — decision C5 ("the plan is a drawing") means a wrong drawing never
+   * blocks a save, so nothing in the editor may depend on this call succeeding.
+   */
+  problems: (warehouseId: string) =>
+    request<LayoutProblemsResponse>(`/warehouse-layout/${warehouseId}/problems`),
+  /**
+   * RQ27: draw the warehouse's unplaced racks on the plan in one go.
+   * `version` is the layout version last read (omit when there is no layout yet);
+   * a stale one comes back as 409. `dryRun` computes the positions and writes
+   * nothing — always preview before committing.
+   */
+  placeRacks: (warehouseId: string, dto: { version?: number; rackIds?: string[]; gap?: number; metersPerUnit?: number; dryRun?: boolean } = {}) =>
+    request<PlaceRacksResult>(`/warehouse-layout/${warehouseId}/place-racks`, { method: 'POST', body: JSON.stringify(dto) }),
 };
+
+// ─── RQ10: plan geometry problems ───────────────────────────────────────────────
+
+export type LayoutProblemKind =
+  | 'OUT_OF_BOUNDS' | 'OVERLAP' | 'BLOCKS_AISLE' | 'BLOCKS_DOOR' | 'BLOCKS_WALKWAY';
+
+/**
+ * Where the boundary the objects were checked against came from.
+ * `OUTLINE` the real building outline · `CANVAS` the plan's own extent, for a
+ * hand-drawn plan with no saved scale · `NONE` no extent is known, so the
+ * boundary check was SKIPPED and only overlaps are reported.
+ */
+export type LayoutFloorSource = 'OUTLINE' | 'CANVAS' | 'NONE';
+
+export interface LayoutProblem {
+  kind: LayoutProblemKind;
+  /** Always 'WARNING'. Nothing here refuses a save. */
+  severity: 'WARNING';
+  objectId: string;
+  objectType: LayoutObjectType;
+  objectName: string;
+  objectCode: string | null;
+  /** The second object — present on every kind except OUT_OF_BOUNDS. */
+  otherId?: string;
+  otherType?: LayoutObjectType;
+  otherName?: string;
+  otherCode?: string | null;
+  /** Server's plain-English explanation. The UI translates by `kind` instead. */
+  message: string;
+}
+
+export interface LayoutProblemsResponse {
+  warehouseId: string;
+  /** null when this warehouse has no layout yet. */
+  layoutId: string | null;
+  floor: { source: LayoutFloorSource; points: [number, number][] | null };
+  counts: {
+    total: number; outOfBounds: number; overlap: number;
+    blocksAisle: number; blocksDoor: number; blocksWalkway: number;
+  };
+  problems: LayoutProblem[];
+}
+
+// ─── RQ27: bulk rack placement ─────────────────────────────────────────────────
+
+/** Why a rack was not drawn. Never silent, and never stacked on top of another. */
+export type RackPlacementSkipReason = 'ALREADY_DRAWN' | 'NO_SIZE' | 'NO_ROOM';
+
+export interface PlaceRacksResult {
+  dryRun: boolean;
+  layout: WarehouseLayout | null;
+  objects: LayoutObject[];
+  /** `objectId` is null on a dry run — nothing was written. */
+  placed: { rackId: string; code: string; objectId: string | null; x: number; y: number; width: number; height: number }[];
+  skipped: { rackId: string; code: string; reason: RackPlacementSkipReason }[];
+}
 
 // Live per-bin rollup, derived from StockItem at read time. Nothing here is
 // stored on the layout — the WMS remains the only inventory system.
@@ -634,7 +709,13 @@ export interface IssuedUnitRow {
 }
 
 export const rmaApi = {
-  pendingUsage: () => request<any[]>('/rma/pending-usage'),
+  // RQ23: an envelope, not a bare array — `scope` tells the page whether it is
+  // showing everyone's issued items or only the viewer's own, so an empty list
+  // can explain itself. `pendingElsewhere` is only set when scope is 'own'.
+  pendingUsage: () =>
+    request<{ rows: any[]; scope: 'own' | 'all'; pendingElsewhere: boolean | null }>(
+      '/rma/pending-usage',
+    ),
   confirmUsage: (requestId: string, usage: string, notes?: string) =>
     request<any>(`/rma/${requestId}/usage`, { method: 'PATCH', body: JSON.stringify({ usage, notes }) }),
   /** Phase 5: issued units of a request and what has been recorded for each. */
