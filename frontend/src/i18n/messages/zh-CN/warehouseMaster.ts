@@ -136,8 +136,12 @@ export const warehouseMaster: Messages['warehouseMaster'] = {
     name: '名称',
     type: '库位类型',
     capacity: '容量',
-    capacityHint: '此库位可存放的数量',
+    capacityHint: '可放几行库存（托盘），不是件数。',
     maxWeight: '最大重量（千克）',
+    // Requirement 32 — a piece ceiling, counted apart from the places above.
+    maxQuantity: '最大件数',
+    maxQuantityHint: '该库位可容纳的总件数。留空 = 不限。',
+    noLimit: '不限',
     sizeCm: '尺寸（厘米）',
     length: '长',
     width: '宽',

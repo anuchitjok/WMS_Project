@@ -93,6 +93,8 @@ class SlotEditFields {
   @ApiPropertyOptional({ enum: SlotType }) @IsOptional() @IsEnum(SlotType) slotType?: SlotType;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) capacity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxWeight?: number | null;
+  // Migration 41 — most pieces the slot may hold. null clears the ceiling.
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) maxQuantity?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() lengthCm?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() widthCm?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() heightCm?: number | null;

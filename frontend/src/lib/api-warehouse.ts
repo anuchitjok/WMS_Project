@@ -188,7 +188,7 @@ export interface SimulationResult {
   warehouses: SimWarehouseFit[];
 }
 
-export interface SlotChanges { slotType?: string; capacity?: number; maxWeight?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null }
+export interface SlotChanges { slotType?: string; capacity?: number; maxWeight?: number | null; maxQuantity?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null }
 
 /** DELETE /warehouse-master/racks/:id — soft delete; reports how many slots went with the rack. */
 export interface DeleteRackResult { success: boolean; id: string; slotsDeleted: number }

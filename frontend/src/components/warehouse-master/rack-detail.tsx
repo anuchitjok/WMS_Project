@@ -345,7 +345,8 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
   const { m, t } = useT();
   const sl = m.warehouseMaster.slot;
   const [form, setForm] = useState({
-    name: slot.name ?? '', slotType: slot.slotType ?? 'STANDARD', capacity: s2(slot.capacity), maxWeight: s2(slot.maxWeight),
+    name: slot.name ?? '', slotType: slot.slotType ?? 'STANDARD', capacity: s2(slot.capacity),
+    maxWeight: s2(slot.maxWeight), maxQuantity: s2(slot.maxQuantity),
   });
   // Centimetres, as stored; <LengthInput> shows them in the user's unit (RQ1).
   const [size, setSize] = useState<{ lengthCm?: number; widthCm?: number; heightCm?: number }>({
@@ -362,11 +363,15 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
     if (![L, W, H].every(isPos)) return toast.error(m.warehouseMaster.form.positive);
     const cap = Number(form.capacity || 0);
     const mw = optNum(form.maxWeight);
+    // Requirement 32 — a piece ceiling, counted apart from the places above.
+    // Blank clears it, which means "no piece ceiling", not "none fits".
+    const mq = optNum(form.maxQuantity);
+    if (mq !== undefined && !(Number.isInteger(mq) && mq >= 0)) return toast.error(m.warehouseMaster.form.positive);
     setBusy(true);
     try {
       await warehouseSpaceApi.updateSlot(slot.id, {
         name: form.name.trim() || null, slotType: form.slotType, capacity: Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : 0,
-        maxWeight: mw ?? null, lengthCm: L ?? null, widthCm: W ?? null, heightCm: H ?? null,
+        maxWeight: mw ?? null, maxQuantity: mq ?? null, lengthCm: L ?? null, widthCm: W ?? null, heightCm: H ?? null,
       });
       toast.success(sl.saved);
       await onSaved();
@@ -402,7 +407,8 @@ function SlotEditor({ slot, canEdit, onSaved, onDeleted }: { slot: any; canEdit:
             {SLOT_TYPES.map((x) => <option key={x} value={x}>{m.warehouseMaster.slotType[x]}</option>)}
           </select>
         </Field>
-        <Field label={sl.capacity}><Input type="number" min={0} value={form.capacity} onChange={F('capacity')} /></Field>
+        <Field label={sl.capacity} hint={sl.capacityHint}><Input type="number" min={0} value={form.capacity} onChange={F('capacity')} /></Field>
+        <Field label={sl.maxQuantity} hint={sl.maxQuantityHint}><Input type="number" min={0} placeholder={sl.noLimit} value={form.maxQuantity} onChange={F('maxQuantity')} /></Field>
         <Field label={sl.length}><LengthInput value={size.lengthCm} onChange={(cm) => setSize((s) => ({ ...s, lengthCm: cm }))} /></Field>
         <Field label={sl.width}><LengthInput value={size.widthCm} onChange={(cm) => setSize((s) => ({ ...s, widthCm: cm }))} /></Field>
         <Field label={sl.height}><LengthInput value={size.heightCm} onChange={(cm) => setSize((s) => ({ ...s, heightCm: cm }))} /></Field>
@@ -500,7 +506,7 @@ function BulkDelete({ ids, onDone }: { ids: string[]; onDone: () => Promise<void
 function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<void> | void }) {
   const { m, t } = useT();
   const sl = m.warehouseMaster.slot;
-  const [form, setForm] = useState({ slotType: '', capacity: '', maxWeight: '' });
+  const [form, setForm] = useState({ slotType: '', capacity: '', maxWeight: '', maxQuantity: '' });
   // Blank keeps what each slot already has; a number is centimetres, as stored (RQ1).
   const [size, setSize] = useState<{ lengthCm?: number; widthCm?: number; heightCm?: number }>({});
   const [busy, setBusy] = useState(false);
@@ -514,6 +520,8 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
     if (cap !== undefined) { if (!(Number.isInteger(cap) && cap >= 0)) return toast.error(m.warehouseMaster.form.positive); changes.capacity = cap; }
     const mw = optNum(form.maxWeight);
     if (mw !== undefined) { if (!(mw >= 0)) return toast.error(m.warehouseMaster.form.positive); changes.maxWeight = mw; }
+    const mq = optNum(form.maxQuantity);
+    if (mq !== undefined) { if (!(Number.isInteger(mq) && mq >= 0)) return toast.error(m.warehouseMaster.form.positive); changes.maxQuantity = mq; }
     for (const k of ['lengthCm', 'widthCm', 'heightCm'] as const) {
       const v = size[k];
       if (v !== undefined) { if (!isPos(v)) return toast.error(m.warehouseMaster.form.positive); changes[k] = v; }
@@ -523,7 +531,7 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
     try {
       const r = await warehouseSpaceApi.bulkUpdateSlots(ids, changes);
       toast.success(t(sl.bulkSaved, { count: r.updated }));
-      setForm({ slotType: '', capacity: '', maxWeight: '' });
+      setForm({ slotType: '', capacity: '', maxWeight: '', maxQuantity: '' });
       setSize({});
       await onSaved();
     } catch (err: any) { toast.error(err.message); } finally { setBusy(false); }
@@ -545,6 +553,7 @@ function BulkEditor({ ids, onSaved }: { ids: string[]; onSaved: () => Promise<vo
         </Field>
         <Field label={sl.capacity}><Input type="number" min={0} placeholder={sl.keep} value={form.capacity} onChange={F('capacity')} /></Field>
         <Field label={sl.maxWeight}><Input type="number" min={0} step="any" placeholder={sl.keep} value={form.maxWeight} onChange={F('maxWeight')} /></Field>
+        <Field label={sl.maxQuantity} hint={sl.maxQuantityHint}><Input type="number" min={0} placeholder={sl.keep} value={form.maxQuantity} onChange={F('maxQuantity')} /></Field>
         <Field label={sl.length}><LengthInput value={size.lengthCm} onChange={(cm) => setSize((s) => ({ ...s, lengthCm: cm }))} /></Field>
         <Field label={sl.width}><LengthInput value={size.widthCm} onChange={(cm) => setSize((s) => ({ ...s, widthCm: cm }))} /></Field>
         <Field label={sl.height}><LengthInput value={size.heightCm} onChange={(cm) => setSize((s) => ({ ...s, heightCm: cm }))} /></Field>

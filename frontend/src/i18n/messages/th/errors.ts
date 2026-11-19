@@ -41,6 +41,14 @@ export const errors: Messages['errors'] = {
     'Products still belong to this family': 'ย้ายสินค้าออกจากกลุ่มนี้ก่อน',
     'Sub-groups still sit inside this family': 'ย้ายกลุ่มย่อยออกจากกลุ่มนี้ก่อน',
     'Product family not found': 'ไม่พบกลุ่มสินค้านี้แล้ว',
+    // Requirement 32 — relocation destination room
+    'That destination is blocked': 'ตำแหน่งปลายทางถูกปิดใช้งาน',
+    'That destination is no longer in use': 'ตำแหน่งปลายทางเลิกใช้แล้ว',
+    'That destination has no room left for more pieces': 'ตำแหน่งปลายทางไม่มีที่ว่างรับของเพิ่มอีกแล้ว',
+    'That destination cannot take this quantity': 'ตำแหน่งปลายทางรับจำนวนนี้ไม่ได้ เลือกตำแหน่งอื่นหรือลดจำนวนลง',
+    'Stock row not found': 'ไม่พบรายการสต็อกนี้แล้ว',
+    'That stock row is not in this warehouse': 'รายการสต็อกนี้ไม่อยู่ในคลังนี้',
+    'Destination slot not found': 'ไม่พบตำแหน่งปลายทางนี้แล้ว',
     // PR6 pick locations
     'Pick locations can only be chosen when stock is reserved at approval': 'เลือกตำแหน่งได้เฉพาะเมื่อระบบจองสต็อกตอนอนุมัติ',
     'Pick locations can only be chosen at the final approval step': 'เลือกตำแหน่งได้เฉพาะขั้นอนุมัติสุดท้าย',

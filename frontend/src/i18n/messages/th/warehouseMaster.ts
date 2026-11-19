@@ -136,8 +136,12 @@ export const warehouseMaster: Messages['warehouseMaster'] = {
     name: 'ชื่อ',
     type: 'ประเภท Slot',
     capacity: 'ความจุ',
-    capacityHint: 'จำนวนหน่วยที่ Slot นี้เก็บได้',
+    capacityHint: 'วางของได้กี่ช่อง (กี่พาเลท) ไม่ใช่จำนวนชิ้น',
     maxWeight: 'น้ำหนักสูงสุด (กก.)',
+    // Requirement 32 — a piece ceiling, counted apart from the places above.
+    maxQuantity: 'จำนวนชิ้นสูงสุด',
+    maxQuantityHint: 'จำนวนชิ้นรวมที่ตำแหน่งนี้รับได้ เว้นว่าง = ไม่จำกัด',
+    noLimit: 'ไม่จำกัด',
     sizeCm: 'ขนาด (ซม.)',
     length: 'ยาว',
     width: 'กว้าง',

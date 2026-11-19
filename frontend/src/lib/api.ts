@@ -959,6 +959,37 @@ export const scrapApi = {
     request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }),
 };
 
+/**
+ * Requirement 32 — a destination the stock row can actually go into.
+ *
+ * Two ceilings, kept apart: `places` is how many stock rows the slot holds
+ * (`Slot.capacity`), `pieces` is how many pieces it holds in total
+ * (`Slot.maxQuantity`). `null` on either means nobody set a figure, so that one
+ * does not limit anything. `maxMovable` is already the smaller of the row's own
+ * quantity and the room in pieces.
+ */
+export interface RelocationDestination {
+  slotId: string;
+  code: string;
+  rackCode: string;
+  status: string;
+  capacity: number;
+  placesUsed: number;
+  placesHeld: number;
+  placesFree: number | null;
+  maxQuantity: number | null;
+  piecesOnHand: number;
+  piecesHeld: number;
+  piecesFree: number | null;
+  maxMovable: number;
+}
+export interface RelocationDestinations {
+  row: { id: string; quantity: number; status: string; serialNumber: string | null; product: any; slot: { id: string; code: string } | null };
+  slots: RelocationDestination[];
+  /** Slots left out because they are full, blocked or retired. */
+  hidden: number;
+}
+
 // PR7 Location Relocation Request — stock moves only on complete().
 export const relocationApi = {
   list: (q: { status?: string; warehouseId?: string; page?: number; limit?: number } = {}) => {
@@ -970,6 +1001,9 @@ export const relocationApi = {
   get: (id: string) => request<any>(`/relocations/${id}`),
   movable: (warehouseId: string, slotId: string) =>
     request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&slotId=${encodeURIComponent(slotId)}`),
+  /** Requirement 32 — only the slots that can take this row, with the room each has left. */
+  destinations: (warehouseId: string, stockItemId: string) =>
+    request<RelocationDestinations>(`/relocations/destinations?warehouseId=${encodeURIComponent(warehouseId)}&stockItemId=${encodeURIComponent(stockItemId)}`),
   create: (body: { warehouseId: string; reason?: string; lines: { stockItemId: string; toSlotId: string; quantity: number }[] }) =>
     request<any>('/relocations', { method: 'POST', body: JSON.stringify(body) }),
   approve: (id: string) => request<any>(`/relocations/${id}/approve`, { method: 'POST' }),

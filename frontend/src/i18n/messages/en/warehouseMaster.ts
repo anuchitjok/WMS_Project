@@ -135,8 +135,12 @@ export const warehouseMaster = {
     name: 'Name',
     type: 'Slot type',
     capacity: 'Capacity',
-    capacityHint: 'Units this slot holds',
+    capacityHint: 'How many stock rows (pallets) fit here — not pieces.',
     maxWeight: 'Max weight (kg)',
+    // Requirement 32 — a piece ceiling, counted apart from the places above.
+    maxQuantity: 'Max pieces',
+    maxQuantityHint: 'Total pieces this location may hold. Blank = no limit.',
+    noLimit: 'No limit',
     sizeCm: 'Size (cm)',
     length: 'Length',
     width: 'Width',

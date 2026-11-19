@@ -444,7 +444,11 @@ model Slot {
   column     Int        @default(1)
   slotType   SlotType   @default(STANDARD)
   status     SlotStatus @default(EMPTY)
-  capacity   Int        @default(1)
+  capacity   Int        @default(1) // places (stock rows) this slot holds — NOT pieces
+  // Migration 41 — requirement 32. Most pieces the slot may hold in total.
+  // NULL = no piece ceiling. Deliberately separate from `capacity` above, which
+  // the planning space engine and the location label both read as places.
+  maxQuantity Int?
   maxWeight  Float?
   lengthCm   Float?
   widthCm    Float?

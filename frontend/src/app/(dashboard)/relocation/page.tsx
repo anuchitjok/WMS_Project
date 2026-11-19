@@ -8,7 +8,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, ArrowRight, ArrowRightLeft, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { relocationApi, warehouseMasterApi } from '@/lib/api';
+import { relocationApi, warehouseMasterApi, type RelocationDestination } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -159,6 +159,10 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const [qty, setQty] = useState('');
   const [toId, setToId] = useState('');
   const [toFilter, setToFilter] = useState('');
+  // Requirement 32 — the destinations the server says can take the chosen row.
+  const [dest, setDest] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; slots: RelocationDestination[]; hidden: number }>(
+    { state: 'idle', slots: [], hidden: 0 },
+  );
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -168,14 +172,44 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const wh = tree?.find((w) => w.id === whId);
   const slots: any[] = useMemo(() => (wh?.racks ?? []).flatMap((r: any) => (r.slots ?? []).map((s: any) => ({ ...s, rackCode: r.code }))), [wh]);
   const slotById = useMemo(() => new Map(slots.map((s) => [s.id, s])), [slots]);
-  const match = (s: any, q: string) => !q || s.code.toLowerCase().includes(q.trim().toLowerCase());
+  const match = (s: { code: string }, q: string) => !q || s.code.toLowerCase().includes(q.trim().toLowerCase());
   const fromSlots = slots.filter((s) => (s._count?.stockItems ?? 0) > 0 && (match(s, fromFilter) || s.id === fromId)).slice(0, 300);
-  // Rows already going to each slot in this draft (for the capacity hint).
-  const incoming = (slotId: string) => lines.filter((l) => l.toSlot.id === slotId).length;
-  const toSlots = slots.filter((s) => s.status !== 'BLOCKED' && s.id !== fromId && (match(s, toFilter) || s.id === toId)).slice(0, 300);
   const row = movable.rows.find((r) => r.id === rowId);
-  const toSlot = slotById.get(toId);
-  const toRows = toSlot ? (toSlot._count?.stockItems ?? 0) + incoming(toSlot.id) + 1 : 0;
+
+  /**
+   * Requirement 32 steps 3 and 4. The server's figures are what is on hand plus
+   * what other open requests have promised; the lines already in THIS draft are
+   * only here in the browser, so they are taken off here. `max` is the most this
+   * row may send to that slot, and a slot with nothing left is not offered.
+   */
+  const roomOf = (s: RelocationDestination) => {
+    const draft = lines.filter((l) => l.toSlot.id === s.slotId);
+    const places = draft.length;
+    const pieces = draft.reduce((a, l) => a + l.quantity, 0);
+    const placesLeft = s.placesFree === null ? null : s.placesFree - places;
+    const piecesLeft = s.piecesFree === null ? null : s.piecesFree - pieces;
+    const rowQty = row?.quantity ?? 0;
+    return {
+      placesLeft,
+      piecesLeft,
+      // Out of PLACES only warns (the figure is not maintained — see the API's
+      // slot-space.ts); out of PIECES is what takes a destination off the list.
+      atLimit: placesLeft !== null && placesLeft <= 0,
+      fits: piecesLeft === null || piecesLeft > 0,
+      max: piecesLeft === null ? rowQty : Math.min(rowQty, piecesLeft),
+    };
+  };
+  const options = useMemo(() => dest.slots
+    .filter((s) => match(s, toFilter) || s.slotId === toId)
+    .map((s) => ({ s, ...roomOf(s) }))
+    // A serial row moves whole, so a slot that cannot take all of it is no use.
+    .filter((o) => o.fits && o.max > 0 && (!row?.serialNumber || o.max >= row.quantity))
+    .slice(0, 300),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dest.slots, toFilter, toId, lines, row]);
+  const chosen = options.find((o) => o.s.slotId === toId);
+  // Full after the draft lines, or filtered away — both are "not offered here".
+  const hidden = dest.hidden + Math.max(0, dest.slots.length - options.length);
 
   useEffect(() => {
     setRowId(''); setQty('');
@@ -188,19 +222,33 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
     return () => { live = false; };
   }, [whId, fromId]);
 
+  // The room a slot has depends on the row (its quantity), so this follows the row.
+  useEffect(() => {
+    setToId('');
+    if (!whId || !rowId) { setDest({ state: 'idle', slots: [], hidden: 0 }); return; }
+    let live = true;
+    setDest({ state: 'loading', slots: [], hidden: 0 });
+    relocationApi.destinations(whId, rowId)
+      .then((d) => live && setDest({ state: 'ready', slots: d.slots, hidden: d.hidden }))
+      .catch((e) => { if (live) { setDest({ state: 'error', slots: [], hidden: 0 }); toast.error(e.message); } });
+    return () => { live = false; };
+  }, [whId, rowId]);
+
   function changeWarehouse(id: string) {
     if (lines.length && id !== whId) toast.info(F.warehouseChange);
-    setWhId(id); setFromId(''); setToId(''); setLines([]);
+    setWhId(id); setFromId(''); setToId(''); setLines([]); setDest({ state: 'idle', slots: [], hidden: 0 });
   }
 
   function addLine() {
     const q = Number(qty);
-    if (!row || !toSlot || !qty) { toast.error(F.pickAll); return; }
+    if (!row || !chosen || !qty) { toast.error(F.pickAll); return; }
     if (!(q > 0) || q > row.quantity) { toast.error(t(F.qtyRange, { max: fmtQty(row.quantity) })); return; }
     if (row.serialNumber && q !== row.quantity) { toast.error(t(F.serialWhole, { max: fmtQty(row.quantity) })); return; }
-    if (toSlot.id === fromId) { toast.error(F.sameSlot); return; }
+    // Requirement 32 step 4 — never more than the destination can take.
+    if (q > chosen.max) { toast.error(t(F.qtyOverDest, { max: fmtQty(chosen.max) })); return; }
+    if (chosen.s.slotId === fromId) { toast.error(F.sameSlot); return; }
     if (lines.some((l) => l.row.id === row.id)) { toast.error(F.duplicate); return; }
-    setLines([...lines, { row, fromSlot: slotById.get(fromId), toSlot, quantity: q }]);
+    setLines([...lines, { row, fromSlot: slotById.get(fromId), toSlot: { id: chosen.s.slotId, code: chosen.s.code }, quantity: q }]);
     setRowId(''); setQty(''); setToId('');
   }
 
@@ -274,21 +322,49 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
               </div>
 
               <div className="space-y-2">
-                <label className={lbl} htmlFor="rl-qty">{F.qty}</label>
-                <Input id="rl-qty" type="number" min={0} step="any" value={qty} disabled={!row || !!row?.serialNumber}
-                  onChange={(e) => setQty(e.target.value)} />
+                {/* Requirement 32: the destination is chosen first, because it decides
+                    how much may go — and only places with room are offered. */}
                 <label className={lbl} htmlFor="rl-to">{F.toSlot}</label>
                 <Input placeholder={F.filterSlots} value={toFilter} onChange={(e) => setToFilter(e.target.value)} aria-label={F.filterSlots} />
-                <select id="rl-to" className={sel} value={toId} onChange={(e) => setToId(e.target.value)}>
+                <select id="rl-to" className={sel} value={toId} disabled={dest.state !== 'ready' || options.length === 0}
+                  onChange={(e) => {
+                    setToId(e.target.value);
+                    // Never leave a quantity standing that this place cannot take.
+                    const o = options.find((x) => x.s.slotId === e.target.value);
+                    if (o && Number(qty) > o.max) setQty(String(o.max));
+                  }}>
                   <option value="">{F.select}</option>
-                  {toSlots.map((s) => (
-                    <option key={s.id} value={s.id}>{s.code} · {t(F.slotFill, { rows: (s._count?.stockItems ?? 0) + incoming(s.id), capacity: s.capacity })}</option>
+                  {options.map((o) => (
+                    <option key={o.s.slotId} value={o.s.slotId}>
+                      {o.s.code} · {o.placesLeft === null ? F.slotPlacesOpen
+                        : o.atLimit ? F.slotPlacesFull
+                        : t(F.slotPlaces, { free: fmtQty(o.placesLeft), capacity: fmtQty(o.s.capacity) })}
+                      {' · '}{o.piecesLeft === null ? F.slotPiecesOpen : t(F.slotPieces, { n: fmtQty(o.piecesLeft) })}
+                    </option>
                   ))}
                 </select>
-                {toSlot && toRows > toSlot.capacity && (
-                  <p className="flex items-center gap-1.5 text-xs text-amber-700"><AlertTriangle className="h-3.5 w-3.5" /> {F.overCapacity}</p>
+                <p className="text-[11px] text-slate-400">
+                  {!row ? F.destPickRow
+                    : dest.state === 'loading' ? F.destLoading
+                    : dest.state === 'ready' && options.length === 0 ? F.destNone
+                    : F.toSlotHint}
+                  {dest.state === 'ready' && hidden > 0 && ` · ${t(F.destHidden, { n: hidden })}`}
+                </p>
+
+                <label className={lbl} htmlFor="rl-qty">{F.qty}</label>
+                <Input id="rl-qty" type="number" min={0} max={chosen?.max} step="any" value={qty} disabled={!row || !!row?.serialNumber}
+                  onChange={(e) => setQty(e.target.value)} />
+                {chosen && (
+                  <p className="text-[11px] font-medium text-slate-600">
+                    {t(F.maxHere, { n: fmtQty(chosen.max) })} {row?.product?.unit ?? ''}
+                  </p>
                 )}
-                <Button type="button" variant="outline" className="w-full" onClick={addLine} disabled={!row || !toId}>
+                {chosen?.atLimit && (
+                  <p className="flex items-start gap-1.5 text-xs text-amber-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {F.placeLimitNote}
+                  </p>
+                )}
+                <Button type="button" variant="outline" className="w-full" onClick={addLine} disabled={!row || !chosen}>
                   <Plus className="mr-1 h-4 w-4" /> {F.addLine}
                 </Button>
               </div>
@@ -366,7 +442,17 @@ function DetailDialog({ id, onClose, onChanged }: { id: string; onClose: () => v
     finally { setBusy(false); }
   }
 
+  /** "2 places · 40 pcs", or just "No limit" where nobody entered a figure. */
+  const room = (places: number | null, pieces: number | null) => {
+    if (places === null && pieces === null) return D.noLimit;
+    return [
+      places === null ? null : t(D.placesShort, { n: fmtQty(places) }),
+      pieces === null ? null : t(D.piecesShort, { n: fmtQty(pieces) }),
+    ].filter(Boolean).join(' · ');
+  };
+
   const warnText = (w: any) => w.kind === 'OVER_CAPACITY' ? t(R.warn.OVER_CAPACITY, { slot: w.slotCode, rows: w.rows, capacity: w.capacity })
+    : w.kind === 'OVER_QUANTITY' ? t(R.warn.OVER_QUANTITY, { slot: w.slotCode, pieces: fmtQty(w.pieces), maxQuantity: fmtQty(w.maxQuantity) })
     : w.kind === 'SLOT_MARKED' ? t(R.warn.SLOT_MARKED, { slot: w.slotCode, status: labelOf(m.warehouseMaster.slotStatus, w.status) })
     : t(R.warn.COUNT_LOCKED, { ref: w.countRef });
 
@@ -418,6 +504,41 @@ function DetailDialog({ id, onClose, onChanged }: { id: string; onClose: () => v
                 </tbody>
               </table>
             </div>
+
+            {/* Requirement 32 step 5 — the room each destination has, and what is
+                left of it once this request is carried out. */}
+            {r.destinations?.length > 0 && (
+              <div>
+                <p className="mb-1 text-xs font-semibold text-slate-600">{D.destTitle}</p>
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 text-left uppercase text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">{D.destSlot}</th>
+                        <th className="px-3 py-2 text-right">{D.destAvailable}</th>
+                        <th className="px-3 py-2 text-right">{D.destIncoming}</th>
+                        <th className="px-3 py-2 text-right">{D.destRemaining}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {r.destinations.map((d: any) => {
+                        const tight = (d.placesLeft !== null && d.placesLeft < 0) || (d.piecesLeft !== null && d.piecesLeft < 0);
+                        return (
+                          <tr key={d.slotId}>
+                            <td className="px-3 py-2 font-mono">{d.slotCode}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{room(d.placesFree, d.piecesFree)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{room(d.incomingPlaces, d.incomingPieces)}</td>
+                            <td className={cn('px-3 py-2 text-right tabular-nums', tight && 'font-semibold text-amber-700')}>
+                              {room(d.placesLeft, d.piecesLeft)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {r.status === 'PENDING_APPROVAL' && mine && SUPERVISORS.includes(role) && <p className="text-xs text-slate-500">{A.ownRequest}</p>}
 

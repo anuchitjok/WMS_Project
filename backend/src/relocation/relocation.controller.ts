@@ -59,6 +59,20 @@ export class RelocationController {
     return this.relocation.movable(warehouseId, slotId, user);
   }
 
+  @Get('destinations')
+  @Access(ACCESS.relocationRequest)
+  @ApiOperation({
+    summary:
+      'Slots that can take a stock row, with the room left and the most that may be moved (requirement 32). Full, blocked and retired slots are left out.',
+  })
+  destinations(
+    @Query('warehouseId') warehouseId: string,
+    @Query('stockItemId') stockItemId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.relocation.destinations(warehouseId, stockItemId, user);
+  }
+
   @Get(':id')
   @Access(ACCESS.relocationRead)
   findOne(@Param('id') id: string, @CurrentUser() user: any) {

@@ -1214,7 +1214,7 @@ export class WarehouseMasterService {
     const slot = await this.prisma.slot.create({
       data: {
         rackId: dto.rackId, code, name: trimOrNull(dto.name),
-        ...pick(dto, ['level', 'column', 'slotType', 'capacity', 'maxWeight', ...SIZE_KEYS] as const),
+        ...pick(dto, ['level', 'column', 'slotType', 'capacity', 'maxWeight', 'maxQuantity', ...SIZE_KEYS] as const),
       } as Prisma.SlotUncheckedCreateInput,
     });
     await this.audit(userId, 'SLOT_CREATED', 'Slot', slot.id, null, slot);
@@ -1224,7 +1224,7 @@ export class WarehouseMasterService {
   async updateSlot(id: string, dto: UpdateSlotDto, userId: string) {
     const before = await this.prisma.slot.findFirst({ where: { id, isDeleted: false } });
     if (!before) throw new NotFoundException('Slot not found');
-    const data: Prisma.SlotUpdateInput = pick(dto, ['slotType', 'capacity', 'maxWeight', ...SIZE_KEYS] as const);
+    const data: Prisma.SlotUpdateInput = pick(dto, ['slotType', 'capacity', 'maxWeight', 'maxQuantity', ...SIZE_KEYS] as const);
     if (dto.name !== undefined) data.name = trimOrNull(dto.name);
     const after = await this.prisma.slot.update({ where: { id }, data });
     await this.audit(userId, 'SLOT_UPDATED', 'Slot', id, before, after);
@@ -1233,7 +1233,7 @@ export class WarehouseMasterService {
 
   /** Same change on many slots — one transaction, one audit entry. Deleted slots are skipped. */
   async bulkUpdateSlots(ids: string[], changes: BulkSlotChangesDto, userId: string) {
-    const data = pick(changes, ['slotType', 'capacity', 'maxWeight', ...SIZE_KEYS] as const);
+    const data = pick(changes, ['slotType', 'capacity', 'maxWeight', 'maxQuantity', ...SIZE_KEYS] as const);
     if (!Object.keys(data).length) throw new BadRequestException('No changes given');
     const unique = [...new Set(ids)];
     return this.prisma.$transaction(async (tx) => {

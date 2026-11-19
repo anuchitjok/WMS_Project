@@ -41,6 +41,14 @@ export const errors: Messages['errors'] = {
     'Products still belong to this family': '请先把货品移出这个分组。',
     'Sub-groups still sit inside this family': '请先把子分组移出这个分组。',
     'Product family not found': '该产品族已不存在。',
+    // Requirement 32 — relocation destination room
+    'That destination is blocked': '目的库位已封锁。',
+    'That destination is no longer in use': '目的库位已停用。',
+    'That destination has no room left for more pieces': '目的库位已无空间容纳更多件数。',
+    'That destination cannot take this quantity': '目的库位无法容纳该数量。请另选库位或减少数量。',
+    'Stock row not found': '该库存行已不存在。',
+    'That stock row is not in this warehouse': '该库存行不在本仓库。',
+    'Destination slot not found': '该目的库位已不存在。',
     // PR6 pick locations
     'Pick locations can only be chosen when stock is reserved at approval': '仅在批准时预留库存的情况下才能选择库位。',
     'Pick locations can only be chosen at the final approval step': '只有最后一个审批步骤才能选择库位。',
