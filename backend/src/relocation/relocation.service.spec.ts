@@ -200,6 +200,45 @@ function makeDb() {
       .map((l) => ({ ...l, toSlot: slots.find((s) => s.id === l.toSlotId) })),
   });
 
+  // Rows are read by id, by slot and by product now, and the reads ask for the
+  // product and the slot alongside. Both are filled in here from the fixtures.
+  const PRODUCTS: Record<string, { id: string; code: string; name: string; unit: string }> = {
+    p1: { id: 'p1', code: 'PN-001', name: 'Widget', unit: 'pcs' },
+    p2: { id: 'p2', code: 'PN-002', name: 'Serial widget', unit: 'pcs' },
+    p3: { id: 'p3', code: 'PN-003', name: 'Quarantined widget', unit: 'pcs' },
+    p9: { id: 'p9', code: 'PN-009', name: 'Filler', unit: 'pcs' },
+  };
+  const dress = (r: Row) => ({
+    ...r,
+    product: PRODUCTS[r.productId] ?? {
+      id: r.productId, code: r.productId, name: r.productId, unit: 'pcs',
+    },
+    slot: r.slotId
+      ? (() => {
+          const sl = slots.find((x) => x.id === r.slotId);
+          return sl ? { id: sl.id, code: sl.code, rack: { id: sl.rackId, code: sl.rack.code } } : null;
+        })()
+      : null,
+  });
+  const matches = (where: any, r: Row) =>
+    (where?.id === undefined || inIds(where.id, r.id)) &&
+    (where?.warehouseId === undefined || where.warehouseId === r.warehouseId) &&
+    (where?.productId === undefined || where.productId === r.productId) &&
+    // the part-number search: code or name, ignoring case
+    (where?.product?.OR === undefined ||
+      where.product.OR.some((o: any) => {
+        const text = (o.code ?? o.name).contains.toLowerCase();
+        const pr = PRODUCTS[r.productId];
+        return (o.code ? pr?.code : pr?.name)?.toLowerCase().includes(text);
+      })) &&
+    (where?.slotId === undefined ||
+      (typeof where.slotId === 'string'
+        ? where.slotId === r.slotId
+        : where.slotId?.not === null
+          ? r.slotId !== null
+          : true)) &&
+    statusOk(where?.status, r.status);
+
   const db: any = {
     rows,
     reqs,
@@ -209,7 +248,7 @@ function makeDb() {
     stockItem: {
       // Copies, like Prisma: callers must not see later writes through a read result.
       findMany: jest.fn(async ({ where }: any) =>
-        rows.filter((r) => inIds(where?.id, r.id)).map((r) => ({ ...r })),
+        rows.filter((r) => matches(where, r)).map((r) => dress(r)),
       ),
       findUnique: jest.fn(async ({ where }: any) => {
         const r = rows.find((x) => x.id === where.id);
@@ -296,6 +335,22 @@ function makeDb() {
           : null;
       }),
       findMany: jest.fn(async ({ where }: any) => {
+        // movable() asks which of these rows an open request is already holding.
+        if (where?.stockItemId) {
+          const open = where.request?.status?.in ?? [];
+          return lines
+            .filter(
+              (l) =>
+                where.stockItemId.in.includes(l.stockItemId) &&
+                open.includes(reqs.find((r) => r.id === l.requestId)!.status),
+            )
+            .map((l) => ({
+              stockItemId: l.stockItemId,
+              request: {
+                refNumber: reqs.find((r) => r.id === l.requestId)!.refNumber,
+              },
+            }));
+        }
         // loadSlotSpace asks what open requests have promised to a set of slots.
         if (where?.toSlotId) {
           const open = where.request?.status?.in ?? [];
@@ -648,6 +703,78 @@ describe('RelocationService', () => {
         piecesLeft: null,
       });
       expect(r.warnings).toEqual([]);
+    });
+  });
+
+  // -- Requirement 32 steps 1 and 2: start from the part number --------------
+  describe('products and movable', () => {
+    it('lists the part numbers with movable stock, with the quantity and how many places hold it', async () => {
+      const out = await svc.products(WH, undefined, maker);
+      const p1 = out.find((x) => x.id === 'p1')!;
+      // st-avail (10 in s1) counts; st-res is RESERVED and st-dock is in no slot.
+      expect(p1).toMatchObject({ code: 'PN-001', quantity: 10, rows: 1, slots: 1 });
+      expect(out.map((x) => x.code).sort()).toEqual(['PN-001', 'PN-002', 'PN-003']);
+    });
+
+    it('adds up one part number across the places it is standing in', async () => {
+      db.rows.push({
+        id: 'st-elsewhere',
+        productId: 'p1',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 6,
+        serialNumber: null,
+      });
+      const p1 = (await svc.products(WH, undefined, maker)).find((x) => x.id === 'p1')!;
+      expect(p1).toMatchObject({ quantity: 16, rows: 2, slots: 2 });
+    });
+
+    it('searches on the code and on the name, ignoring case', async () => {
+      expect((await svc.products(WH, 'pn-002', maker)).map((x) => x.code)).toEqual(['PN-002']);
+      expect((await svc.products(WH, 'serial', maker)).map((x) => x.code)).toEqual(['PN-002']);
+      expect(await svc.products(WH, 'nothing-like-this', maker)).toEqual([]);
+    });
+
+    it('a part number gives back every row of it, each saying where it stands', async () => {
+      db.rows.push({
+        id: 'st-elsewhere',
+        productId: 'p1',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 6,
+        serialNumber: null,
+      });
+      const out = await svc.movable(WH, { productId: 'p1' }, maker);
+      expect(out.map((r) => [r.id, r.slot?.code])).toEqual([
+        ['st-avail', 'A-01'],
+        ['st-elsewhere', 'A-03'],
+      ]);
+      // Not the reserved row, and not the one standing in no slot at all.
+      expect(out.map((r) => r.id)).not.toContain('st-res');
+      expect(out.map((r) => r.id)).not.toContain('st-dock');
+    });
+
+    it('a slot still gives back everything standing in it', async () => {
+      const out = await svc.movable(WH, { slotId: 's1' }, maker);
+      expect(out.map((r) => r.id).sort()).toEqual(['st-avail', 'st-quar', 'st-serial']);
+    });
+
+    it('says so when neither a slot nor a part number is given', async () => {
+      await expect(svc.movable(WH, {}, maker)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('a row already in an open request is listed, marked with the request holding it', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's5', quantity: 1 },
+      ]);
+      const out = await svc.movable(WH, { productId: 'p1' }, maker);
+      expect(out.find((x) => x.id === 'st-avail')!.openRelocation).toBe(r.refNumber);
     });
   });
 

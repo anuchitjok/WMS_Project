@@ -210,19 +210,111 @@ export class RelocationService {
     return { ...r, ...review };
   }
 
-  /** Stock rows in a slot that may be relocated, with any open request / count holding them. */
-  async movable(warehouseId: string, slotId: string, user?: Principal) {
-    if (!warehouseId || !slotId)
-      throw new BadRequestException('warehouseId and slotId are required');
+  /**
+   * Requirement 32 step 1 — the part numbers that have stock this screen could
+   * move, so the person can start from the PN instead of having to know which
+   * shelf it is on. `q` matches the code or the name; the figures are what is
+   * movable (reserved and picked stock is not counted, because this screen
+   * cannot move it).
+   */
+  async products(warehouseId: string, q: string | undefined, user?: Principal) {
+    if (!warehouseId) throw new BadRequestException('warehouseId is required');
+    assertWarehouseAccess(user, warehouseId, 'this warehouse');
+    const text = (q ?? '').trim().slice(0, 100);
+    const rows = await this.prisma.stockItem.findMany({
+      where: {
+        warehouseId,
+        slotId: { not: null },
+        status: { in: ON_HAND_UNCOMMITTED },
+        ...(text
+          ? {
+              product: {
+                OR: [
+                  { code: { contains: text, mode: 'insensitive' } },
+                  { name: { contains: text, mode: 'insensitive' } },
+                ],
+              },
+            }
+          : {}),
+      },
+      select: {
+        quantity: true,
+        slotId: true,
+        product: { select: { id: true, code: true, name: true, unit: true } },
+      },
+      take: 5000,
+    });
+
+    const by = new Map<
+      string,
+      {
+        product: { id: string; code: string; name: string; unit: string | null };
+        quantity: number;
+        rows: number;
+        slots: Set<string>;
+      }
+    >();
+    for (const r of rows) {
+      const at = by.get(r.product.id) ?? {
+        product: r.product,
+        quantity: 0,
+        rows: 0,
+        slots: new Set<string>(),
+      };
+      at.quantity += Number(r.quantity);
+      at.rows += 1;
+      if (r.slotId) at.slots.add(r.slotId);
+      by.set(r.product.id, at);
+    }
+    return [...by.values()]
+      .map((x) => ({
+        ...x.product,
+        quantity: x.quantity,
+        rows: x.rows,
+        slots: x.slots.size,
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .slice(0, 200);
+  }
+
+  /**
+   * Stock rows that may be relocated, with any open request / count holding
+   * them. Either everything in one slot, or everywhere one product is —
+   * requirement 32 step 2 asks for the second, so each row carries the slot it
+   * is standing in.
+   */
+  async movable(
+    warehouseId: string,
+    where: { slotId?: string; productId?: string },
+    user?: Principal,
+  ) {
+    const slotId = where.slotId || undefined;
+    const productId = where.productId || undefined;
+    if (!warehouseId || (!slotId && !productId))
+      throw new BadRequestException(
+        'warehouseId and either slotId or productId are required',
+      );
     assertWarehouseAccess(user, warehouseId, 'this warehouse');
     const rows = await this.prisma.stockItem.findMany({
-      where: { warehouseId, slotId, status: { in: ON_HAND_UNCOMMITTED } },
+      where: {
+        warehouseId,
+        status: { in: ON_HAND_UNCOMMITTED },
+        ...(slotId ? { slotId } : { slotId: { not: null }, productId }),
+      },
       select: {
         id: true,
         quantity: true,
         status: true,
         serialNumber: true,
         batchNumber: true,
+        slotId: true,
+        slot: {
+          select: {
+            id: true,
+            code: true,
+            rack: { select: { id: true, code: true } },
+          },
+        },
         product: { select: { id: true, code: true, name: true, unit: true } },
       },
       orderBy: [{ product: { code: 'asc' } }, { id: 'asc' }],

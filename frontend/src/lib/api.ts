@@ -983,6 +983,17 @@ export interface RelocationDestination {
   piecesFree: number | null;
   maxMovable: number;
 }
+/** Requirement 32 step 1 — one line of the searchable part-number list. */
+export interface RelocationProduct {
+  id: string;
+  code: string;
+  name: string;
+  unit: string | null;
+  /** Movable quantity in this warehouse, across every location. */
+  quantity: number;
+  rows: number;
+  slots: number;
+}
 export interface RelocationDestinations {
   row: { id: string; quantity: number; status: string; serialNumber: string | null; product: any; slot: { id: string; code: string } | null };
   slots: RelocationDestination[];
@@ -999,8 +1010,17 @@ export const relocationApi = {
     return request<{ data: any[]; total: number; page: number; limit: number }>(`/relocations${qs ? `?${qs}` : ''}`);
   },
   get: (id: string) => request<any>(`/relocations/${id}`),
-  movable: (warehouseId: string, slotId: string) =>
-    request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&slotId=${encodeURIComponent(slotId)}`),
+  /** Requirement 32 step 1 — part numbers with stock this screen can move. */
+  products: (warehouseId: string, q?: string) =>
+    request<RelocationProduct[]>(
+      `/relocations/products?warehouseId=${encodeURIComponent(warehouseId)}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  /** Everything movable in one slot, or everywhere one product is. */
+  movable: (warehouseId: string, where: { slotId?: string; productId?: string }) => {
+    const key = where.slotId ? 'slotId' : 'productId';
+    const val = where.slotId ?? where.productId ?? '';
+    return request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&${key}=${encodeURIComponent(val)}`);
+  },
   /** Requirement 32 — only the slots that can take this row, with the room each has left. */
   destinations: (warehouseId: string, stockItemId: string) =>
     request<RelocationDestinations>(`/relocations/destinations?warehouseId=${encodeURIComponent(warehouseId)}&stockItemId=${encodeURIComponent(stockItemId)}`),

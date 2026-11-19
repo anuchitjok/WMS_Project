@@ -8,7 +8,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertTriangle, ArrowRight, ArrowRightLeft, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { relocationApi, warehouseMasterApi, type RelocationDestination } from '@/lib/api';
+import { relocationApi, warehouseMasterApi, type RelocationDestination, type RelocationProduct } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -152,8 +152,17 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const F = m.relocation.form;
   const [tree, setTree] = useState<any[] | null>(null);
   const [whId, setWhId] = useState(initial.warehouseId ?? '');
+  // Requirement 32 steps 1 and 2 start from the part number. The slot way in
+  // stays for the 3D screen, which opens this dialog on a location it is
+  // already showing, and for anyone who thinks in shelves rather than codes.
+  const [by, setBy] = useState<'product' | 'slot'>(initial.slotId ? 'slot' : 'product');
   const [fromId, setFromId] = useState(initial.slotId ?? '');
   const [fromFilter, setFromFilter] = useState('');
+  const [pnQuery, setPnQuery] = useState('');
+  const [pnId, setPnId] = useState('');
+  const [pns, setPns] = useState<{ state: 'loading' | 'ready' | 'error'; rows: RelocationProduct[] }>(
+    { state: 'loading', rows: [] },
+  );
   const [movable, setMovable] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; rows: any[] }>({ state: 'idle', rows: [] });
   const [rowId, setRowId] = useState('');
   const [qty, setQty] = useState('');
@@ -168,6 +177,20 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { warehouseMasterApi.tree().then(setTree).catch((e) => { toast.error(e.message); setTree([]); }); }, []);
+
+  // The search runs on the server, so a warehouse with thousands of codes still
+  // answers; a short wait keeps it to one call per thought, not per keystroke.
+  useEffect(() => {
+    if (!whId || by !== 'product') return;
+    let live = true;
+    setPns((p) => ({ state: 'loading', rows: p.rows }));
+    const id = setTimeout(() => {
+      relocationApi.products(whId, pnQuery.trim() || undefined)
+        .then((rows) => live && setPns({ state: 'ready', rows }))
+        .catch((e) => { if (live) { setPns({ state: 'error', rows: [] }); toast.error(e.message); } });
+    }, 250);
+    return () => { live = false; clearTimeout(id); };
+  }, [whId, by, pnQuery]);
 
   const wh = tree?.find((w) => w.id === whId);
   const slots: any[] = useMemo(() => (wh?.racks ?? []).flatMap((r: any) => (r.slots ?? []).map((s: any) => ({ ...s, rackCode: r.code }))), [wh]);
@@ -211,16 +234,17 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   // Full after the draft lines, or filtered away — both are "not offered here".
   const hidden = dest.hidden + Math.max(0, dest.slots.length - options.length);
 
+  const source = by === 'product' ? pnId : fromId;
   useEffect(() => {
     setRowId(''); setQty('');
-    if (!whId || !fromId) { setMovable({ state: 'idle', rows: [] }); return; }
+    if (!whId || !source) { setMovable({ state: 'idle', rows: [] }); return; }
     let live = true;
     setMovable({ state: 'loading', rows: [] });
-    relocationApi.movable(whId, fromId)
+    relocationApi.movable(whId, by === 'product' ? { productId: source } : { slotId: source })
       .then((rows) => live && setMovable({ state: 'ready', rows }))
       .catch((e) => { if (live) { setMovable({ state: 'error', rows: [] }); toast.error(e.message); } });
     return () => { live = false; };
-  }, [whId, fromId]);
+  }, [whId, by, source]);
 
   // The room a slot has depends on the row (its quantity), so this follows the row.
   useEffect(() => {
@@ -236,7 +260,7 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
 
   function changeWarehouse(id: string) {
     if (lines.length && id !== whId) toast.info(F.warehouseChange);
-    setWhId(id); setFromId(''); setToId(''); setLines([]); setDest({ state: 'idle', slots: [], hidden: 0 });
+    setWhId(id); setFromId(''); setPnId(''); setToId(''); setLines([]); setDest({ state: 'idle', slots: [], hidden: 0 });
   }
 
   function addLine() {
@@ -246,9 +270,12 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
     if (row.serialNumber && q !== row.quantity) { toast.error(t(F.serialWhole, { max: fmtQty(row.quantity) })); return; }
     // Requirement 32 step 4 — never more than the destination can take.
     if (q > chosen.max) { toast.error(t(F.qtyOverDest, { max: fmtQty(chosen.max) })); return; }
-    if (chosen.s.slotId === fromId) { toast.error(F.sameSlot); return; }
+    // In part-number mode the rows come from several slots, so the line takes
+    // the one its own row is standing in, not the one picked at the top.
+    const from = row.slot ?? slotById.get(fromId);
+    if (chosen.s.slotId === from?.id) { toast.error(F.sameSlot); return; }
     if (lines.some((l) => l.row.id === row.id)) { toast.error(F.duplicate); return; }
-    setLines([...lines, { row, fromSlot: slotById.get(fromId), toSlot: { id: chosen.s.slotId, code: chosen.s.code }, quantity: q }]);
+    setLines([...lines, { row, fromSlot: from, toSlot: { id: chosen.s.slotId, code: chosen.s.code }, quantity: q }]);
     setRowId(''); setQty(''); setToId('');
   }
 
@@ -289,17 +316,50 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
           {wh && (
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label className={lbl} htmlFor="rl-from">{F.fromSlot}</label>
-                <Input placeholder={F.filterSlots} value={fromFilter} onChange={(e) => setFromFilter(e.target.value)} aria-label={F.filterSlots} />
-                <select id="rl-from" className={sel} value={fromId} onChange={(e) => setFromId(e.target.value)}>
-                  <option value="">{F.select}</option>
-                  {fromSlots.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-                </select>
-                <p className="text-[11px] text-slate-400">{F.fromSlotHint}</p>
+                {/* Requirement 32 step 1: the part number comes first. */}
+                <div className="flex gap-1 rounded-lg bg-slate-100 p-1" role="tablist">
+                  {(['product', 'slot'] as const).map((k) => (
+                    <button key={k} type="button" role="tab" aria-selected={by === k}
+                      onClick={() => { setBy(k); setRowId(''); setQty(''); setToId(''); }}
+                      className={cn('flex-1 rounded-md px-2 py-1 text-xs transition-colors',
+                        by === k ? 'bg-white font-semibold text-green-700 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+                      {k === 'product' ? F.byProduct : F.bySlot}
+                    </button>
+                  ))}
+                </div>
 
-                <p className={lbl}>{F.rows}</p>
+                {by === 'product' ? (
+                  <>
+                    <label className={lbl} htmlFor="rl-pn">{F.product}</label>
+                    <Input id="rl-pn-q" placeholder={F.filterProducts} value={pnQuery}
+                      onChange={(e) => setPnQuery(e.target.value)} aria-label={F.filterProducts} />
+                    <select id="rl-pn" className={sel} value={pnId} onChange={(e) => setPnId(e.target.value)}>
+                      <option value="">{pns.state === 'loading' ? F.loadingRows : F.select}</option>
+                      {pns.rows.map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.code} — {x.name} · {t(F.pnStock, { qty: fmtQty(x.quantity), unit: x.unit ?? '', slots: x.slots })}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-slate-400">
+                      {pns.state === 'ready' && pns.rows.length === 0 ? F.noProducts : F.productHint}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <label className={lbl} htmlFor="rl-from">{F.fromSlot}</label>
+                    <Input placeholder={F.filterSlots} value={fromFilter} onChange={(e) => setFromFilter(e.target.value)} aria-label={F.filterSlots} />
+                    <select id="rl-from" className={sel} value={fromId} onChange={(e) => setFromId(e.target.value)}>
+                      <option value="">{F.select}</option>
+                      {fromSlots.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
+                    </select>
+                    <p className="text-[11px] text-slate-400">{F.fromSlotHint}</p>
+                  </>
+                )}
+
+                <p className={lbl}>{by === 'product' ? F.whereItIs : F.rows}</p>
                 <div className="max-h-48 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
-                  {movable.state === 'idle' ? <p className="p-3 text-xs text-slate-400">—</p>
+                  {movable.state === 'idle' ? <p className="p-3 text-xs text-slate-400">{by === 'product' ? F.pickProductFirst : '—'}</p>
                     : movable.state === 'loading' ? <p className="flex items-center gap-2 p-3 text-xs text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" /> {F.loadingRows}</p>
                     : movable.rows.length === 0 ? <p className="p-3 text-xs text-slate-500">{F.noRows}</p>
                     : movable.rows.map((r) => {
@@ -309,7 +369,12 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
                           <input type="radio" name="rl-row" className="mt-0.5" disabled={!!held} checked={rowId === r.id}
                             onChange={() => { setRowId(r.id); setQty(String(r.quantity)); }} />
                           <span className="min-w-0 flex-1">
-                            <span className="font-mono font-semibold">{r.product?.code}</span> <span className="text-slate-600">{r.product?.name}</span>
+                            {by === 'product' && r.slot ? (
+                              // Step 2 — where this stock is standing right now.
+                              <span className="font-mono font-semibold">{r.slot.rack?.code ? `${r.slot.rack.code} · ` : ''}{r.slot.code}</span>
+                            ) : (
+                              <><span className="font-mono font-semibold">{r.product?.code}</span> <span className="text-slate-600">{r.product?.name}</span></>
+                            )}
                             <span className="block text-slate-500">{fmtQty(r.quantity)} {r.product?.unit} · {labelOf(m.status.stock, r.status)}{r.batchNumber ? ` · ${r.batchNumber}` : ''}</span>
                             {r.serialNumber && <span className="block text-slate-400">{t(F.serial, { sn: r.serialNumber })}</span>}
                             {r.openRelocation && <span className="block text-amber-700">{t(F.heldBy, { ref: r.openRelocation })}</span>}
