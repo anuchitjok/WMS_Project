@@ -41,7 +41,7 @@ export class ContainersService {
       where: { status: { notIn: NOT_IN_LOCATION } },
       select: {
         id: true, quantity: true, status: true, serialNumber: true, batchNumber: true,
-        product: { select: { id: true, code: true, name: true } },
+        product: { select: { id: true, code: true, name: true, unit: true } },
       },
     },
   } satisfies Prisma.ContainerInclude;
@@ -302,11 +302,37 @@ export class ContainersService {
         where: { parentContainerId: source.id, isDeleted: false },
         data: { parentContainerId: target.id, slotId: target.slotId, rackId: target.rackId, warehouseId: target.warehouseId },
       });
-      return { stock: stock.count, children: kids.count };
+
+      // The source is empty now. Unless the caller wants to keep the box for
+      // re-use, retire it in the same transaction so a merge never leaves an
+      // empty box behind for someone to tidy up by hand. Soft delete only: the
+      // code and its history stay on file.
+      let retired = false;
+      if (dto.retireSource) {
+        const left = await tx.stockItem.count({ where: { containerId: source.id, status: { notIn: NOT_IN_LOCATION } } });
+        const kidsLeft = await tx.container.count({ where: { parentContainerId: source.id, isDeleted: false } });
+        if (left === 0 && kidsLeft === 0) {
+          await tx.container.update({
+            where: { id: source.id },
+            data: { isDeleted: true, deletedAt: new Date(), deletedBy: userId, parentContainerId: null },
+          });
+          retired = true;
+        }
+      }
+      return { stock: stock.count, children: kids.count, retired };
     });
 
-    await this.audit(userId, 'CONTAINER_MERGED', target.id, { into: target.code, from: source.code, moved });
-    return { target: await this.getOrThrow(target.id), source: await this.getOrThrow(source.id), moved };
+    await this.audit(userId, 'CONTAINER_MERGED', target.id, {
+      into: target.code, from: source.code, moved, sourceRetired: moved.retired,
+    });
+    if (moved.retired) await this.audit(userId, 'CONTAINER_DELETED', source.id, { code: source.code, reason: 'merged into ' + target.code });
+    // A retired source is gone from every read path, so there is nothing left
+    // to hand back for it.
+    return {
+      target: await this.getOrThrow(target.id),
+      source: moved.retired ? null : await this.getOrThrow(source.id),
+      moved,
+    };
   }
 
   /** Soft delete, and only once the box is empty — a box is never deleted with stock in it. */

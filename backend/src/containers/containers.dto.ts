@@ -53,4 +53,9 @@ export class SplitContainerDto {
 export class MergeContainerDto {
   @ApiProperty({ description: 'The box whose contents move into this one' })
   @IsString() fromContainerId: string;
+
+  @ApiPropertyOptional({
+    description: 'Retire the other box once it is empty, so no empty box is left behind. Its code and history stay on file.',
+  })
+  @IsOptional() @IsBoolean() retireSource?: boolean;
 }

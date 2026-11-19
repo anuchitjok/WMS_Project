@@ -12,7 +12,7 @@ const SLOT = {
   rack: { id: 'rack1', warehouseId: 'wh1', isDeleted: false, isActive: true },
 };
 
-function make(over: { box?: any; items?: any[]; children?: any[] } = {}) {
+function make(over: { box?: any; items?: any[]; children?: any[]; leftInSource?: { stock?: number; children?: number } } = {}) {
   const box = {
     id: 'c1', code: 'BOX-000001', name: null, type: 'BOX', status: 'OPEN',
     warehouseId: 'wh1', rackId: 'rack1', slotId: 'slot1',
@@ -29,12 +29,14 @@ function make(over: { box?: any; items?: any[]; children?: any[] } = {}) {
       create: jest.fn(async ({ data }: any) => { const row = { ...box, id: 'c2', ...data }; calls.created.push(data); return row; }),
       update: jest.fn(async ({ where, data }: any) => ({ ...box, id: where.id, ...data })),
       updateMany: jest.fn(async (a: any) => { calls.containerUpdateMany.push(a); return { count: 1 }; }),
+      count: jest.fn(async () => over.leftInSource?.children ?? 0),
     },
     stockItem: {
       findMany: jest.fn(async () => (over.items ?? [{ id: 'si1' }, { id: 'si2' }]).map((i: any) => ({
         id: i.id, status: i.status ?? 'AVAILABLE', warehouseId: i.warehouseId ?? 'wh1', containerId: i.containerId ?? null,
       }))),
       updateMany: jest.fn(async (a: any) => { calls.stockUpdateMany.push(a); return { count: 2 }; }),
+      count: jest.fn(async () => over.leftInSource?.stock ?? 0),
     },
     slot: { findFirst: jest.fn(async () => SLOT) },
     auditLog: { create: jest.fn(async ({ data }: any) => { calls.audits.push(data); return data; }) },
@@ -162,6 +164,37 @@ describe('merging', () => {
   it('refuses to merge a box into itself', async () => {
     const { svc } = make();
     await expect(svc.merge('c1', { fromContainerId: 'c1' } as any, 'u1')).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('leaves the emptied box alone unless retiring it was asked for', async () => {
+    const { svc, prisma, calls } = make();
+    const r = await svc.merge('c1', { fromContainerId: 'c9' } as any, 'u1');
+    expect(prisma.container.update).not.toHaveBeenCalled();
+    expect(r.moved.retired).toBe(false);
+    expect(r.source).not.toBeNull();
+    expect(actions(calls)).not.toContain('CONTAINER_DELETED');
+  });
+
+  it('retires the emptied box when asked, so no empty box is left behind', async () => {
+    const { svc, prisma, calls } = make();
+    const r = await svc.merge('c1', { fromContainerId: 'c9', retireSource: true } as any, 'u1');
+
+    expect(prisma.container.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'c9' },
+      data: expect.objectContaining({ isDeleted: true, deletedBy: 'u1', parentContainerId: null }),
+    }));
+    expect(r.moved.retired).toBe(true);
+    // Nothing is handed back for a box that no read path will return again.
+    expect(r.source).toBeNull();
+    expect(actions(calls)).toContain('CONTAINER_DELETED');
+  });
+
+  it('keeps the box when something is still inside it after the move', async () => {
+    const { svc, prisma, calls } = make({ leftInSource: { stock: 1 } });
+    const r = await svc.merge('c1', { fromContainerId: 'c9', retireSource: true } as any, 'u1');
+    expect(prisma.container.update).not.toHaveBeenCalled();
+    expect(r.moved.retired).toBe(false);
+    expect(actions(calls)).not.toContain('CONTAINER_DELETED');
   });
 });
 

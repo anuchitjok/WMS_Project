@@ -89,6 +89,7 @@ export const documents: Messages['documents'] = {
     found: 'พบ: {name}',
     notFound: 'ไม่พบสินค้าสำหรับ: {code}',
     openingRequest: 'กำลังเปิดคำขอ {ref}',
+    openingBox: 'กำลังเปิดกล่อง {code}',
     resultTitle: 'พบรายการสต็อก',
     product: 'สินค้า',
     status: 'สถานะ',

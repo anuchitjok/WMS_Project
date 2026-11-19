@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BarcodeParserService } from '../scan/barcode-parser.service';
 import { assertWarehouseAccess, ScopePrincipal } from '../common/warehouse-scope';
 import { buildLocationLabel, labelFromKey, LocationLabel } from './location-label';
+import { containerPayload } from '../containers/container-code';
 
 /** What to print location labels for — any mix; at least one must resolve. */
 export interface BinLabelInput {
@@ -63,6 +64,34 @@ export class LabelsService {
       title: p.name,
       lines: [`Code: ${p.code}`, `Brand: ${p.brand?.name ?? '-'}  ·  ${p.category ?? ''}`],
       barcodeText: this.parser.encode('product', p.code),
+    })));
+  }
+
+  /**
+   * RQ17 — the sticker for a box: its code big, what it is and where it stands,
+   * and a QR holding BOX|<code>, which the scanner already understands.
+   */
+  async containerLabels(containerIds: string[]): Promise<Buffer> {
+    const boxes = await this.prisma.container.findMany({
+      where: { id: { in: containerIds }, isDeleted: false },
+      include: {
+        warehouse: { select: { code: true } },
+        rack: { select: { code: true } },
+        slot: { select: { code: true } },
+        _count: { select: { stockItems: true } },
+      },
+      orderBy: { code: 'asc' },
+    });
+    if (!boxes.length) throw new BadRequestException('No boxes found');
+    return this.render(boxes.map((b) => ({
+      title: b.code,
+      lines: [
+        [b.name, b.type].filter(Boolean).join(' · '),
+        [b.warehouse?.code, b.rack?.code, b.slot?.code].filter(Boolean).join(' > ') || 'Not placed yet',
+        `${b._count.stockItems} stock row(s)${b.status === 'CLOSED' ? ' · sealed' : ''}`,
+      ],
+      barcodeText: containerPayload(b.code),
+      qr: true,
     })));
   }
 
