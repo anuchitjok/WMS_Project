@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
-import { masterDataApi, productsApi } from '@/lib/api';
+import { masterDataApi, productsApi, warehouseApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -27,14 +27,14 @@ export const PRODUCT_STATUSES = ['ACTIVE', 'INACTIVE', 'DISCONTINUED'];
 const SELECT_POPUP_FITS_CONTENT = 'w-auto min-w-(--anchor-width) max-w-(--available-width)';
 
 type Form = {
-  partNumber: string; description: string; brandId: string; model: string;
+  partNumber: string; description: string; brandId: string; productFamilyId: string; model: string;
   productStatus: string; productType: string; partType: string; unitCost: string; defaultPrice: string;
   unit: string; category: string; manufacturer: string; vendorPartNumber: string; minStock: string;
   serialControlled: boolean; batchControlled: boolean; lengthCm: string; widthCm: string; heightCm: string;
 };
 
 const BLANK: Form = {
-  partNumber: '', description: '', brandId: '', model: '',
+  partNumber: '', description: '', brandId: '', productFamilyId: '', model: '',
   productStatus: 'ACTIVE', productType: 'SPARE_PART', partType: '', unitCost: '0', defaultPrice: '',
   unit: 'unit', category: '', manufacturer: '', vendorPartNumber: '', minStock: '0',
   serialControlled: false, batchControlled: false, lengthCm: '', widthCm: '', heightCm: '',
@@ -44,7 +44,8 @@ const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 
 function fromProduct(p: any): Form {
   return {
-    partNumber: str(p.partNumber), description: str(p.description), brandId: str(p.brandId ?? p.brand?.id), model: str(p.model),
+    partNumber: str(p.partNumber), description: str(p.description), brandId: str(p.brandId ?? p.brand?.id),
+    productFamilyId: str(p.productFamilyId ?? p.productFamily?.id), model: str(p.model),
     productStatus: p.productStatus ?? 'ACTIVE', productType: p.productType ?? 'SPARE_PART', partType: str(p.partType),
     unitCost: str(p.unitCost ?? 0), defaultPrice: str(p.defaultPrice), unit: p.unit ?? 'unit', category: str(p.category),
     manufacturer: str(p.manufacturer), vendorPartNumber: str(p.vendorPartNumber), minStock: str(p.minStock ?? 0),
@@ -89,8 +90,15 @@ export function ProductFormDialog({ open, product, brands, onBrandCreated, onClo
   const [moreOpen, setMoreOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [uoms, setUoms] = useState<{ code: string; name: string }[] | null>(null);
+  // MDM-004 — the groups a SKU can be put in. Loaded here rather than passed
+  // down, because only this form needs them.
+  const [families, setFamilies] = useState<{ id: string; code: string; name: string }[]>([]);
 
   useEffect(() => { masterDataApi.uoms().then(setUoms).catch(() => setUoms([])); }, []);
+  useEffect(() => {
+    if (!open) return;
+    warehouseApi.families().then(setFamilies).catch(() => setFamilies([]));
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const f = product ? fromProduct(product) : BLANK;
@@ -116,6 +124,7 @@ export function ProductFormDialog({ open, product, brands, onBrandCreated, onClo
     try {
       const payload: Record<string, any> = {
         partNumber: form.partNumber.trim(), description: form.description.trim(), brandId: form.brandId || undefined,
+        productFamilyId: form.productFamilyId || null,
         model: form.model, productStatus: form.productStatus, productType: form.productType, partType: form.partType,
         unitCost: Number(form.unitCost) || 0, defaultPrice: optNum(form.defaultPrice),
         unit: form.unit, category: form.category, manufacturer: form.manufacturer, vendorPartNumber: form.vendorPartNumber,
@@ -193,6 +202,20 @@ export function ProductFormDialog({ open, product, brands, onBrandCreated, onClo
                     </SelectContent>
                   </Select>
                   <BrandQuickAdd onCreated={(b) => { onBrandCreated(b); set('brandId', b.id); }} />
+                </div>
+                <div className="space-y-1">
+                  <Label>{F.family}</Label>
+                  <Select
+                    items={families.map((f) => ({ value: f.id, label: `${f.code} · ${f.name}` }))}
+                    value={form.productFamilyId}
+                    onValueChange={(v) => set('productFamilyId', (v as string) ?? '')}
+                  >
+                    <SelectTrigger><SelectValue placeholder={F.familyPlaceholder} /></SelectTrigger>
+                    <SelectContent align="start" className={`max-h-56 ${SELECT_POPUP_FITS_CONTENT}`}>
+                      {families.map((f) => <SelectItem key={f.id} value={f.id}>{f.code} · {f.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Hint>{F.familyHint}</Hint>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="pf-model">{F.model}</Label>

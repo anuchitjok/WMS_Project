@@ -2,7 +2,7 @@
 export const partners = {
   title: 'Business Partners',
   subtitle: 'Master Data — Brands, Vendors and per-brand inventory',
-  tabs: { brands: 'Brand Master', vendors: 'Vendor Master', rollup: 'Inventory by Brand' },
+  tabs: { brands: 'Brand Master', families: 'Product Family', vendors: 'Vendor Master', rollup: 'Inventory by Brand' },
   cols: {
     code: 'Code',
     name: 'Name',
@@ -38,6 +38,21 @@ export const partners = {
     empty: 'No brands yet',
     created: 'Brand created',
     updated: 'Brand updated',
+  },
+  family: {
+    hint: 'The group a product belongs to. A group may sit inside a wider one.',
+    create: 'Create Family',
+    createTitle: 'Create New Product Family',
+    editTitle: 'Edit Product Family: {code}',
+    codeAuto: 'Auto-generated (PF-####)',
+    namePlaceholder: 'e.g. Networking Hardware',
+    parent: 'Sits inside',
+    noParent: 'Top level',
+    subGroups: 'Sub-groups',
+    description: 'Description',
+    empty: 'No product families yet',
+    created: 'Product family created',
+    updated: 'Product family saved',
   },
   vendor: {
     create: 'Create Vendor',

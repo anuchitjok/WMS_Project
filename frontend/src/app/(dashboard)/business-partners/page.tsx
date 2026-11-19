@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Building2, Tag, Truck, Plus, Pencil, Power, Boxes } from 'lucide-react';
+import { Building2, Tag, Truck, Plus, Pencil, Power, Boxes, FolderTree } from 'lucide-react';
 import { toast } from 'sonner';
 import { warehouseApi } from '@/lib/api';
 import { PageHeader } from '@/components/layout/page-header';
@@ -18,12 +18,14 @@ import { getT, useT } from '@/i18n';
 
 const BLANK_BRAND_FORM = { name: '', contact: '' };
 const BLANK_VENDOR_FORM = { code: '', name: '', contact: '', email: '' };
+const BLANK_FAMILY_FORM = { name: '', description: '', parentId: '' };
 
-type Tab = 'brands' | 'vendors' | 'rollup';
+type Tab = 'brands' | 'families' | 'vendors' | 'rollup';
 
 const TABS: { id: Tab; icon: React.ComponentType<{ className?: string }> }[] = [
-  { id: 'brands',  icon: Tag },
-  { id: 'vendors', icon: Truck },
+  { id: 'brands',   icon: Tag },
+  { id: 'families', icon: FolderTree },
+  { id: 'vendors',  icon: Truck },
   { id: 'rollup',  icon: Boxes },
 ];
 
@@ -46,6 +48,7 @@ export default function BusinessPartnersPage() {
       </div>
 
       {tab === 'brands' && <BrandTab />}
+      {tab === 'families' && <FamilyTab />}
       {tab === 'vendors' && <VendorTab />}
       {tab === 'rollup' && <RollupTab />}
     </div>
@@ -148,6 +151,157 @@ function BrandTab() {
             <div className="space-y-3">
               <div className="space-y-1"><Label>{B.cols.name}</Label><Input value={edit.name} onChange={(e) => setEdit((b: any) => ({ ...b, name: e.target.value }))} /></div>
               <div className="space-y-1"><Label>{B.cols.contact}</Label><Input value={edit.contact ?? ''} onChange={(e) => setEdit((b: any) => ({ ...b, contact: e.target.value }))} /></div>
+            </div>
+          )}
+          <DialogFooter><Button onClick={save} className="bg-green-600 hover:bg-green-700 text-white">{m.common.actions.save}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <DiscardChangesDialog open={editGuard.confirming} onKeepEditing={editGuard.keepEditing} onDiscard={editGuard.confirmDiscard} />
+    </div>
+  );
+}
+
+// ─── Product Family Master (MDM-003) ──────────────────────────────────────────
+//
+// A family may sit inside a wider one, so the table shows the parent and the
+// form offers one. The server refuses a loop; the form simply leaves out the
+// family being edited, so the commonest mistake cannot be made at all.
+
+function FamilyTab() {
+  const { m, t } = useT();
+  const B = m.partners;
+  const F = m.partners.family;
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [edit, setEdit] = useState<any>(null);
+  const [editBaseline, setEditBaseline] = useState<any>(null);
+  const [form, setForm] = useState(BLANK_FAMILY_FORM);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setRows(await warehouseApi.familiesManaged()); } finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  /** Families a given row may sit inside: anything active but itself. */
+  const parentChoices = (selfId?: string) => rows.filter((r) => r.isActive && r.id !== selfId);
+
+  async function create() {
+    try {
+      // Code is auto-generated server-side (PF-####) — not entered by the user.
+      await warehouseApi.createFamily({
+        name: form.name,
+        description: form.description || undefined,
+        parentId: form.parentId || undefined,
+      });
+      toast.success(getT().m.partners.family.created); setCreateOpen(false); setForm(BLANK_FAMILY_FORM); load();
+    } catch (e: any) { toast.error(e.message); }
+  }
+  async function save() {
+    try {
+      await warehouseApi.updateFamily(edit.id, {
+        name: edit.name, description: edit.description ?? '', parentId: edit.parentId || null,
+      });
+      toast.success(getT().m.partners.family.updated); setEdit(null); setEditBaseline(null); load();
+    } catch (e: any) { toast.error(e.message); }
+  }
+  async function toggle(f: any) {
+    try { await warehouseApi.updateFamily(f.id, { isActive: !f.isActive }); load(); }
+    catch (e: any) { toast.error(e.message); }
+  }
+
+  const createGuard = useDiscardGuard(hasUnsavedChanges(form, BLANK_FAMILY_FORM), () => { setCreateOpen(false); setForm(BLANK_FAMILY_FORM); });
+  const editGuard = useDiscardGuard(hasUnsavedChanges(edit, editBaseline), () => { setEdit(null); setEditBaseline(null); });
+
+  const SELECT = 'h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm';
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-slate-500">{F.hint}</p>
+        <Dialog open={createOpen} onOpenChange={(o) => { if (o) setCreateOpen(true); else createGuard.requestClose(); }}>
+          <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white gap-1.5" />}><Plus className="h-4 w-4" /> {F.create}</DialogTrigger>
+          <DialogContent className="max-w-md">
+            <DialogHeader><DialogTitle>{F.createTitle}</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1"><Label>{B.cols.code}</Label><Input value={F.codeAuto} disabled className="text-slate-400 bg-slate-50" /></div>
+              <div className="space-y-1">
+                <Label htmlFor="pf-name">{B.cols.name} <span className="text-red-500">*</span></Label>
+                <Input id="pf-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder={F.namePlaceholder} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="pf-parent">{F.parent} <span className="text-slate-400 font-normal">{B.optional}</span></Label>
+                <select id="pf-parent" className={SELECT} value={form.parentId} onChange={(e) => setForm((f) => ({ ...f, parentId: e.target.value }))}>
+                  <option value="">{F.noParent}</option>
+                  {parentChoices().map((r) => <option key={r.id} value={r.id}>{r.code} · {r.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="pf-desc">{F.description} <span className="text-slate-400 font-normal">{B.optional}</span></Label>
+                <Input id="pf-desc" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} />
+              </div>
+            </div>
+            <DialogFooter><Button onClick={create} disabled={!form.name.trim()} className="bg-green-600 hover:bg-green-700 text-white">{m.common.actions.create}</Button></DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <DiscardChangesDialog open={createGuard.confirming} onKeepEditing={createGuard.keepEditing} onDiscard={createGuard.confirmDiscard} />
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="border-b border-slate-100 bg-slate-50 text-xs uppercase tracking-wide">
+            <th className="text-left px-4 py-3 font-semibold text-slate-500">{B.cols.code}</th>
+            <th className="text-left px-4 py-3 font-semibold text-slate-500">{B.cols.name}</th>
+            <th className="text-left px-4 py-3 font-semibold text-slate-500">{F.parent}</th>
+            <th className="text-center px-4 py-3 font-semibold text-slate-500">{B.cols.products}</th>
+            <th className="text-center px-4 py-3 font-semibold text-slate-500">{F.subGroups}</th>
+            <th className="text-left px-4 py-3 font-semibold text-slate-500">{B.cols.status}</th>
+            <th className="text-left px-4 py-3 font-semibold text-slate-500">{B.cols.actions}</th>
+          </tr></thead>
+          <tbody className="divide-y divide-slate-50">
+            {loading ? [...Array(4)].map((_, i) => <tr key={i}>{[...Array(7)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
+              : rows.length === 0 ? <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">{F.empty}</td></tr>
+              : rows.map((f) => (
+                <tr key={f.id} className="hover:bg-slate-50">
+                  <td className="px-4 py-3 font-mono text-xs font-bold text-green-700">{f.code}</td>
+                  <td className="px-4 py-3 font-medium text-slate-800">{f.name}</td>
+                  <td className="px-4 py-3 text-slate-500">{f.parent ? `${f.parent.code} · ${f.parent.name}` : '—'}</td>
+                  <td className="px-4 py-3 text-center tabular-nums text-slate-600">{f._count?.products ?? 0}</td>
+                  <td className="px-4 py-3 text-center tabular-nums text-slate-600">{f._count?.children ?? 0}</td>
+                  <td className="px-4 py-3"><Badge variant="outline" className={cn('rounded-full', f.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500')}>{f.isActive ? B.active : B.inactive}</Badge></td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={B.edit} aria-label={B.edit} onClick={() => { setEdit({ ...f }); setEditBaseline({ ...f }); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                      <Button size="sm" variant="outline" className="h-7 w-7 p-0" title={f.isActive ? B.deactivate : B.activate} aria-label={f.isActive ? B.deactivate : B.activate} onClick={() => toggle(f)}><Power className="h-3.5 w-3.5" /></Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) editGuard.requestClose(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>{t(F.editTitle, { code: edit?.code })}</DialogTitle></DialogHeader>
+          {edit && (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label htmlFor="pf-ename">{B.cols.name}</Label>
+                <Input id="pf-ename" value={edit.name} onChange={(e) => setEdit((f: any) => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="pf-eparent">{F.parent}</Label>
+                <select id="pf-eparent" className={SELECT} value={edit.parentId ?? ''} onChange={(e) => setEdit((f: any) => ({ ...f, parentId: e.target.value }))}>
+                  <option value="">{F.noParent}</option>
+                  {parentChoices(edit.id).map((r) => <option key={r.id} value={r.id}>{r.code} · {r.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="pf-edesc">{F.description}</Label>
+                <Input id="pf-edesc" value={edit.description ?? ''} onChange={(e) => setEdit((f: any) => ({ ...f, description: e.target.value }))} />
+              </div>
             </div>
           )}
           <DialogFooter><Button onClick={save} className="bg-green-600 hover:bg-green-700 text-white">{m.common.actions.save}</Button></DialogFooter>

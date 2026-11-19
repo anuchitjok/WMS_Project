@@ -322,6 +322,25 @@ model Brand {
   createdAt DateTime  @default(now())
 }
 
+// Migration 40 — MDM-003. The group a product belongs to, chosen from a list
+// instead of typed into Product.category. A family may sit inside a wider one.
+model ProductFamily {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  parentId    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  parent   ProductFamily?  @relation("FamilyTree", fields: [parentId], references: [id])
+  children ProductFamily[] @relation("FamilyTree")
+  products Product[]
+
+  @@index([parentId])
+}
+
 model Vendor {
   id        String    @id @default(cuid())
   code      String    @unique
@@ -469,6 +488,8 @@ model Product {
   vendorPartNumber String?
   productType      ProductType   @default(SPARE_PART)
   brandId          String?
+  // Migration 40 — MDM-004. The typed group; `category` below stays as it was.
+  productFamilyId  String?
   category         String?
   unit             String        @default("unit")
   unitCost         Float         @default(0)
@@ -489,6 +510,7 @@ model Product {
   updatedAt        DateTime      @updatedAt
 
   brand                  Brand?                @relation(fields: [brandId], references: [id])
+  productFamily          ProductFamily?        @relation(fields: [productFamilyId], references: [id])
   stockItems             StockItem[]
   withdrawalRequestItems WithdrawalRequestItem[]
   goodsReceivingItems    GoodsReceivingItem[]
@@ -500,6 +522,7 @@ model Product {
   @@index([partNumber])
   @@index([productType])
   @@index([productStatus])
+  @@index([productFamilyId])
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────

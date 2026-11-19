@@ -9,7 +9,7 @@ import { resolveAuditNames, resolveProductName, nameAfterUpdate } from './produc
 // Product fields whose old → new values are kept in the audit trail.
 const PRODUCT_AUDIT_FIELDS = [
   'name', 'description', 'manufacturer', 'model', 'partNumber', 'vendorPartNumber', 'productType', 'category',
-  'unit', 'unitCost', 'serialControlled', 'batchControlled', 'minStock', 'brandId', 'productStatus', 'isActive',
+  'unit', 'unitCost', 'serialControlled', 'batchControlled', 'minStock', 'brandId', 'productFamilyId', 'productStatus', 'isActive',
   'partType', 'defaultPrice', 'lengthCm', 'widthCm', 'heightCm',
 ] as const;
 
@@ -75,13 +75,13 @@ export class ProductsService {
           ],
         } : {}),
       },
-      include: { brand: true, _count: { select: { stockItems: true } } },
+      include: { brand: true, productFamily: true, _count: { select: { stockItems: true } } },
       orderBy: { name: 'asc' },
     });
   }
 
   async findOne(id: string) {
-    const p = await this.prisma.product.findUnique({ where: { id }, include: { brand: true } });
+    const p = await this.prisma.product.findUnique({ where: { id }, include: { brand: true, productFamily: true } });
     if (!p) throw new NotFoundException('Product not found');
     return p;
   }
@@ -137,6 +137,8 @@ export class ProductsService {
         partNumber: dto.partNumber ?? null, vendorPartNumber: dto.vendorPartNumber ?? null,
         productType: dto.productType ?? ProductType.SPARE_PART,
         brandId: dto.brandId || undefined, category: dto.category,
+        // MDM-004 — the typed group; `category` above is the old free text, untouched.
+        productFamilyId: dto.productFamilyId || undefined,
         unit: dto.unit ?? 'unit', unitCost: dto.unitCost ?? 0,
         serialControlled: dto.serialControlled ?? false,
         batchControlled: dto.batchControlled ?? false,
@@ -151,7 +153,7 @@ export class ProductsService {
         createdById: userId ?? null,
         updatedById: userId ?? null,
       },
-      include: { brand: true },
+      include: { brand: true, productFamily: true },
     });
     await this.prisma.auditLog.create({
       data: { userId, action: 'PRODUCT_CREATED', entityType: 'Product', entityId: p.id, detail: `${p.code} (${p.productType})` },
@@ -174,6 +176,8 @@ export class ProductsService {
       unitCost: dto.unitCost, serialControlled: dto.serialControlled,
       batchControlled: dto.batchControlled,
       minStock: dto.minStock, brandId: dto.brandId || undefined,
+      // Explicit null clears the group; undefined leaves it as it is.
+      productFamilyId: dto.productFamilyId === undefined ? undefined : (dto.productFamilyId || null),
       partType: optText(dto.partType),
       defaultPrice: optNum(dto.defaultPrice),
       lengthCm: optNum(dto.lengthCm), widthCm: optNum(dto.widthCm), heightCm: optNum(dto.heightCm),
@@ -183,9 +187,14 @@ export class ProductsService {
       data.productStatus = dto.productStatus;
       data.isActive = dto.productStatus === ProductStatus.ACTIVE;
     }
-    const p = await this.prisma.product.update({ where: { id }, data, include: { brand: true } });
+    const p = await this.prisma.product.update({ where: { id }, data, include: { brand: true, productFamily: true } });
     const changes = diffFields(before, p, PRODUCT_AUDIT_FIELDS);
     if (changes.brandId) changes.brandId = { from: before.brand?.name ?? changes.brandId.from, to: p.brand?.name ?? changes.brandId.to };
+    // An id in the audit trail tells a reader nothing; show the group's name.
+    if (changes.productFamilyId) changes.productFamilyId = {
+      from: (before as any).productFamily?.name ?? changes.productFamilyId.from,
+      to: p.productFamily?.name ?? changes.productFamilyId.to,
+    };
     const summary = describeChanges(changes);
     await this.prisma.auditLog.create({
       data: {
@@ -203,7 +212,7 @@ export class ProductsService {
     const p = await this.prisma.product.update({
       where: { id },
       data: { productStatus: newStatus, isActive: newStatus === ProductStatus.ACTIVE, updatedById: userId ?? undefined },
-      include: { brand: true },
+      include: { brand: true, productFamily: true },
     });
     await this.prisma.auditLog.create({
       data: {
@@ -262,12 +271,12 @@ export class ProductsService {
   // ─── Enterprise List ───────────────────────────────────────────────────────
 
   async getEnterpriseList(filter: {
-    search?: string; warehouseId?: string; brandId?: string;
+    search?: string; warehouseId?: string; brandId?: string; productFamilyId?: string;
     productType?: string; stockStatus?: string; serialOnly?: boolean;
     productStatus?: string; category?: string;
     page?: number; limit?: number;
   }) {
-    const { search, warehouseId, brandId, productType, stockStatus, serialOnly, productStatus, category, page = 1, limit = 50 } = filter;
+    const { search, warehouseId, brandId, productFamilyId, productType, stockStatus, serialOnly, productStatus, category, page = 1, limit = 50 } = filter;
     const skip = (page - 1) * limit;
 
     // Default to ACTIVE when no productStatus filter provided (maintains backward compat)
@@ -276,6 +285,8 @@ export class ProductsService {
       : { productStatus: ProductStatus.ACTIVE };
     if (productType) where.productType = productType;
     if (brandId) where.brandId = brandId;
+    // MDM-003 — 'none' lists what has not been grouped yet, so the gaps are findable.
+    if (productFamilyId) where.productFamilyId = productFamilyId === 'none' ? null : productFamilyId;
     if (category) where.category = { contains: category, mode: 'insensitive' };
     if (search) {
       where.OR = [

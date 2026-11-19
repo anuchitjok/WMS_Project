@@ -33,6 +33,14 @@ export const errors: Messages['errors'] = {
     'Internal server error': 'เซิร์ฟเวอร์ขัดข้อง กรุณาลองใหม่ภายหลัง',
     'Too Many Requests': 'มีคำขอมากเกินไป กรุณารอสักครู่แล้วลองอีกครั้ง',
     'ThrottlerException: Too Many Requests': 'พยายามหลายครั้งเกินไป กรุณารอหนึ่งนาทีแล้วลองอีกครั้ง',
+    // MDM-003 product families
+    'A family cannot sit inside itself': 'กลุ่มหนึ่งซ้อนอยู่ในตัวเองไม่ได้',
+    'That would put the family inside one of its own sub-groups': 'แบบนี้จะกลายเป็นเอากลุ่มไปซ้อนในกลุ่มย่อยของตัวเอง',
+    'Family name is required': 'ต้องใส่ชื่อกลุ่มสินค้า',
+    'Parent family not found': 'ไม่พบกลุ่มแม่ที่เลือกไว้แล้ว',
+    'Products still belong to this family': 'ย้ายสินค้าออกจากกลุ่มนี้ก่อน',
+    'Sub-groups still sit inside this family': 'ย้ายกลุ่มย่อยออกจากกลุ่มนี้ก่อน',
+    'Product family not found': 'ไม่พบกลุ่มสินค้านี้แล้ว',
     // PR6 pick locations
     'Pick locations can only be chosen when stock is reserved at approval': 'เลือกตำแหน่งได้เฉพาะเมื่อระบบจองสต็อกตอนอนุมัติ',
     'Pick locations can only be chosen at the final approval step': 'เลือกตำแหน่งได้เฉพาะขั้นอนุมัติสุดท้าย',

@@ -57,6 +57,7 @@ export class ProductsController {
     @Query('search') search?: string,
     @Query('warehouseId') warehouseId?: string,
     @Query('brandId') brandId?: string,
+    @Query('productFamilyId') productFamilyId?: string,
     @Query('productType') productType?: string,
     @Query('stockStatus') stockStatus?: string,
     @Query('serialOnly') serialOnly?: string,
@@ -66,7 +67,7 @@ export class ProductsController {
     @Query('limit') limit?: string,
   ) {
     return this.service.getEnterpriseList({
-      search, warehouseId, brandId, productType, stockStatus,
+      search, warehouseId, brandId, productFamilyId, productType, stockStatus,
       serialOnly: serialOnly === 'true',
       productStatus, category,
       page: page ? +page : 1,

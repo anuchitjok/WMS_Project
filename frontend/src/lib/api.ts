@@ -396,6 +396,15 @@ export const warehouseApi = {
   brandsManaged: () => request<any[]>('/warehouse/brands/managed'),
   createBrand: (dto: { code?: string; name: string; contact?: string }) => request<any>('/warehouse/brands', { method: 'POST', body: JSON.stringify(dto) }),
   updateBrand: (id: string, dto: { name?: string; contact?: string; isActive?: boolean }) => request<any>(`/warehouse/brands/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+
+  // MDM-003 — product families. `families` is the short list a product form
+  // offers; `familiesManaged` carries the counts the master screen shows.
+  families: () => request<{ id: string; code: string; name: string; parentId: string | null }[]>('/warehouse/product-families'),
+  familiesManaged: () => request<any[]>('/warehouse/product-families/managed'),
+  createFamily: (dto: { code?: string; name: string; description?: string; parentId?: string }) =>
+    request<any>('/warehouse/product-families', { method: 'POST', body: JSON.stringify(dto) }),
+  updateFamily: (id: string, dto: { name?: string; description?: string; parentId?: string | null; isActive?: boolean }) =>
+    request<any>(`/warehouse/product-families/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
   deleteBrand: (id: string) => request<any>(`/warehouse/brands/${id}`, { method: 'DELETE' }),
   // Vendor Master
   vendorsManaged: () => request<any[]>('/warehouse/vendors/managed'),
