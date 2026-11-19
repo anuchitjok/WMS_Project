@@ -60,6 +60,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/settings', label: 'systemSettings', icon: Settings, roles: ['SYSTEM_ADMIN'] },
       { href: '/company-profile', label: 'companyProfile', icon: BadgeCheck, roles: ['SYSTEM_ADMIN'] },
       { href: '/system-master', label: 'listsCodes', icon: ListChecks, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
+      // The published Thai Post list: everyone filling in an address needs it.
+      { href: '/postal-codes', label: 'postalCodes', icon: MapPin },
       { href: '/approval-rules', label: 'approvalRules', icon: GitBranch, roles: ['SYSTEM_ADMIN'] },
       { href: '/notification-templates', label: 'notificationTemplates', icon: BellRing, roles: ['SYSTEM_ADMIN'] },
     ],

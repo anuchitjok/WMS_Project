@@ -1154,6 +1154,48 @@ export const scanApi = {
 };
 
 // ─── Labels (PDF) ────────────────────────────────────────────────────────────
+// ─── Thai Post address book (migration 43) ───────────────────────────────────
+// Reference data, read only: type a postal code or a place name and get the
+// tambon with its district and province.
+export interface ThaiProvince {
+  id: string; nameTh: string; nameEn: string;
+  regionOfficial: string | null; region4: string | null;
+  regionTourism: string | null; metroGroup: string | null;
+}
+export interface ThaiDistrict {
+  id: string; provinceId: string; nameTh: string; nameEn: string;
+  nameThShort: string | null; nameEnShort: string | null;
+}
+export interface ThaiTambon {
+  id: string;
+  nameTh: string; nameEn: string;
+  nameThShort: string | null; nameEnShort: string | null;
+  postCode: string;
+  /** Every code this tambon may use, as Thai Post gives it ("10220/10230"). */
+  postCodes: string | null;
+  /** Thai sentence saying when the other code applies. */
+  postCodeRemark: string | null;
+  district: Omit<ThaiDistrict, 'provinceId'> & { province: ThaiProvince };
+}
+export interface ThaiAddressSearch {
+  query: string;
+  mode: 'empty' | 'postCode' | 'name';
+  total: number;
+  rows: ThaiTambon[];
+}
+
+export const thaiAddressApi = {
+  search: (q: string, limit?: number) =>
+    request<ThaiAddressSearch>(`/thai-addresses/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ''}`),
+  byPostCode: (postCode: string) =>
+    request<{ postCode: string; total: number; rows: ThaiTambon[] }>(`/thai-addresses/${encodeURIComponent(postCode)}`),
+  provinces: () => request<ThaiProvince[]>('/thai-addresses/provinces'),
+  districts: (provinceId?: string) =>
+    request<ThaiDistrict[]>(`/thai-addresses/districts${provinceId ? `?provinceId=${encodeURIComponent(provinceId)}` : ''}`),
+  tambons: (districtId?: string) =>
+    request<ThaiTambon[]>(`/thai-addresses/tambons${districtId ? `?districtId=${encodeURIComponent(districtId)}` : ''}`),
+};
+
 export const labelsApi = {
   product: (ids: string[]) => downloadPost('/labels/product/print', { ids }, 'labels-product.pdf'),
   /** LOG-002 — the shipping label for one or more shipments. */

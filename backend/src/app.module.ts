@@ -51,6 +51,7 @@ import { PlanningModule } from './planning/planning.module';
 import { CompanyProfileModule } from './company/company-profile.module';
 import { MrpModule } from './mrp/mrp.module';
 import { WarrantyModule } from './warranty/warranty.module';
+import { ThaiAddressModule } from './thai-address/thai-address.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -102,6 +103,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     CompanyProfileModule,
     MrpModule,
     WarrantyModule,
+    ThaiAddressModule,
   ],
   controllers: [AppController],
   providers: [

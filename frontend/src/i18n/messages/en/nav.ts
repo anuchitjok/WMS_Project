@@ -24,6 +24,7 @@ export const nav = {
     systemSettings: 'System Settings',
     companyProfile: 'Company Profile',
     listsCodes: 'Lists & Codes',
+    postalCodes: 'Postal codes',
     approvalRules: 'Approval Rules',
     notificationTemplates: 'Notification Templates',
     warehouseOperations: 'Warehouse Operations',

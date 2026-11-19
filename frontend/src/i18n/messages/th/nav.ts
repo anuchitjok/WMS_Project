@@ -25,6 +25,7 @@ export const nav: Messages['nav'] = {
     systemSettings: 'ตั้งค่าระบบ',
     companyProfile: 'ข้อมูลบริษัท',
     listsCodes: 'รายการและรหัส',
+    postalCodes: 'รหัสไปรษณีย์',
     approvalRules: 'กฎการอนุมัติ',
     notificationTemplates: 'แม่แบบการแจ้งเตือน',
     warehouseOperations: 'ปฏิบัติการคลังสินค้า',

@@ -2007,3 +2007,56 @@ model MrpRunLine {
   @@index([runId])
   @@index([productId])
 }
+
+// ── Migration 43 — the Thai Post address book ────────────────────────────────
+// Reference data, loaded by the migration and only read by the app: someone
+// types a postal code and the tambon, district and province come back instead
+// of being typed by hand. Three levels, because the ids nest that way
+// (province 2 digits → district 4 → tambon 6) and the source sheet repeats the
+// upper levels on every one of its 7,436 rows.
+
+model ThaiProvince {
+  id             String  @id @db.VarChar(2)
+  nameTh         String
+  nameEn         String
+  regionOfficial String?
+  region4        String?
+  regionTourism  String?
+  metroGroup     String?
+
+  districts ThaiDistrict[]
+}
+
+model ThaiDistrict {
+  id          String  @id @db.VarChar(4)
+  provinceId  String  @db.VarChar(2)
+  nameTh      String
+  nameEn      String
+  nameThShort String?
+  nameEnShort String?
+
+  province ThaiProvince @relation(fields: [provinceId], references: [id])
+  tambons  ThaiTambon[]
+
+  @@index([provinceId])
+}
+
+model ThaiTambon {
+  id          String  @id @db.VarChar(6)
+  districtId  String  @db.VarChar(4)
+  nameTh      String
+  nameEn      String
+  nameThShort String?
+  nameEnShort String?
+  /// The code to use.
+  postCode    String  @db.VarChar(5)
+  /// Every code this tambon may use, as the sheet gives it ("10220/10230").
+  postCodes   String?
+  /// The Thai sentence saying when the other code applies. 97 tambons have one.
+  postCodeRemark String?
+
+  district ThaiDistrict @relation(fields: [districtId], references: [id])
+
+  @@index([districtId])
+  @@index([postCode])
+}
