@@ -80,6 +80,10 @@ export const fulfillment: Messages['fulfillment'] = {
     complete: 'แพ็กเสร็จสิ้น',
   },
   shipping: {
+    carrierBrand: 'แบรนด์ขนส่ง',
+    awb: 'Air Waybill',
+    warehouseNumber: 'เลขคลังจากขนส่ง',
+    logisticsLater: 'กรอกทีหลังที่หน้ารายละเอียดการจัดส่งก็ได้ จนกว่าจะส่งถึงมือผู้รับ',
     title: 'สร้างการจัดส่งและปล่อยของ — {ref}',
     carrier: 'ขนส่ง',
     tracking: 'เลขพัสดุ',
@@ -122,6 +126,17 @@ export const fulfillment: Messages['fulfillment'] = {
     done: 'ยืนยันการส่งมอบแล้ว — เบิกจ่ายให้ RMA แล้ว',
   },
   shipment: {
+    // LOG-001 / LOG-002
+    logistics: 'ข้อมูลการจัดส่ง',
+    carrier: 'บริษัทขนส่ง',
+    carrierBrand: 'แบรนด์ขนส่ง',
+    tracking: 'เลขพัสดุ',
+    awb: 'Air Waybill',
+    warehouseNumber: 'เลขคลังจากขนส่ง',
+    editLogistics: 'แก้ไข',
+    printLabel: 'ป้ายจัดส่ง',
+    logisticsSaved: 'บันทึกข้อมูลการจัดส่งแล้ว',
+    logisticsHint: 'เว้นว่างคือลบค่าเดิม ทุกการแก้ไขถูกบันทึกไว้กับใบจัดส่งนี้',
     title: 'การจัดเตรียม: {ref}',
     subtitle: 'ใบขอเบิก: {ref} · สถานะ: {status}',
     markDelivered: 'ระบุว่าส่งถึงแล้ว',

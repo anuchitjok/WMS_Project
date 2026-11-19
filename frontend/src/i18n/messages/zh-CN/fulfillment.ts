@@ -80,6 +80,10 @@ export const fulfillment: Messages['fulfillment'] = {
     complete: '完成打包',
   },
   shipping: {
+    carrierBrand: '承运品牌',
+    awb: '航空运单号',
+    warehouseNumber: '承运方仓号',
+    logisticsLater: '可稍后在发运详情页补填，直到送达为止。',
     title: '创建发货并出库 — {ref}',
     carrier: '承运商',
     tracking: '运单号',
@@ -122,6 +126,17 @@ export const fulfillment: Messages['fulfillment'] = {
     done: '交接已确认 — 已发放给 RMA',
   },
   shipment: {
+    // LOG-001 / LOG-002
+    logistics: '发运信息',
+    carrier: '承运公司',
+    carrierBrand: '承运品牌',
+    tracking: '运单跟踪号',
+    awb: '航空运单号',
+    warehouseNumber: '承运方仓号',
+    editLogistics: '编辑',
+    printLabel: '发运标签',
+    logisticsSaved: '发运信息已保存',
+    logisticsHint: '留空表示清除该项。每次修改都会记录在本发运单上。',
     title: '履约：{ref}',
     subtitle: '申请：{ref} · 状态：{status}',
     markDelivered: '标记为已送达',

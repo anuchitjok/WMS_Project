@@ -954,6 +954,12 @@ model Shipment {
   taskId          String    @unique
   carrier         String?
   trackingNumber  String?
+  // Migration 42 - LOG-001. The shipping details, on the way out. `carrier` is
+  // the company, `carrierBrand` the brand it trades under; `warehouseNumber` is
+  // the number the CARRIER gives the consignment, not a WMS warehouse code.
+  awbNumber       String?
+  warehouseNumber String?
+  carrierBrand    String?
   handoverById    String?
   dispatchedById  String?   // user who confirmed dispatch (Goods Issue)
   receiverName    String?

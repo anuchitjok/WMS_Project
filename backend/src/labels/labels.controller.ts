@@ -17,7 +17,7 @@ export class LabelsController {
   constructor(private readonly labels: LabelsService) {}
 
   @Post(':type/print')
-  @ApiOperation({ summary: 'Render labels as PDF (type: product | bin | serial | container). bin takes locations (WH|RACK|SLOT keys), slotIds, rackIds or warehouseIds; container takes box ids.' })
+  @ApiOperation({ summary: 'Render labels as PDF (type: product | bin | serial | container | logistics). bin takes locations (WH|RACK|SLOT keys), slotIds, rackIds or warehouseIds; container takes box ids; logistics takes shipment ids.' })
   async print(
     @Param('type') type: string,
     @Body() body: { ids?: string[]; locations?: string[]; slotIds?: string[]; rackIds?: string[]; warehouseIds?: string[] },
@@ -32,6 +32,11 @@ export class LabelsController {
       pdf = await this.labels.containerLabels(body.ids ?? []);
     }
     else if (type === 'serial') pdf = await this.labels.serialLabels(body.ids ?? []);
+    // LOG-002: the shipping label. Whoever may run a shipment may print its label.
+    else if (type === 'logistics') {
+      if (!hasAccess(user, ACCESS.fulfillment)) throw new ForbiddenException('Not allowed to print shipping labels');
+      pdf = await this.labels.logisticsLabels(body.ids ?? []);
+    }
     else if (type === 'bin') {
       // Printing a whole rack / warehouse of location labels is a warehouse-floor job.
       const bulk = !!(body.slotIds?.length || body.rackIds?.length || body.warehouseIds?.length);

@@ -747,7 +747,11 @@ export const fulfillmentApi = {
     request<any>(`/fulfillment/${taskId}/packing/complete`, { method: 'POST' }),
 
   // Dispatch (Goods Issue)
-  createShipment: (taskId: string, dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string }) =>
+  /** LOG-001 — change the shipping details after the shipment was raised, until it is delivered. */
+  updateLogistics: (shipmentId: string, dto: { carrier?: string | null; carrierBrand?: string | null; trackingNumber?: string | null; awbNumber?: string | null; warehouseNumber?: string | null }) =>
+    request<any>(`/fulfillment/shipments/${shipmentId}/logistics`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  /** LOG-001 — the shipping details may also be filled in later, see updateLogistics. */
+  createShipment: (taskId: string, dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string; awbNumber?: string; warehouseNumber?: string; carrierBrand?: string }) =>
     request<any>(`/fulfillment/${taskId}/shipment`, { method: 'POST', body: JSON.stringify(dto) }),
   confirmDispatch: (shipmentId: string) =>
     request<any>(`/fulfillment/shipments/${shipmentId}/dispatch`, { method: 'POST' }),
@@ -1152,6 +1156,9 @@ export const scanApi = {
 // ─── Labels (PDF) ────────────────────────────────────────────────────────────
 export const labelsApi = {
   product: (ids: string[]) => downloadPost('/labels/product/print', { ids }, 'labels-product.pdf'),
+  /** LOG-002 — the shipping label for one or more shipments. */
+  logistics: (shipmentIds: string[]) =>
+    downloadPost('/labels/logistics/print', { ids: shipmentIds }, 'labels-shipping.pdf'),
   serial: (ids: string[]) => downloadPost('/labels/serial/print', { ids }, 'labels-serial.pdf'),
   bin: (locations: string[]) => downloadPost('/labels/bin/print', { locations }, 'labels-bin.pdf'),
 };

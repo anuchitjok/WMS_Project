@@ -158,10 +158,30 @@ export class FulfillmentController {
   @ApiOperation({ summary: 'Create shipment for a PACKED task' })
   createShipment(
     @Param('id') taskId: string,
-    @Body() dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string },
+    @Body() dto: {
+      carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string;
+      awbNumber?: string; warehouseNumber?: string; carrierBrand?: string;
+    },
     @CurrentUser('id') userId: string,
   ) {
     return this.dispatch.createShipment(taskId, dto, userId);
+  }
+
+  @Access(ACCESS.fulfillment)
+  @Patch('shipments/:shipmentId/logistics')
+  @ApiOperation({
+    summary:
+      'Change the shipping details (carrier, brand, tracking, AWB, carrier warehouse number) before delivery — LOG-001',
+  })
+  updateLogistics(
+    @Param('shipmentId') shipmentId: string,
+    @Body() dto: {
+      carrier?: string | null; carrierBrand?: string | null; trackingNumber?: string | null;
+      awbNumber?: string | null; warehouseNumber?: string | null;
+    },
+    @CurrentUser('id') userId: string,
+  ) {
+    return this.dispatch.updateLogistics(shipmentId, dto, userId);
   }
 
   @Access(ACCESS.fulfillment)

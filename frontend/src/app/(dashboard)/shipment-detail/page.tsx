@@ -2,9 +2,11 @@
 
 import { useEffect, useState, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Truck, CheckCircle2, Circle, Clock } from 'lucide-react';
+import { Truck, CheckCircle2, Circle, Clock, Pencil, Printer } from 'lucide-react';
 import { toast } from 'sonner';
-import { fulfillmentApi } from '@/lib/api';
+import { fulfillmentApi, labelsApi } from '@/lib/api';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/layout/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,6 +30,12 @@ function ShipmentDetailInner() {
   const taskId = params.get('taskId');
   const [task, setTask] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // LOG-001 — the shipping details, which usually arrive after the box is packed.
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    carrier: '', carrierBrand: '', trackingNumber: '', awbNumber: '', warehouseNumber: '',
+  });
   const { m, t, fmt } = useT();
   const S = m.fulfillment.shipment;
   const st = (s: string) => labelOf(m.status.fulfillment, s);
@@ -38,6 +46,51 @@ function ShipmentDetailInner() {
     try { setTask(await fulfillmentApi.get(taskId)); } finally { setLoading(false); }
   }, [taskId]);
   useEffect(() => { load(); }, [load]);
+
+  // Each field, with the words for it. Written out rather than looked up, so a
+  // renamed message is a compile error here instead of a blank label.
+  const LOGI: { key: 'carrier' | 'carrierBrand' | 'trackingNumber' | 'awbNumber' | 'warehouseNumber'; label: string }[] = [
+    { key: 'carrier', label: S.carrier },
+    { key: 'carrierBrand', label: S.carrierBrand },
+    { key: 'trackingNumber', label: S.tracking },
+    { key: 'awbNumber', label: S.awb },
+    { key: 'warehouseNumber', label: S.warehouseNumber },
+  ];
+
+  function startEdit() {
+    const sh = task?.shipment ?? {};
+    setForm({
+      carrier: sh.carrier ?? '', carrierBrand: sh.carrierBrand ?? '',
+      trackingNumber: sh.trackingNumber ?? '', awbNumber: sh.awbNumber ?? '',
+      warehouseNumber: sh.warehouseNumber ?? '',
+    });
+    setEditing(true);
+  }
+
+  async function saveLogistics() {
+    if (!task?.shipment?.id) return;
+    setBusy(true);
+    try {
+      // Blank means "clear it", so every field is sent, empty ones as null.
+      await fulfillmentApi.updateLogistics(task.shipment.id, {
+        carrier: form.carrier.trim() || null,
+        carrierBrand: form.carrierBrand.trim() || null,
+        trackingNumber: form.trackingNumber.trim() || null,
+        awbNumber: form.awbNumber.trim() || null,
+        warehouseNumber: form.warehouseNumber.trim() || null,
+      });
+      toast.success(S.logisticsSaved);
+      setEditing(false);
+      load();
+    } catch (e: any) { toast.error(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function printLabel() {
+    if (!task?.shipment?.id) return;
+    try { await labelsApi.logistics([task.shipment.id]); }
+    catch (e: any) { toast.error(e.message); }
+  }
 
   async function markDelivered() {
     if (!task?.shipment?.id) return;
@@ -90,6 +143,59 @@ function ShipmentDetailInner() {
           ) : <p className="text-slate-400 text-sm">{S.noShipment}</p>}
         </div>
       </div>
+
+      {/* LOG-001 — the shipping details, and LOG-002's label */}
+      {task.shipment && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+            <h3 className="font-semibold text-slate-800">{S.logistics}</h3>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={printLabel}>
+                <Printer className="mr-1.5 h-3.5 w-3.5" /> {S.printLabel}
+              </Button>
+              {!task.shipment.deliveredAt && !editing && (
+                <Button size="sm" variant="outline" onClick={startEdit}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" /> {S.editLogistics}
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {editing ? (
+            <div className="space-y-3 p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                {LOGI.map(({ key, label }) => (
+                  <div key={key} className="space-y-1">
+                    <Label className="text-xs">{label}</Label>
+                    <Input value={form[key]}
+                      onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400">{S.logisticsHint}</p>
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setEditing(false)}>
+                  {m.common.actions.cancel}
+                </Button>
+                <Button size="sm" className="bg-green-600 text-white hover:bg-green-700" disabled={busy} onClick={saveLogistics}>
+                  {busy ? m.common.actions.saving : m.common.actions.save}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <dl className="grid gap-x-6 gap-y-3 p-4 sm:grid-cols-3">
+              {LOGI.map(({ key, label }) => (
+                <div key={key}>
+                  <dt className="text-xs text-slate-500">{label}</dt>
+                  <dd className={task.shipment[key] ? 'font-mono text-sm text-slate-800' : 'text-sm text-slate-300'}>
+                    {task.shipment[key] || '—'}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </div>
+      )}
 
       {/* Items */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
