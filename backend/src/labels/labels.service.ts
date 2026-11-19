@@ -26,6 +26,16 @@ export class LabelsService {
     private parser: BarcodeParserService,
   ) {}
 
+  /**
+   * The pixel size of a PNG, read from its IHDR header (width and height are
+   * two big-endian 32-bit numbers at offsets 16 and 20). pdfkit can measure an
+   * image too, but only through `openImage`, which its type definitions do not
+   * declare; this is eight bytes of a format that cannot change.
+   */
+  private pngSize(png: Buffer): { width: number; height: number } {
+    return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
+  }
+
   private async barcodePng(text: string, type: 'code128' | 'qrcode' = 'code128'): Promise<Buffer> {
     const opts: any = { bcid: type, text, scale: 3, includetext: false, backgroundcolor: 'FFFFFF' };
     if (type === 'code128') opts.height = 12; // height is invalid for qrcode — omit it
@@ -154,94 +164,131 @@ export class LabelsService {
   ): Promise<Buffer> {
     // 100 x 150 mm in points, the usual courier sticker.
     const W = 283, H = 425, PAD = 14;
+    // A ceiling for the tracking barcode, so a long number cannot push the rest
+    // of the label down the sticker. Scanners read it well below this height.
+    const BARCODE_MAX_H = 46;
+    const QR = 72;
+    const innerW = W - PAD * 2;
+    const footerTop = H - PAD - QR;
+    const dash = (v?: string | null) => (v && String(v).trim() ? String(v).trim() : '-');
+
     const doc = new PDFDocument({ size: [W, H], margin: 0 });
     const chunks: Buffer[] = [];
     doc.on('data', (c) => chunks.push(c as Buffer));
     const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
-    const innerW = W - PAD * 2;
-    const dash = (v?: string | null) => (v && String(v).trim() ? String(v).trim() : '-');
 
-    for (let i = 0; i < shipments.length; i++) {
-      if (i > 0) doc.addPage({ size: [W, H], margin: 0 });
-      const s = shipments[i];
+    /**
+     * Everything above the footer. `extra` is added at each dividing rule, so
+     * the same layout can be drawn tight or spread out. Returns where the
+     * content ended.
+     */
+    const drawBody = (d: PDFKit.PDFDocument, s: any, bar: Buffer | null, extra: number): number => {
       let y = PAD;
-
       const text = (
         v: string, size: number, bold = false, color = '#000000', gap = 2, width = innerW, x = PAD,
       ) => {
-        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
+        d.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
           .text(v, x, y, { width, lineBreak: true, ellipsis: true });
-        y = doc.y + gap;
+        y = d.y + gap;
       };
       const rule = (gap = 6) => {
-        doc.moveTo(PAD, y).lineTo(W - PAD, y).lineWidth(0.6).strokeColor('#cccccc').stroke();
-        y += gap;
+        d.moveTo(PAD, y).lineTo(W - PAD, y).lineWidth(0.6).strokeColor('#cccccc').stroke();
+        y += gap + extra;
       };
       const field = (label: string, value?: string | null, big = false) => {
         text(label.toUpperCase(), 6, true, '#777777', 1);
         text(dash(value), big ? 13 : 9, big, '#000000', 5);
       };
+      const half = (innerW - 10) / 2;
+      const pair = (
+        leftLabel: string, leftValue: string, rightLabel: string, rightValue: string, mono = false,
+      ) => {
+        const top = y;
+        d.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text(leftLabel, PAD, top, { width: half });
+        d.font(mono ? 'Courier' : 'Helvetica').fontSize(mono ? 8 : 9).fillColor('#000000')
+          .text(leftValue, PAD, top + 8, { width: half });
+        d.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text(rightLabel, PAD + half + 10, top, { width: half });
+        d.font('Helvetica').fontSize(mono ? 8 : 9).fillColor('#000000')
+          .text(rightValue, PAD + half + 10, top + 8, { width: half });
+        y = top + 24;
+      };
 
-      // ── who it is from ──────────────────────────────────────────────────
+      // -- who it is from --------------------------------------------------
       text(dash(company?.displayName || company?.legalName), 9, true, '#000000', 1);
       text([company?.address, company?.phone].filter(Boolean).join(' · ') || ' ', 6, false, '#666666', 4);
       rule();
 
-      // ── carrier, the loudest thing on the label ─────────────────────────
+      // -- carrier, the loudest thing on the label -------------------------
       text('SHIP VIA', 6, true, '#777777', 1);
       text(dash(s.carrierBrand || s.carrier), 16, true, '#000000', 1);
       if (s.carrierBrand && s.carrier) text(s.carrier, 7, false, '#666666', 4);
       else y += 3;
 
-      // ── tracking, as a barcode anyone's scanner can read ───────────────
+      // -- tracking, as a barcode anyone's scanner can read ----------------
       text('TRACKING', 6, true, '#777777', 2);
-      if (s.trackingNumber) {
-        const png = await this.barcodePng(String(s.trackingNumber), 'code128');
-        doc.image(png, PAD, y, { width: innerW });
-        y += 34;
-        doc.font('Courier-Bold').fontSize(9).fillColor('#000000')
+      if (bar) {
+        // How tall the barcode ends up depends on how WIDE it is drawn, and
+        // its width depends on how many characters the tracking number has, so
+        // a fixed step down the page is a guess - and a wrong one printed the
+        // number on top of the bars. Measure the image and step past it.
+        const img = this.pngSize(bar);
+        const drawnH = Math.min((innerW * img.height) / img.width, BARCODE_MAX_H);
+        const drawnW = (drawnH * img.width) / img.height;
+        d.image(bar, PAD + (innerW - drawnW) / 2, y, { width: drawnW, height: drawnH });
+        y += drawnH + 5;
+        d.font('Courier-Bold').fontSize(9).fillColor('#000000')
           .text(String(s.trackingNumber), PAD, y, { width: innerW, align: 'center' });
-        y = doc.y + 6;
+        y = d.y + 6;
       } else {
         text('-', 11, true, '#000000', 6);
       }
       rule();
 
-      // ── the numbers a claim is argued over ─────────────────────────────
-      const half = (innerW - 10) / 2;
-      const top = y;
-      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('AIR WAYBILL', PAD, top, { width: half });
-      doc.font('Helvetica').fontSize(9).fillColor('#000000').text(dash(s.awbNumber), PAD, top + 8, { width: half });
-      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('WAREHOUSE NO.', PAD + half + 10, top, { width: half });
-      doc.font('Helvetica').fontSize(9).fillColor('#000000').text(dash(s.warehouseNumber), PAD + half + 10, top + 8, { width: half });
-      y = top + 24;
+      // -- the numbers a claim is argued over ------------------------------
+      pair('AIR WAYBILL', dash(s.awbNumber), 'WAREHOUSE NO.', dash(s.warehouseNumber));
       rule();
 
-      // ── who it goes to ─────────────────────────────────────────────────
+      // -- who it goes to --------------------------------------------------
       field('deliver to', s.receiverName, true);
       field('department', s.department);
       rule();
 
-      // ── back to the paperwork ──────────────────────────────────────────
-      const row = y;
-      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('REQUEST', PAD, row, { width: half });
-      doc.font('Courier').fontSize(8).fillColor('#000000').text(dash(s.task?.requestRef), PAD, row + 8, { width: half });
-      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('FROM WAREHOUSE', PAD + half + 10, row, { width: half });
-      doc.font('Helvetica').fontSize(8).fillColor('#000000').text(dash(s.warehouseCode), PAD + half + 10, row + 8, { width: half });
-      y = row + 24;
+      // -- back to the paperwork -------------------------------------------
+      pair('REQUEST', dash(s.task?.requestRef), 'FROM WAREHOUSE', dash(s.warehouseCode), true);
+      return y;
+    };
 
-      // ── the shipment's own QR, at the foot ─────────────────────────────
+    /** Dividing rules in `drawBody`; the leftover room is shared between them. */
+    const RULES = 4;
+
+    for (let i = 0; i < shipments.length; i++) {
+      if (i > 0) doc.addPage({ size: [W, H], margin: 0 });
+      const s = shipments[i];
+      const bar = s.trackingNumber ? await this.barcodePng(String(s.trackingNumber), 'code128') : null;
+
+      // The content is shorter than the sticker and the QR has to stay at the
+      // foot, where whoever scans it is already looking, so without this the
+      // label had a hole in its middle. Draw it once on a document nobody
+      // keeps to learn how much room is left, then share that room out.
+      const scratch = new PDFDocument({ size: [W, H], margin: 0 });
+      scratch.on('data', () => undefined);
+      const used = drawBody(scratch, s, bar, 0);
+      scratch.end();
+      const extra = Math.max(0, Math.min((footerTop - 10 - used) / RULES, 16));
+
+      drawBody(doc, s, bar, extra);
+
+      // -- the shipment's own QR, at the foot --------------------------------
       const qr = await this.barcodePng(this.parser.encode('shipment', s.refNumber), 'qrcode');
-      const QR = 72;
-      doc.image(qr, PAD, H - PAD - QR, { width: QR });
+      doc.image(qr, PAD, footerTop, { width: QR });
       doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000')
-        .text(s.refNumber, PAD + QR + 10, H - PAD - QR + 4, { width: innerW - QR - 10 });
+        .text(s.refNumber, PAD + QR + 10, footerTop + 4, { width: innerW - QR - 10 });
       doc.font('Helvetica').fontSize(7).fillColor('#666666')
-        .text(`Task ${dash(s.task?.refNumber)}`, PAD + QR + 10, H - PAD - QR + 20, { width: innerW - QR - 10 });
+        .text(`Task ${dash(s.task?.refNumber)}`, PAD + QR + 10, footerTop + 20, { width: innerW - QR - 10 });
       doc.font('Helvetica').fontSize(7).fillColor('#666666')
         .text(
           s.shippedAt ? `Shipped ${new Date(s.shippedAt).toISOString().slice(0, 10)}` : 'Not dispatched yet',
-          PAD + QR + 10, H - PAD - QR + 32, { width: innerW - QR - 10 },
+          PAD + QR + 10, footerTop + 32, { width: innerW - QR - 10 },
         );
     }
     doc.end();
