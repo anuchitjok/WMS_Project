@@ -40,6 +40,8 @@ export const relocation: Messages['relocation'] = {
     pnStock: '{qty} {unit}，分布在 {slots} 个库位',
     whereItIs: '当前位置',
     pickProductFirst: '请先选择物料编码，便可看到库存位置。',
+    clear: '清除',
+    noSlots: '没有匹配的库位。',
     fromSlot: '源库位 *',
     fromSlotHint: '仅列出有库存的库位。',
     filterSlots: '输入以筛选库位',

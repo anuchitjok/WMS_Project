@@ -39,6 +39,8 @@ export const relocation = {
     pnStock: '{qty} {unit} in {slots} location(s)',
     whereItIs: 'Where it is now',
     pickProductFirst: 'Pick a part number to see where it is.',
+    clear: 'Clear',
+    noSlots: 'No location matches.',
     fromSlot: 'From slot *',
     fromSlotHint: 'Only slots holding stock are listed.',
     filterSlots: 'Type to filter slots',

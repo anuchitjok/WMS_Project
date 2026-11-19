@@ -40,6 +40,8 @@ export const relocation: Messages['relocation'] = {
     pnStock: '{qty} {unit} ใน {slots} ตำแหน่ง',
     whereItIs: 'ตอนนี้อยู่ที่ไหน',
     pickProductFirst: 'เลือกรหัสสินค้าก่อน แล้วจะเห็นว่าของอยู่ที่ไหน',
+    clear: 'ล้างค่า',
+    noSlots: 'ไม่พบช่องเก็บที่ตรงกับที่พิมพ์',
     fromSlot: 'จากช่องเก็บ *',
     fromSlotHint: 'แสดงเฉพาะช่องที่มีสต็อก',
     filterSlots: 'พิมพ์เพื่อกรองช่องเก็บ',

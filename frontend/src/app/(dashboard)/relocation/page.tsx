@@ -13,6 +13,7 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PickList } from '@/components/ui/pick-list';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useAuthStore } from '@/store/auth.store';
 import { cn, formatDate } from '@/lib/utils';
@@ -157,7 +158,6 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   // already showing, and for anyone who thinks in shelves rather than codes.
   const [by, setBy] = useState<'product' | 'slot'>(initial.slotId ? 'slot' : 'product');
   const [fromId, setFromId] = useState(initial.slotId ?? '');
-  const [fromFilter, setFromFilter] = useState('');
   const [pnQuery, setPnQuery] = useState('');
   const [pnId, setPnId] = useState('');
   const [pns, setPns] = useState<{ state: 'loading' | 'ready' | 'error'; rows: RelocationProduct[] }>(
@@ -167,7 +167,6 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const [rowId, setRowId] = useState('');
   const [qty, setQty] = useState('');
   const [toId, setToId] = useState('');
-  const [toFilter, setToFilter] = useState('');
   // Requirement 32 — the destinations the server says can take the chosen row.
   const [dest, setDest] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; slots: RelocationDestination[]; hidden: number }>(
     { state: 'idle', slots: [], hidden: 0 },
@@ -195,8 +194,7 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
   const wh = tree?.find((w) => w.id === whId);
   const slots: any[] = useMemo(() => (wh?.racks ?? []).flatMap((r: any) => (r.slots ?? []).map((s: any) => ({ ...s, rackCode: r.code }))), [wh]);
   const slotById = useMemo(() => new Map(slots.map((s) => [s.id, s])), [slots]);
-  const match = (s: { code: string }, q: string) => !q || s.code.toLowerCase().includes(q.trim().toLowerCase());
-  const fromSlots = slots.filter((s) => (s._count?.stockItems ?? 0) > 0 && (match(s, fromFilter) || s.id === fromId)).slice(0, 300);
+  const fromSlots = slots.filter((s) => (s._count?.stockItems ?? 0) > 0);
   const row = movable.rows.find((r) => r.id === rowId);
 
   /**
@@ -223,13 +221,12 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
     };
   };
   const options = useMemo(() => dest.slots
-    .filter((s) => match(s, toFilter) || s.slotId === toId)
     .map((s) => ({ s, ...roomOf(s) }))
     // A serial row moves whole, so a slot that cannot take all of it is no use.
     .filter((o) => o.fits && o.max > 0 && (!row?.serialNumber || o.max >= row.quantity))
     .slice(0, 300),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dest.slots, toFilter, toId, lines, row]);
+    [dest.slots, toId, lines, row]);
   const chosen = options.find((o) => o.s.slotId === toId);
   // Full after the draft lines, or filtered away — both are "not offered here".
   const hidden = dest.hidden + Math.max(0, dest.slots.length - options.length);
@@ -331,28 +328,36 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
                 {by === 'product' ? (
                   <>
                     <label className={lbl} htmlFor="rl-pn">{F.product}</label>
-                    <Input id="rl-pn-q" placeholder={F.filterProducts} value={pnQuery}
-                      onChange={(e) => setPnQuery(e.target.value)} aria-label={F.filterProducts} />
-                    <select id="rl-pn" className={sel} value={pnId} onChange={(e) => setPnId(e.target.value)}>
-                      <option value="">{pns.state === 'loading' ? F.loadingRows : F.select}</option>
-                      {pns.rows.map((x) => (
-                        <option key={x.id} value={x.id}>
-                          {x.code} — {x.name} · {t(F.pnStock, { qty: fmtQty(x.quantity), unit: x.unit ?? '', slots: x.slots })}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-[11px] text-slate-400">
-                      {pns.state === 'ready' && pns.rows.length === 0 ? F.noProducts : F.productHint}
-                    </p>
+                    {/* One box: typing searches, the list under it is the choice. */}
+                    <PickList
+                      id="rl-pn"
+                      value={pnId}
+                      onChange={setPnId}
+                      onQuery={setPnQuery}
+                      loading={pns.state === 'loading'}
+                      placeholder={F.filterProducts}
+                      empty={F.noProducts}
+                      clearLabel={F.clear}
+                      items={pns.rows.map((x) => ({
+                        id: x.id,
+                        label: `${x.code} — ${x.name}`,
+                        trailing: t(F.pnStock, { qty: fmtQty(x.quantity), unit: x.unit ?? '', slots: x.slots }),
+                      }))}
+                    />
+                    <p className="text-[11px] text-slate-400">{F.productHint}</p>
                   </>
                 ) : (
                   <>
                     <label className={lbl} htmlFor="rl-from">{F.fromSlot}</label>
-                    <Input placeholder={F.filterSlots} value={fromFilter} onChange={(e) => setFromFilter(e.target.value)} aria-label={F.filterSlots} />
-                    <select id="rl-from" className={sel} value={fromId} onChange={(e) => setFromId(e.target.value)}>
-                      <option value="">{F.select}</option>
-                      {fromSlots.map((s) => <option key={s.id} value={s.id}>{s.code}</option>)}
-                    </select>
+                    <PickList
+                      id="rl-from"
+                      value={fromId}
+                      onChange={setFromId}
+                      placeholder={F.filterSlots}
+                      empty={F.noSlots}
+                      clearLabel={F.clear}
+                      items={fromSlots.map((x) => ({ id: x.id, label: x.code, hint: x.rackCode }))}
+                    />
                     <p className="text-[11px] text-slate-400">{F.fromSlotHint}</p>
                   </>
                 )}
@@ -390,24 +395,31 @@ function CreateDialog({ initial, onClose, onDone }: { initial: { warehouseId?: s
                 {/* Requirement 32: the destination is chosen first, because it decides
                     how much may go — and only places with room are offered. */}
                 <label className={lbl} htmlFor="rl-to">{F.toSlot}</label>
-                <Input placeholder={F.filterSlots} value={toFilter} onChange={(e) => setToFilter(e.target.value)} aria-label={F.filterSlots} />
-                <select id="rl-to" className={sel} value={toId} disabled={dest.state !== 'ready' || options.length === 0}
-                  onChange={(e) => {
-                    setToId(e.target.value);
+                <PickList
+                  id="rl-to"
+                  value={toId}
+                  disabled={dest.state !== 'ready' || options.length === 0}
+                  loading={dest.state === 'loading'}
+                  placeholder={F.filterSlots}
+                  empty={F.destNone}
+                  clearLabel={F.clear}
+                  onChange={(id) => {
+                    setToId(id);
                     // Never leave a quantity standing that this place cannot take.
-                    const o = options.find((x) => x.s.slotId === e.target.value);
+                    const o = options.find((x) => x.s.slotId === id);
                     if (o && Number(qty) > o.max) setQty(String(o.max));
-                  }}>
-                  <option value="">{F.select}</option>
-                  {options.map((o) => (
-                    <option key={o.s.slotId} value={o.s.slotId}>
-                      {o.s.code} · {o.placesLeft === null ? F.slotPlacesOpen
-                        : o.atLimit ? F.slotPlacesFull
-                        : t(F.slotPlaces, { free: fmtQty(o.placesLeft), capacity: fmtQty(o.s.capacity) })}
-                      {' · '}{o.piecesLeft === null ? F.slotPiecesOpen : t(F.slotPieces, { n: fmtQty(o.piecesLeft) })}
-                    </option>
-                  ))}
-                </select>
+                  }}
+                  items={options.map((o) => ({
+                    id: o.s.slotId,
+                    label: o.s.code,
+                    hint: o.s.rackCode,
+                    trailing: `${o.placesLeft === null ? F.slotPlacesOpen
+                      : o.atLimit ? F.slotPlacesFull
+                      : t(F.slotPlaces, { free: fmtQty(o.placesLeft), capacity: fmtQty(o.s.capacity) })}`
+                      + ' · '
+                      + `${o.piecesLeft === null ? F.slotPiecesOpen : t(F.slotPieces, { n: fmtQty(o.piecesLeft) })}`,
+                  }))}
+                />
                 <p className="text-[11px] text-slate-400">
                   {!row ? F.destPickRow
                     : dest.state === 'loading' ? F.destLoading
