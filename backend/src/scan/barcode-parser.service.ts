@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { refFromQrUrl } from '../documents/picking-slip-data';
 
-export type EntityType = 'product' | 'stockItem' | 'location' | 'request' | 'shipment' | 'asset' | 'serial' | 'unknown';
+export type EntityType = 'product' | 'stockItem' | 'location' | 'container' | 'request' | 'shipment' | 'asset' | 'serial' | 'unknown';
 
 export interface ParsedBarcode {
   symbology: 'CODE128' | 'QR' | 'GS1' | 'DATAMATRIX' | 'UNKNOWN';
@@ -14,6 +14,8 @@ const PREFIX_MAP: Record<string, EntityType> = {
   SKU: 'product',
   ITM: 'stockItem',
   LOC: 'location',
+  // RQ17 — the sticker on a box: BOX|BOX-000123
+  BOX: 'container',
   REQ: 'request',
   SHP: 'shipment',
   AST: 'asset',
@@ -57,7 +59,7 @@ export class BarcodeParserService {
       const type = PREFIX_MAP[prefix.toUpperCase()];
       if (type) {
         return {
-          symbology: prefix.toUpperCase() === 'LOC' || prefix.toUpperCase() === 'REQ' ? 'QR' : 'CODE128',
+          symbology: ['LOC', 'REQ', 'BOX'].includes(prefix.toUpperCase()) ? 'QR' : 'CODE128',
           type,
           value: type === 'location' ? rest.join('|') : rest.join('|'),
         };

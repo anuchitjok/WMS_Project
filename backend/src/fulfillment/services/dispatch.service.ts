@@ -16,7 +16,7 @@ export class DispatchService {
 
   async createShipment(
     taskId: string,
-    dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string },
+    dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string; awbNumber?: string; warehouseNumber?: string; carrierBrand?: string },
     userId: string,
   ) {
     const task = await this.prisma.fulfillmentTask.findUnique({ where: { id: taskId } });
@@ -36,6 +36,10 @@ export class DispatchService {
           trackingNumber: dto.trackingNumber ?? existing.trackingNumber,
           receiverName: dto.receiverName ?? existing.receiverName,
           notes: dto.notes ?? existing.notes,
+          // LOG-001
+          awbNumber: dto.awbNumber ?? existing.awbNumber,
+          warehouseNumber: dto.warehouseNumber ?? existing.warehouseNumber,
+          carrierBrand: dto.carrierBrand ?? existing.carrierBrand,
         },
       });
     }
@@ -46,11 +50,62 @@ export class DispatchService {
     return shipment;
   }
 
+  /**
+   * LOG-001 - the shipping details, changed after the shipment was raised.
+   *
+   * An air waybill and a carrier's warehouse number usually arrive AFTER the
+   * box is packed and the paperwork opened, so they cannot be required at
+   * creation. Allowed until the shipment is delivered; after that the record is
+   * the history of what happened and is left alone. Every change is audited
+   * field by field, because these are the numbers a claim is argued over.
+   */
+  async updateLogistics(
+    shipmentId: string,
+    dto: {
+      carrier?: string | null;
+      carrierBrand?: string | null;
+      trackingNumber?: string | null;
+      awbNumber?: string | null;
+      warehouseNumber?: string | null;
+    },
+    userId: string,
+  ) {
+    const before = await this.prisma.shipment.findUnique({ where: { id: shipmentId } });
+    if (!before) throw new NotFoundException('Shipment not found');
+    if (before.deliveredAt)
+      throw new BadRequestException('This shipment is delivered and its details are now history');
+
+    const FIELDS = ['carrier', 'carrierBrand', 'trackingNumber', 'awbNumber', 'warehouseNumber'] as const;
+    const data: Prisma.ShipmentUpdateInput = {};
+    const changes: Record<string, { from: string | null; to: string | null }> = {};
+    for (const f of FIELDS) {
+      if (dto[f] === undefined) continue; // left out = leave it alone
+      const to = typeof dto[f] === 'string' ? (dto[f] as string).trim().slice(0, 100) || null : null;
+      if (to === before[f]) continue;
+      (data as Record<string, unknown>)[f] = to;
+      changes[f] = { from: before[f], to };
+    }
+    if (!Object.keys(changes).length) return before;
+
+    const after = await this.prisma.shipment.update({ where: { id: shipmentId }, data });
+    await this.prisma.auditLog.create({
+      data: {
+        userId,
+        action: 'SHIPMENT_LOGISTICS_UPDATED',
+        entityType: 'Shipment',
+        entityId: shipmentId,
+        detail: `${before.refNumber}: ${Object.keys(changes).join(', ')}`,
+        changes: changes as Prisma.InputJsonValue,
+      },
+    });
+    return after;
+  }
+
   /** Creates the shipment and moves the task to READY_TO_SHIP inside the caller's transaction. */
   async createShipmentInTx(
     tx: Prisma.TransactionClient,
     task: { id: string; status: FulfillmentStatus; warehouseId: string | null },
-    dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string },
+    dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string; awbNumber?: string; warehouseNumber?: string; carrierBrand?: string },
     userId: string,
   ) {
     const ref = `SHP-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
@@ -68,6 +123,10 @@ export class DispatchService {
         trackingNumber: dto.trackingNumber,
         receiverName: dto.receiverName,
         notes: dto.notes,
+        // LOG-001 - may also be filled in later, when the carrier hands them over.
+        awbNumber: dto.awbNumber,
+        warehouseNumber: dto.warehouseNumber,
+        carrierBrand: dto.carrierBrand,
         handoverById: userId,
       },
     });

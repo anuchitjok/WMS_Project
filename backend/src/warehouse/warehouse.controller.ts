@@ -51,6 +51,29 @@ export class WarehouseController {
   @Delete('brands/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Deactivate brand' })
   deleteBrand(@Param('id') id: string, @CurrentUser('id') userId: string) { return this.warehouseService.deleteBrand(id, userId); }
 
+  // ─── Product Family Master (MDM-003) ─────────────────────────────────────────
+  @Get('product-families') @ApiOperation({ summary: 'Active product families — what a product form offers' })
+  findProductFamilies() { return this.warehouseService.findProductFamilies(); }
+
+  @Get('product-families/managed') @ApiOperation({ summary: 'All product families with product and sub-group counts (master view)' })
+  listProductFamilies() { return this.warehouseService.listProductFamilies(); }
+
+  @Post('product-families') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Create product family' })
+  createProductFamily(
+    @Body() dto: { code?: string; name: string; description?: string; parentId?: string },
+    @CurrentUser('id') userId: string,
+  ) { return this.warehouseService.createProductFamily(dto, userId); }
+
+  @Patch('product-families/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Update product family' })
+  updateProductFamily(@Param('id') id: string, @Body() dto: any, @CurrentUser('id') userId: string) {
+    return this.warehouseService.updateProductFamily(id, dto, userId);
+  }
+
+  @Delete('product-families/:id') @UseGuards(RolesGuard) @Roles(...MASTER_ROLES) @ApiOperation({ summary: 'Deactivate product family' })
+  deleteProductFamily(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.warehouseService.deleteProductFamily(id, userId);
+  }
+
   // ─── Vendor Master ─────────────────────────────────────────────────────────
   @Get('vendors/managed') @ApiOperation({ summary: 'List all vendors with RTV counts (master view)' })
   listVendorsManaged() { return this.warehouseService.listVendorsManaged(); }

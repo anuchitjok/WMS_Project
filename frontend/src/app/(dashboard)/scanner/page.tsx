@@ -39,6 +39,14 @@ export default function ScannerPage() {
 
   async function lookup(code: string) {
     if (!code.trim()) return;
+    // RQ17: a box sticker (BOX|<code>) opens that box on the Boxes screen.
+    const boxCode = /^BOX\|/i.test(code.trim()) ? code.trim().slice(4).trim() : null;
+    if (boxCode) {
+      const { m: mm, t } = getT();
+      toast.success(t(mm.documents.scanner.openingBox, { code: boxCode }));
+      router.push(`/containers?box=${encodeURIComponent(boxCode)}`);
+      return;
+    }
     // Request QR (picking slip / handover screen) opens the request page (plan P5 5.3).
     const ref = refFromScan(code);
     if (ref) {

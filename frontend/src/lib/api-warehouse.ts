@@ -188,7 +188,10 @@ export interface SimulationResult {
   warehouses: SimWarehouseFit[];
 }
 
-export interface SlotChanges { slotType?: string; capacity?: number; maxWeight?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null }
+export interface SlotChanges { slotType?: string; capacity?: number; maxWeight?: number | null; maxQuantity?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null }
+
+/** DELETE /warehouse-master/racks/:id — soft delete; reports how many slots went with the rack. */
+export interface DeleteRackResult { success: boolean; id: string; slotsDeleted: number }
 
 // ── Calls ─────────────────────────────────────────────────────────────────────
 export const warehouseSpaceApi = {
@@ -210,24 +213,70 @@ export const warehouseSpaceApi = {
   createRack: (dto: Record<string, unknown>) => request<any>('/warehouse-master/racks', json('POST', dto)),
   updateRack: (id: string, dto: Record<string, unknown>) => request<any>(`/warehouse-master/racks/${id}`, json('PATCH', dto)),
 
+  // RQ5 — two different states. Inactive: the rack stays in the structure, out of
+  // use for now. Deleted: the rack leaves the structure (soft delete) and can be
+  // restored. A 409 means something still depends on it; the server says what.
+  deactivateRack: (id: string) => request<any>(`/warehouse-master/racks/${id}/deactivate`, json('PATCH', {})),
+  activateRack: (id: string) => request<any>(`/warehouse-master/racks/${id}/activate`, json('PATCH', {})),
+  restoreRack: (id: string) => request<any>(`/warehouse-master/racks/${id}/restore`, json('PATCH', {})),
+  restoreWarehouse: (id: string) => request<any>(`/warehouse-master/warehouses/${id}/restore`, json('PATCH', {})),
+  /** Everything soft-deleted and still restorable, with who/when and whether a restore would be refused. */
+  deletedRecords: () => request<DeletedRecordsResponse>('/warehouse-master/deleted'),
+  /** Soft delete. The result says how many slots were deleted with the rack. */
+  deleteRack: (id: string) => request<DeleteRackResult>(`/warehouse-master/racks/${id}`, { method: 'DELETE' }),
+
   generateSlots: (rackId: string, levels: number, columns: number, preview: boolean) =>
     request<GenerateSlotsResult>(`/warehouse-master/racks/${rackId}/generate-slots`, json('POST', { levels, columns, preview })),
   updateSlot: (id: string, dto: SlotChanges & { name?: string | null }) => request<any>(`/warehouse-master/slots/${id}`, json('PATCH', dto)),
   bulkUpdateSlots: (ids: string[], changes: SlotChanges) => request<{ updated: number }>('/warehouse-master/slots/bulk', json('PATCH', { ids, changes })),
   /** Setup wizard: preview or create whole zones of racks + slots (one transaction). */
-  setupRacks: (warehouseId: string, body: { rackTypeId: string; zones: { name: string; racks: number }[]; preview?: boolean }) =>
+  setupRacks: (warehouseId: string, body: SetupRacksBody) =>
     request<SetupRacksResult>(`/warehouse-master/warehouses/${encodeURIComponent(warehouseId)}/setup-racks`, json('POST', body)),
   /** Soft delete; slots with stock in them now are skipped and listed. preview = report only. */
   bulkDeleteSlots: (ids: string[], preview: boolean) => request<BulkDeleteSlotsResult>('/warehouse-master/slots/bulk-delete', json('POST', { ids, preview })),
 };
 
+/** Rack code pattern for racks created from now on (C4); a system setting. */
+export type RackCodePattern = 'zone-r01' | 'rack-001';
+
+export interface SetupZone { name: string; racks: number }
+
+/**
+ * POST /warehouse-master/warehouses/:id/setup-racks — **exactly one** of the two
+ * forms (decision C3). Either an existing Rack Type, or a size the server turns
+ * into one (found first, created second). Sending a size field beside a
+ * `rackTypeId` is a 400 that names the offending fields, so the union here is
+ * what stops the UI from ever building such a request.
+ */
+export type SetupRacksBody =
+  | { rackTypeId: string; zones: SetupZone[]; preview?: boolean }
+  | {
+      lengthCm: number; widthCm: number; heightCm: number;
+      /** Default STANDARD_RACK. */
+      category?: RackCategory;
+      levels?: number; columns?: number; slotCapacity?: number;
+      zones: SetupZone[]; preview?: boolean;
+    };
+
 export interface SetupRacksResult {
   warehouseId: string;
-  rackType: { id: string; code: string; name: string; category: RackCategory; lengthCm: number; widthCm: number; heightCm: number; levels: number; columns: number };
-  racks: { code: string; zone: string }[];
+  rackType: {
+    id: string; code: string; name: string; category: RackCategory;
+    lengthCm: number; widthCm: number; heightCm: number; levels: number; columns: number;
+    /** Preview only: this Rack Type does not exist yet and this run will create it. */
+    willBeCreated: boolean;
+    /** The resolved Rack Type was made by the wizard from a typed size, not by hand. */
+    autoCreated: boolean;
+  };
+  /** One row per planned rack (RQ26: code, size and its own floor area). */
+  racks: { code: string; zone: string; lengthCm: number; widthCm: number; footprintM2: number | null }[];
   slotsPerRack: number;
   totalRacks: number;
   totalSlots: number;
+  /** Floor one of these racks takes (m²); null when the size is unknown. */
+  rackFootprintM2: number | null;
+  /** Pattern the planned codes follow (C4) — new racks only. */
+  rackCodePattern: RackCodePattern;
   newFootprintM2: number;
   usedFootprintM2: number;
   usableAreaM2: number | null;
@@ -243,3 +292,42 @@ export interface BulkDeleteSlotsResult {
   notFound: string[];
   preview: boolean;
 }
+
+// ── Deleted but restorable (RQ5) ─────────────────────────────────────────────
+// Soft-deleted records are left out of the master tree, so `GET
+// /warehouse-master/deleted` is the only way the UI can name them. It is
+// read-only, warehouse-scoped, takes nothing and always answers 200 — empty
+// lists when nothing is deleted. Because the list comes from the server, a
+// record stays restorable after a reload.
+export type DeletedKind = 'WAREHOUSE' | 'RACK';
+
+export interface DeletedRecord {
+  kind: DeletedKind;
+  id: string;
+  code: string;
+  /** `Rack.name` is nullable. */
+  name: string | null;
+  isDeleted: true;
+  /** What the record will STILL be after a restore — restore undoes the delete only. */
+  isActive: boolean;
+  /** Racks only: the warehouse it belonged to, so two racks sharing a code are told apart. */
+  warehouse: { id: string; code: string; name: string; isDeleted: boolean } | null;
+  /** Racks only. */
+  zone: string | null;
+  deletedAt: string | null;
+  deletedBy: { id: string; username: string | null; fullName: string | null } | null;
+  /** Racks only; 0 for warehouses. */
+  slotsDeleted: number;
+  canRestore: boolean;
+  /** Set when a restore would be refused (409). WAREHOUSE_DELETED: restore the warehouse first. */
+  blocked: { code: 'WAREHOUSE_DELETED'; message: string } | null;
+}
+
+export interface DeletedRecordsResponse {
+  generatedAt: string;
+  /** Newest deletion first, then code. */
+  warehouses: DeletedRecord[];
+  racks: DeletedRecord[];
+  totals: { warehouses: number; racks: number; restorable: number };
+}
+

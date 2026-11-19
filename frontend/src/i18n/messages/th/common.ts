@@ -100,6 +100,14 @@ export const common: Messages['common'] = {
     items: '{count} รายการ',
     lines: '{count} บรรทัด',
   },
+  length: {
+    m: 'ม.',
+    cm: 'ซม.',
+    mm: 'มม.',
+    value: '{value} {unit}',
+    showIn: 'แสดงเป็น',
+    unitLabel: 'หน่วยความยาว',
+  },
   pagination: {
     pageOf: 'หน้า {page} จาก {pages}',
     showing: 'แสดง {from}–{to} จาก {total}',

@@ -10,11 +10,17 @@ import type { LayoutScope } from './warehouse-layout.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
   BatchSaveDto, DuplicateObjectDto, LinkObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
+  PlaceRacksDto, LayoutDecisionDto,
 } from './dto/layout.dto';
 
 // Write access: SYSTEM_ADMIN + WAREHOUSE_MANAGER — identical to warehouse-master.
 // Reads are open to any authenticated user, matching GET /warehouse-master.
 const WRITE_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER] as const;
+
+// RQ13: who may sign a plan off. The same two roles that may draw it — a plan is
+// a drawing, not stock — but never the person who asked: the approval engine
+// refuses self-approval, and an ApprovalRule can narrow this further.
+const APPROVE_ROLES = [UserRole.SYSTEM_ADMIN, UserRole.WAREHOUSE_MANAGER] as const;
 
 // Sprint 7: every endpoint is scoped to the caller's assigned warehouses, using
 // the same semantics as inventory.service (SUPER_ADMIN bypasses; no assignment
@@ -78,6 +84,22 @@ export class WarehouseLayoutController {
     return this.service.occupancy(warehouseId, scopeOf(user));
   }
 
+  // RQ10: geometry warnings for the 2D plan. A GET, open to any authenticated
+  // user like the other reads, and deliberately NOT part of any save path — the
+  // plan is a drawing, so a problem here never refuses a save.
+  @Get(':warehouseId/problems')
+  @ApiOperation({ summary: 'Boundary / overlap / blocked-aisle warnings for the floor plan. Read-only; never blocks a save.' })
+  problems(@Param('warehouseId') warehouseId: string, @CurrentUser() user: any) {
+    return this.service.problems(warehouseId, scopeOf(user));
+  }
+
+  // RQ27: draw every unplaced rack of the warehouse onto its plan at once.
+  @Post(':warehouseId/place-racks') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: "Auto-place the warehouse's unplaced racks on the Floor Plan at their real size (drawings only)" })
+  placeRacks(@Param('warehouseId') warehouseId: string, @Body() dto: PlaceRacksDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.placeRacks(warehouseId, dto, userId, scopeOf(user));
+  }
+
   // F6: racks arranged in the 3D view → RACK drawings on the Floor Plan (drawings only).
   @Put(':warehouseId/rack-positions') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
   @ApiOperation({ summary: 'Save every active rack position from the 3D view onto the Floor Plan (metres; drawings only)' })
@@ -89,6 +111,19 @@ export class WarehouseLayoutController {
   @ApiOperation({ summary: 'Back to auto layout: remove the rack drawings the 3D view created (hand-drawn racks stay)' })
   resetRackPositions(@Param('warehouseId') warehouseId: string, @Body() dto: ResetRackPositionsDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
     return this.service.resetRackPositions(warehouseId, dto, userId, scopeOf(user));
+  }
+
+  // ── RQ13 plan lifecycle: DRAFT -> PENDING -> PUBLISHED ─────────────────────
+  @Post(':warehouseId/submit') @UseGuards(RolesGuard) @Roles(...WRITE_ROLES)
+  @ApiOperation({ summary: 'Send the floor plan for approval (DRAFT -> PENDING; the plan is frozen while it waits)' })
+  submitLayout(@Param('warehouseId') warehouseId: string, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.submitForApproval(warehouseId, userId, scopeOf(user));
+  }
+
+  @Post(':warehouseId/decision') @UseGuards(RolesGuard) @Roles(...APPROVE_ROLES)
+  @ApiOperation({ summary: 'Approve the floor plan (-> PUBLISHED) or send it back (-> DRAFT). Not the person who submitted it.' })
+  decideLayout(@Param('warehouseId') warehouseId: string, @Body() dto: LayoutDecisionDto, @CurrentUser('id') userId: string, @CurrentUser() user: any) {
+    return this.service.decideApproval(warehouseId, dto.approved, dto.notes, userId, scopeOf(user));
   }
 
   @Get(':warehouseId')

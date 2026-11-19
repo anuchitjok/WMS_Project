@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseSpaceApi, type CapacityPlan, type RackTypeMaster, type WarehouseSpaceSummary } from '@/lib/api-warehouse';
 import { getT, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
+import { useLengthUnit } from '@/components/ui/length-input';
+import { formatLength, lengthUnitLabel } from '@/lib/length';
 import { Fact, Pill, rackCategoryOf, selectClass } from './shared';
 import { PrintLocationLabelsButton } from '@/components/documents/print-location-labels-button';
 import { SetupHealthCard } from '@/components/warehouse-layout/setup-health-card';
@@ -26,10 +28,13 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
   onSelectRack: (rackId: string) => void;
 }) {
   const { m, t, fmt } = useT();
+  const unit = useLengthUnit();
   const wm = m.warehouseMaster;
   const sp = m.space;
   const m2 = (v: number | null | undefined, dp = 1) => (v == null ? '—' : t(sp.unit.m2, { value: fmt.number(v, dp) }));
-  const cmToM = (v: number | null | undefined) => (v == null ? '—' : fmt.number(v / 100, 2));
+  // Stored centimetres shown in the unit the user picked (RQ1) — no private conversion.
+  const len = (v: number | null | undefined) =>
+    (v == null ? '—' : formatLength(v, unit, { withUnit: false, format: fmt.number }));
   const w = warehouse;
   const hasSize = w.lengthCm != null && w.widthCm != null;
 
@@ -64,6 +69,9 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
           </div>
         </div>
 
+        {/* Inactive is not deleted: everything stays here, it is just out of use (RQ5). */}
+        {!w.isActive && <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{wm.warehouse.inactiveNote}</p>}
+
         {/* Missing / wrong master data (same check as the 3D page); a code opens the rack */}
         <div className="mt-4 empty:hidden"><SetupHealthCard wh={w} onRack={onSelectRack} showMasterLink={false} /></div>
 
@@ -72,7 +80,7 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
           <Ruler className="w-4 h-4 text-slate-400 mt-0.5" />
           {hasSize ? (
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3 flex-1">
-              <Fact label={wm.warehouse.dimensions}>{cmToM(w.lengthCm)} × {cmToM(w.widthCm)} × {cmToM(w.heightCm)} m</Fact>
+              <Fact label={wm.warehouse.dimensions}>{len(w.lengthCm)} × {len(w.widthCm)} × {len(w.heightCm)} {lengthUnitLabel(unit)}</Fact>
               <Fact label={sp.summary.totalArea}>{m2(space?.totalAreaM2)}</Fact>
               <Fact label={sp.summary.usableArea}>{m2(space?.usableAreaM2)} <span className="text-xs text-slate-500">({t(sp.summary.usablePct, { pct: fmt.number(space?.dimensions.usableAreaPct ?? w.usableAreaPct ?? 100) })})</span></Fact>
               <Fact label={sp.summary.volume}>{space?.volumeM3 == null ? '—' : t(sp.unit.m3, { value: fmt.number(space.volumeM3, 1) })}</Fact>
@@ -133,8 +141,11 @@ export function WarehouseDetail({ warehouse, space, rackTypes, isAdmin, canEditL
                   const s = r.effectiveSize ?? r;
                   const known = s.lengthCm != null && s.widthCm != null;
                   return (
-                    <tr key={r.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onSelectRack(r.id)}>
-                      <td className="px-5 py-2 font-medium text-slate-800">{r.code}{r.name ? <span className="ml-1 text-slate-500 font-normal">· {r.name}</span> : null}</td>
+                    <tr key={r.id} className={cn('hover:bg-slate-50 cursor-pointer', r.isActive === false && 'text-slate-400')} onClick={() => onSelectRack(r.id)}>
+                      <td className="px-5 py-2 font-medium text-slate-800">
+                        {r.code}{r.name ? <span className="ml-1 text-slate-500 font-normal">· {r.name}</span> : null}
+                        {r.isActive === false && <span className="ml-2 align-middle"><Pill>{wm.detail.inactive}</Pill></span>}
+                      </td>
                       <td className="px-3 py-2 text-slate-600">{wm.category[rackCategoryOf(r)]}</td>
                       <td className="px-3 py-2 text-slate-600 tabular-nums">{known ? `${fmt.number(s.lengthCm)} × ${fmt.number(s.widthCm)}${s.heightCm != null ? ` × ${fmt.number(s.heightCm)}` : ''}` : <span className="text-slate-400">{wm.warehouse.sizeUnknown}</span>}</td>
                       <td className="px-5 py-2 text-right tabular-nums text-slate-700">{r._count?.slots ?? r.slots?.length ?? 0}</td>

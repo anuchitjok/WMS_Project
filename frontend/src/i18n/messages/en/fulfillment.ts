@@ -78,6 +78,10 @@ export const fulfillment = {
     complete: 'Complete Packing',
   },
   shipping: {
+    carrierBrand: 'Carrier brand',
+    awb: 'Air waybill',
+    warehouseNumber: 'Carrier warehouse no.',
+    logisticsLater: 'These can be filled in later, on the shipment page, until it is delivered.',
     title: 'Create Shipment & Dispatch — {ref}',
     carrier: 'Carrier',
     tracking: 'Tracking No.',
@@ -120,6 +124,17 @@ export const fulfillment = {
     done: 'Handover confirmed — issued to RMA',
   },
   shipment: {
+    // LOG-001 / LOG-002
+    logistics: 'Shipping details',
+    carrier: 'Carrier',
+    carrierBrand: 'Carrier brand',
+    tracking: 'Tracking number',
+    awb: 'Air waybill',
+    warehouseNumber: 'Carrier warehouse no.',
+    editLogistics: 'Edit',
+    printLabel: 'Shipping label',
+    logisticsSaved: 'Shipping details saved',
+    logisticsHint: 'Leave a field empty to clear it. Every change is recorded against this shipment.',
     title: 'Fulfillment: {ref}',
     subtitle: 'Request: {ref} · Status: {status}',
     markDelivered: 'Mark Delivered',

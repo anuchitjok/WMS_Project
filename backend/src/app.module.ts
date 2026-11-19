@@ -23,6 +23,7 @@ import { RealtimeModule } from './realtime/realtime.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { ReceivingModule } from './receiving/receiving.module';
 import { PutawayModule } from './putaway/putaway.module';
+import { ContainersModule } from './containers/containers.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { RmaModule } from './rma/rma.module';
 import { DoaModule } from './doa/doa.module';
@@ -50,6 +51,7 @@ import { PlanningModule } from './planning/planning.module';
 import { CompanyProfileModule } from './company/company-profile.module';
 import { MrpModule } from './mrp/mrp.module';
 import { WarrantyModule } from './warranty/warranty.module';
+import { ThaiAddressModule } from './thai-address/thai-address.module';
 import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
@@ -73,6 +75,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     RealtimeModule,
     ReceivingModule,
     PutawayModule,
+    ContainersModule,
     FulfillmentModule,
     RmaModule,
     DoaModule,
@@ -100,6 +103,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     CompanyProfileModule,
     MrpModule,
     WarrantyModule,
+    ThaiAddressModule,
   ],
   controllers: [AppController],
   providers: [

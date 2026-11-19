@@ -100,6 +100,14 @@ export const common: Messages['common'] = {
     items: '{count} 项',
     lines: '{count} 行',
   },
+  length: {
+    m: '米',
+    cm: '厘米',
+    mm: '毫米',
+    value: '{value} {unit}',
+    showIn: '显示单位',
+    unitLabel: '长度单位',
+  },
   pagination: {
     pageOf: '第 {page} 页，共 {pages} 页',
     showing: '显示第 {from}–{to} 条，共 {total} 条',

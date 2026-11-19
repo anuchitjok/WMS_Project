@@ -164,6 +164,10 @@ function WarehouseMasterInner() {
                 onToggle={toggle}
                 onSelect={(s) => { setSelection(s); if (s?.type === 'warehouse') setOpen((cur) => new Set(cur).add(s.id)); }}
                 canCreate={isAdmin} onCreateWarehouse={() => setModal({ kind: 'wh', mode: 'create' })}
+                // RQ5: refresh the tree in place after a restore, so the restored
+                // rack reappears in the structure without a full page reload.
+                // The Deleted list itself refetches from GET /warehouse-master/deleted.
+                onRestored={load}
               />
             </div>
             <div className="lg:col-span-2 min-w-0">

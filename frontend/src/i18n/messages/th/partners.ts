@@ -3,7 +3,7 @@ import type { Messages } from '../en';
 export const partners: Messages['partners'] = {
   title: 'คู่ค้าทางธุรกิจ',
   subtitle: 'ข้อมูลหลัก — แบรนด์ ผู้ขาย และสต็อกแยกตามแบรนด์',
-  tabs: { brands: 'ข้อมูลแบรนด์', vendors: 'ข้อมูลผู้ขาย', rollup: 'สต็อกตามแบรนด์' },
+  tabs: { brands: 'ข้อมูลแบรนด์', families: 'กลุ่มสินค้า', vendors: 'ข้อมูลผู้ขาย', rollup: 'สต็อกตามแบรนด์' },
   cols: {
     code: 'รหัส',
     name: 'ชื่อ',
@@ -39,6 +39,21 @@ export const partners: Messages['partners'] = {
     empty: 'ยังไม่มีแบรนด์',
     created: 'สร้างแบรนด์แล้ว',
     updated: 'บันทึกแบรนด์แล้ว',
+  },
+  family: {
+    hint: 'กลุ่มที่สินค้าสังกัดอยู่ กลุ่มหนึ่งซ้อนอยู่ในกลุ่มที่ใหญ่กว่าได้',
+    create: 'สร้างกลุ่มสินค้า',
+    createTitle: 'สร้างกลุ่มสินค้าใหม่',
+    editTitle: 'แก้ไขกลุ่มสินค้า: {code}',
+    codeAuto: 'ระบบสร้างให้ (PF-####)',
+    namePlaceholder: 'เช่น อุปกรณ์เครือข่าย',
+    parent: 'อยู่ในกลุ่ม',
+    noParent: 'กลุ่มบนสุด',
+    subGroups: 'กลุ่มย่อย',
+    description: 'คำอธิบาย',
+    empty: 'ยังไม่มีกลุ่มสินค้า',
+    created: 'สร้างกลุ่มสินค้าแล้ว',
+    updated: 'บันทึกกลุ่มสินค้าแล้ว',
   },
   vendor: {
     create: 'สร้างผู้ขาย',

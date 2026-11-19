@@ -3,7 +3,7 @@ import type { Messages } from '../en';
 export const partners: Messages['partners'] = {
   title: '业务伙伴',
   subtitle: '主数据 — 品牌、供应商及按品牌的库存',
-  tabs: { brands: '品牌主档', vendors: '供应商主档', rollup: '按品牌库存' },
+  tabs: { brands: '品牌主档', families: '产品族', vendors: '供应商主档', rollup: '按品牌库存' },
   cols: {
     code: '代码',
     name: '名称',
@@ -39,6 +39,21 @@ export const partners: Messages['partners'] = {
     empty: '暂无品牌',
     created: '品牌已创建',
     updated: '品牌已更新',
+  },
+  family: {
+    hint: '货品所属的分组。一个分组可以放在更大的分组之内。',
+    create: '新建产品族',
+    createTitle: '新建产品族',
+    editTitle: '编辑产品族：{code}',
+    codeAuto: '系统自动生成（PF-####）',
+    namePlaceholder: '例如：网络设备',
+    parent: '所属上级',
+    noParent: '顶层',
+    subGroups: '子分组',
+    description: '说明',
+    empty: '尚无产品族',
+    created: '产品族已创建',
+    updated: '产品族已保存',
   },
   vendor: {
     create: '创建供应商',

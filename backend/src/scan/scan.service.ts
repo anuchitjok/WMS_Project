@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
+import { NOT_IN_LOCATION } from '../common/stock-presence';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { BarcodeParserService, ParsedBarcode } from './barcode-parser.service';
@@ -77,6 +78,25 @@ export class ScanService {
         return this.tagged('stockItem', await this.prisma.stockItem.findFirst({ where: { serialNumber: v }, include: { product: true, warehouse: true, rack: true, slot: true } }));
       case 'request':
         return this.tagged('request', await this.prisma.withdrawalRequest.findFirst({ where: { refNumber: v }, include: { items: { include: { product: true } } } }));
+      case 'container': {
+        // RQ17: the box, what is in it, and where it stands — the same answer
+        // the Containers screen shows, so a scan and a click agree.
+        const box = await this.prisma.container.findFirst({
+          where: { code: v.trim().toUpperCase(), isDeleted: false },
+          include: {
+            warehouse: { select: { id: true, code: true, name: true } },
+            rack: { select: { id: true, code: true } },
+            slot: { select: { id: true, code: true } },
+            parent: { select: { id: true, code: true } },
+            children: { where: { isDeleted: false }, select: { id: true, code: true, name: true } },
+            stockItems: {
+              where: { status: { notIn: NOT_IN_LOCATION } },
+              select: { id: true, quantity: true, status: true, serialNumber: true, batchNumber: true, product: { select: { code: true, name: true } } },
+            },
+          },
+        });
+        return this.tagged('container', box);
+      }
       case 'location': {
         const [whCode, rackCode, slotCode] = v.split('|');
         const wh = await this.prisma.warehouse.findFirst({ where: { code: whCode }, include: { racks: { include: { slots: true } } } });

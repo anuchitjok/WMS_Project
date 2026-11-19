@@ -2,21 +2,24 @@
 
 // Rack Type Master (plan P1 1.2): size templates in two categories only.
 // Everyone can read; only SYSTEM_ADMIN can create / edit / (de)activate.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pencil, Plus, Power, PowerOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { LengthInput, LengthUnitPicker, useLengthUnit } from '@/components/ui/length-input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseSpaceApi, RACK_CATEGORIES, type RackCategory, type RackTypeMaster } from '@/lib/api-warehouse';
+import { formatLength } from '@/lib/length';
 import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { Field, ModalWrap, Pill, isPos, optNum } from './shared';
-import { SizeWarnings } from './forms';
+import { Field, ModalWrap, Pill, isPos } from './shared';
+import { AutoNameField, SizeWarnings, suggestName } from './forms';
 import { rackSizeWarnings } from './size-rules';
 
 export function RackTypesTab({ rackTypes, loading, isAdmin, onChanged }: { rackTypes: RackTypeMaster[]; loading: boolean; isAdmin: boolean; onChanged: () => void }) {
   const { m, fmt } = useT();
+  const unit = useLengthUnit();
   const rt = m.warehouseMaster.rackTypes;
   const [showInactive, setShowInactive] = useState(false);
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; data?: RackTypeMaster } | null>(null);
@@ -35,7 +38,8 @@ export function RackTypesTab({ rackTypes, loading, isAdmin, onChanged }: { rackT
           <p className="text-sm text-slate-500 max-w-2xl">{rt.subtitle}</p>
           {!isAdmin && <p className="mt-1 text-xs text-slate-500">{rt.adminOnly}</p>}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <LengthUnitPicker />
           <label className="flex items-center gap-2 text-sm text-slate-600">
             <input type="checkbox" className="accent-green-600" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} /> {rt.showInactive}
           </label>
@@ -64,7 +68,9 @@ export function RackTypesTab({ rackTypes, loading, isAdmin, onChanged }: { rackT
                 <tr key={r.id} className={cn(!r.isActive && 'text-slate-400')}>
                   <td className="px-5 py-2.5"><p className="font-medium text-slate-800">{r.code}</p><p className="text-xs text-slate-500">{r.name}</p></td>
                   <td className="px-3 py-2.5 text-slate-600">{m.warehouseMaster.category[r.category] ?? r.category}</td>
-                  <td className="px-3 py-2.5 tabular-nums text-slate-600">{fmt.number(r.lengthCm)} × {fmt.number(r.widthCm)} × {fmt.number(r.heightCm)}</td>
+                  <td className="px-3 py-2.5 tabular-nums text-slate-600">
+                    {formatLength(r.lengthCm, unit, { withUnit: false, format: fmt.number })} × {formatLength(r.widthCm, unit, { withUnit: false, format: fmt.number })} × {formatLength(r.heightCm, unit, { format: fmt.number })}
+                  </td>
                   <td className="px-3 py-2.5 tabular-nums text-slate-600">{r.levels} × {r.columns}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{r.slotCapacity}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">{r._count?.racks ?? 0}</td>
@@ -96,18 +102,35 @@ function RackTypeForm({ mode, data, onClose, onSaved }: { mode: 'create' | 'edit
   const f = m.warehouseMaster.form;
   const [form, setForm] = useState({
     code: data?.code ?? '', name: data?.name ?? '', category: (data?.category ?? 'STANDARD_RACK') as RackCategory,
-    lengthCm: s(data?.lengthCm), widthCm: s(data?.widthCm), heightCm: s(data?.heightCm),
     levels: s(data?.levels ?? 1), columns: s(data?.columns ?? 1), slotCapacity: s(data?.slotCapacity ?? 1),
-    maxStackHeightCm: s(data?.maxStackHeightCm), description: data?.description ?? '',
+    description: data?.description ?? '',
   });
+  // Centimetres, as stored (RQ1): the unit on screen belongs to <LengthInput>.
+  const [size, setSize] = useState<{ lengthCm?: number; widthCm?: number; heightCm?: number; maxStackHeightCm?: number }>(() => ({
+    lengthCm: data?.lengthCm ?? undefined, widthCm: data?.widthCm ?? undefined,
+    heightCm: data?.heightCm ?? undefined, maxStackHeightCm: data?.maxStackHeightCm ?? undefined,
+  }));
+  const setSz = (k: 'lengthCm' | 'widthCm' | 'heightCm' | 'maxStackHeightCm') => (cm: number | undefined) => setSize((x) => ({ ...x, [k]: cm }));
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value });
   const pallet = form.category === 'PALLET_ON_FLOOR';
+  // RQ6 — the name follows Category + Code until the user writes their own.
+  // Only on create: an existing rack type's name is already shown on every rack.
+  const [nameTouched, setNameTouched] = useState(mode !== 'create');
+  // The code is the unique part; without one there is nothing to suggest yet.
+  const suggestedName = mode === 'create' && form.code.trim()
+    ? suggestName(m.warehouseMaster.category[form.category], form.code) : '';
+  useEffect(() => {
+    if (nameTouched) return;
+    setForm((f) => (f.name === suggestedName ? f : { ...f, name: suggestedName }));
+  }, [suggestedName, nameTouched]);
+  // The backend owns code uniqueness (409). Its message is shown by the Code field.
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if ((mode === 'create' && !form.code.trim()) || !form.name.trim()) return toast.error(f.required);
-    const L = optNum(form.lengthCm), W = optNum(form.widthCm), H = optNum(form.heightCm), MS = optNum(form.maxStackHeightCm);
+    const { lengthCm: L, widthCm: W, heightCm: H, maxStackHeightCm: MS } = size;
     if (L === undefined || W === undefined || H === undefined || ![L, W, H, MS].every(isPos)) return toast.error(f.positive);
     const levels = pallet ? 1 : Number(form.levels), columns = Number(form.columns), slotCapacity = Number(form.slotCapacity || 1);
     if (![levels, columns].every((n) => Number.isInteger(n) && n >= 1 && n <= 99)) return toast.error(f.gridRange);
@@ -117,12 +140,17 @@ function RackTypeForm({ mode, data, onClose, onSaved }: { mode: 'create' | 'edit
       maxStackHeightCm: MS ?? null, description: form.description.trim() || null,
     };
     setBusy(true);
+    setCodeError(null);
     try {
       if (mode === 'create') await warehouseSpaceApi.createRackType({ code: form.code.trim(), ...body });
       else await warehouseSpaceApi.updateRackType(data!.id, body);
       toast.success(mode === 'create' ? rt.created : rt.updated);
       onSaved();
-    } catch (err: any) { toast.error(err.message); } finally { setBusy(false); }
+    } catch (err: any) {
+      // 409 = this code is already taken. Keep the server's own words.
+      if (err?.status === 409) setCodeError(err.message);
+      toast.error(err.message);
+    } finally { setBusy(false); }
   }
 
   return (
@@ -140,20 +168,39 @@ function RackTypeForm({ mode, data, onClose, onSaved }: { mode: 'create' | 'edit
           </div>
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          {mode === 'create' && <Field label={`${rt.code} *`}><Input autoFocus placeholder="STD-250" value={form.code} onChange={F('code')} /></Field>}
-          <Field label={`${rt.name} *`} className={mode === 'create' ? '' : 'col-span-2'}><Input value={form.name} onChange={F('name')} /></Field>
+          {mode === 'create' && (
+            <Field label={`${rt.code} *`}>
+              <Input autoFocus placeholder="STD-250" value={form.code} aria-invalid={!!codeError}
+                className={cn(codeError && 'border-red-300 focus-visible:ring-red-500/30')}
+                onChange={(e) => { setCodeError(null); setForm({ ...form, code: e.target.value }); }} />
+              {codeError && <p className="mt-1 text-xs text-red-600" role="alert">{codeError}</p>}
+            </Field>
+          )}
+          {mode === 'create' ? (
+            <AutoNameField
+              label={`${rt.name} *`} value={form.name} suggestion={suggestedName} auto={!nameTouched} hint={f.nameAutoRackType}
+              onType={(v) => { setNameTouched(true); setForm((cur) => ({ ...cur, name: v })); }}
+              onUseSuggestion={() => { setNameTouched(false); setForm((cur) => ({ ...cur, name: suggestedName })); }}
+            />
+          ) : (
+            <Field label={`${rt.name} *`} className="col-span-2"><Input value={form.name} onChange={F('name')} /></Field>
+          )}
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label={`${f.lengthCm} *`}><Input type="number" min={0} step="any" value={form.lengthCm} onChange={F('lengthCm')} /></Field>
-          <Field label={`${f.widthCm} *`}><Input type="number" min={0} step="any" value={form.widthCm} onChange={F('widthCm')} /></Field>
-          <Field label={`${f.heightCm} *`}><Input type="number" min={0} step="any" value={form.heightCm} onChange={F('heightCm')} /></Field>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{f.sizeSection}</p>
+          <LengthUnitPicker />
         </div>
-        <SizeWarnings warnings={rackSizeWarnings({ lengthCm: optNum(form.lengthCm), widthCm: optNum(form.widthCm), heightCm: optNum(form.heightCm) })} />
+        <div className="grid grid-cols-3 gap-3 -mt-2">
+          <Field label={`${f.length} *`}><LengthInput value={size.lengthCm} onChange={setSz('lengthCm')} /></Field>
+          <Field label={`${f.width} *`}><LengthInput value={size.widthCm} onChange={setSz('widthCm')} /></Field>
+          <Field label={`${f.height} *`}><LengthInput value={size.heightCm} onChange={setSz('heightCm')} /></Field>
+        </div>
+        <SizeWarnings warnings={rackSizeWarnings(size)} />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <Field label={f.levels}><Input type="number" min={1} max={99} value={pallet ? '1' : form.levels} disabled={pallet} onChange={F('levels')} /></Field>
           <Field label={f.columns}><Input type="number" min={1} max={99} value={form.columns} onChange={F('columns')} /></Field>
           <Field label={rt.slotCapacity}><Input type="number" min={1} value={form.slotCapacity} onChange={F('slotCapacity')} /></Field>
-          <Field label={rt.maxStack}><Input type="number" min={0} step="any" value={form.maxStackHeightCm} onChange={F('maxStackHeightCm')} /></Field>
+          <Field label={rt.maxStack}><LengthInput value={size.maxStackHeightCm} onChange={setSz('maxStackHeightCm')} /></Field>
         </div>
         {pallet && <p className="text-xs text-slate-500 -mt-2">{rt.palletNote}</p>}
         <Field label={rt.description}><Input value={form.description} onChange={F('description')} /></Field>

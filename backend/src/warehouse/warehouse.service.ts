@@ -4,6 +4,7 @@ import { RackType, SlotStatus, SlotType } from '@prisma/client';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
 import { ScopePrincipal, assertWarehouseAccess, warehouseFilter } from '../common/warehouse-scope';
 import { diffFields, describeChanges, type ChangeSet } from '../common/audit-diff';
+import { assertRackSizeFromType } from '../common/rack-size-rule';
 import { effectiveRackSize, type RackLike } from '../warehouse-master/space-math';
 
 // Each rack carries `effectiveSize`: its own size with every missing value taken
@@ -178,18 +179,27 @@ export class WarehouseService {
 
   // ─── Rack CRUD ────────────────────────────────────────────────────────────
 
+  // RQ7 runs on this route too. It is the older of the two rack write paths (the
+  // Warehouse Layout control centre still posts here), so a rule enforced only in
+  // Warehouse Master would simply be walked around from that screen. Same shared
+  // helper, same 400 RACK_SIZE_FROM_TYPE — see common/rack-size-rule.ts.
   async createRack(dto: {
     warehouseId: string;
     code: string;
     name?: string;
     zone?: string;
     rackType?: RackType;
+    rackTypeId?: string | null;
     capacity?: number;
     levels?: number;
     columns?: number;
+    lengthCm?: number | null;
+    widthCm?: number | null;
+    heightCm?: number | null;
     description?: string;
   }, actorId?: string, scope?: ScopePrincipal) {
     assertWarehouseAccess(scope, dto.warehouseId, 'this warehouse');
+    assertRackSizeFromType(dto);
     const exists = await this.prisma.rack.findUnique({
       where: { warehouseId_code: { warehouseId: dto.warehouseId, code: dto.code } },
     });
@@ -201,8 +211,11 @@ export class WarehouseService {
 
   // Only descriptive fields: moving a rack between warehouses or deactivating it
   // goes through deleteRack (which refuses racks holding stock), never a PATCH.
-  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; capacity: number; levels: number; columns: number; description: string }>, actorId?: string, scope?: ScopePrincipal) {
-    await this.scopedRack(id, scope);
+  // A rack that follows a Rack Type cannot have its size or grid changed here (RQ7);
+  // scopedRack already loaded the stored rack, so the rule costs no extra query.
+  async updateRack(id: string, dto: Partial<{ name: string; zone: string; rackType: RackType; rackTypeId: string | null; capacity: number; levels: number; columns: number; lengthCm: number | null; widthCm: number | null; heightCm: number | null; description: string }>, actorId?: string, scope?: ScopePrincipal) {
+    const before = await this.scopedRack(id, scope);
+    assertRackSizeFromType(dto, before);
     const updated = await this.prisma.rack.update({ where: { id }, data: dto });
     await this.audit(actorId, 'RACK_UPDATED', 'Rack', id, updated.code);
     return updated;
@@ -403,6 +416,160 @@ export class WarehouseService {
     }
     const updated = await this.prisma.brand.update({ where: { id }, data: { isActive: false } });
     await this.audit(actorId, 'BRAND_DEACTIVATED', 'Brand', id, `${brand.code} · ${brand.name}`, diffFields(brand, updated, ['isActive']));
+    return updated;
+  }
+
+  // ─── Product Family Master (MDM-003) ────────────────────────────────────────
+  //
+  // The group a product belongs to, chosen from a list. A family may sit inside
+  // a wider one, which is why `parentId` exists and why a cycle has to be
+  // refused: a family that is its own ancestor would hang every tree walk.
+
+  /** Flat list with product counts and the parent's code, for the master screen. */
+  listProductFamilies() {
+    return this.prisma.productFamily.findMany({
+      orderBy: { code: 'asc' },
+      include: {
+        parent: { select: { id: true, code: true, name: true } },
+        _count: { select: { products: true, children: true } },
+      },
+    });
+  }
+
+  /** Active families only — what a product form offers. */
+  findProductFamilies() {
+    return this.prisma.productFamily.findMany({
+      where: { isActive: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, code: true, name: true, parentId: true },
+    });
+  }
+
+  private async nextFamilyCode(): Promise<string> {
+    const existing = await this.prisma.productFamily.findMany({
+      where: { code: { startsWith: 'PF-' } },
+      select: { code: true },
+    });
+    const maxNum = existing.reduce((max, f) => {
+      const n = parseInt(f.code.slice(3), 10);
+      return Number.isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    return `PF-${String(maxNum + 1).padStart(4, '0')}`;
+  }
+
+  /** Walks up from `parentId`; throws if `id` is met on the way. */
+  private async assertNoFamilyCycle(id: string, parentId: string) {
+    if (parentId === id) throw new ConflictException('A family cannot sit inside itself');
+    const seen = new Set<string>([id]);
+    let cursor: string | null = parentId;
+    while (cursor) {
+      if (seen.has(cursor)) throw new ConflictException('That would put the family inside one of its own sub-groups');
+      seen.add(cursor);
+      const row: { parentId: string | null } | null = await this.prisma.productFamily.findUnique({
+        where: { id: cursor }, select: { parentId: true },
+      });
+      cursor = row?.parentId ?? null;
+    }
+  }
+
+  async createProductFamily(dto: { code?: string; name: string; description?: string; parentId?: string }, actorId?: string) {
+    const name = dto.name?.trim();
+    if (!name) throw new ConflictException('Family name is required');
+
+    if (dto.parentId) {
+      const parent = await this.prisma.productFamily.findUnique({ where: { id: dto.parentId } });
+      if (!parent) throw new NotFoundException('Parent family not found');
+    }
+
+    let code = dto.code?.trim().toUpperCase();
+    if (!code) {
+      // Retry a few times in case a concurrent insert grabs the same number.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = await this.nextFamilyCode();
+        const clash = await this.prisma.productFamily.findUnique({ where: { code: candidate } });
+        if (!clash) { code = candidate; break; }
+      }
+      if (!code) throw new ConflictException('Could not generate a unique family code, please retry');
+    } else {
+      const existing = await this.prisma.productFamily.findUnique({ where: { code } });
+      if (existing) throw new ConflictException(`Product family code already exists: ${code}`);
+    }
+
+    const family = await this.prisma.productFamily.create({
+      data: { code, name, description: dto.description?.trim() || null, parentId: dto.parentId || null },
+    });
+    await this.audit(actorId, 'PRODUCT_FAMILY_CREATED', 'ProductFamily', family.id, `${family.code} · ${family.name}`);
+    return family;
+  }
+
+  async updateProductFamily(
+    id: string,
+    dto: { name?: string; description?: string; parentId?: string | null; isActive?: boolean },
+    actorId?: string,
+  ) {
+    const family = await this.prisma.productFamily.findUnique({
+      where: { id },
+      include: { _count: { select: { products: true, children: true } } },
+    });
+    if (!family) throw new NotFoundException('Product family not found');
+
+    // Retiring runs through here as well as through remove(), because the
+    // master screen deactivates with a PATCH. Both doors need the same lock.
+    if (dto.isActive === false && family.isActive) this.assertFamilyUnused(family);
+
+    if (dto.parentId) {
+      const parent = await this.prisma.productFamily.findUnique({ where: { id: dto.parentId } });
+      if (!parent) throw new NotFoundException('Parent family not found');
+      await this.assertNoFamilyCycle(id, dto.parentId);
+    }
+
+    const updated = await this.prisma.productFamily.update({
+      where: { id },
+      data: {
+        ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+        ...(dto.description !== undefined ? { description: dto.description.trim() || null } : {}),
+        ...(dto.parentId !== undefined ? { parentId: dto.parentId || null } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+    });
+    const changes = diffFields(family, updated, ['name', 'description', 'parentId', 'isActive']);
+    const summary = describeChanges(changes);
+    await this.audit(
+      actorId, 'PRODUCT_FAMILY_UPDATED', 'ProductFamily', id,
+      `${updated.code} · ${updated.name}${summary ? ` — ${summary}` : ''}`, changes,
+    );
+    return updated;
+  }
+
+  /**
+   * Refuses to retire a family anything still points at. The messages carry no
+   * counts on purpose: the row the person is looking at already shows both, and
+   * a sentence without numbers in it can be translated by the client's map.
+   */
+  private assertFamilyUnused(family: { _count: { products: number; children: number } }) {
+    if (family._count.products > 0)
+      throw new ConflictException('Products still belong to this family');
+    if (family._count.children > 0)
+      throw new ConflictException('Sub-groups still sit inside this family');
+  }
+
+  /**
+   * Soft delete: deactivate. Refused while products or sub-groups still point
+   * here, so nothing is silently left pointing at a group no one can find.
+   */
+  async deleteProductFamily(id: string, actorId?: string) {
+    const family = await this.prisma.productFamily.findUnique({
+      where: { id },
+      include: { _count: { select: { products: true, children: true } } },
+    });
+    if (!family) throw new NotFoundException('Product family not found');
+    this.assertFamilyUnused(family);
+
+    const updated = await this.prisma.productFamily.update({ where: { id }, data: { isActive: false } });
+    await this.audit(
+      actorId, 'PRODUCT_FAMILY_DEACTIVATED', 'ProductFamily', id,
+      `${family.code} · ${family.name}`, diffFields(family, updated, ['isActive']),
+    );
     return updated;
   }
 

@@ -7,25 +7,28 @@ import { Calculator, Download, Plus, Printer, Search, Trash2 } from 'lucide-reac
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { LengthInput, LengthUnitPicker, useLengthUnit } from '@/components/ui/length-input';
 import { productsApi } from '@/lib/api';
+import { formatLength } from '@/lib/length';
 import { warehouseSpaceApi, type SimulateInput, type SimulationResult, type WarehouseSpaceSummary } from '@/lib/api-warehouse';
 import { getT, useT } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { Field, Pill, optNum } from './shared';
+import { Field, Pill } from './shared';
 
 interface Line {
   key: number;
   productId: string | null;
   productLabel: string;
   productHasSize: boolean;
-  lengthCm: string;
-  widthCm: string;
-  heightCm: string;
+  /** Centimetres, as stored (RQ1) — the unit on screen belongs to <LengthInput>. */
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
   quantity: string;
   stackLayers: string;
 }
 let nextKey = 1;
-const newLine = (): Line => ({ key: nextKey++, productId: null, productLabel: '', productHasSize: false, lengthCm: '', widthCm: '', heightCm: '', quantity: '', stackLayers: '1' });
+const newLine = (): Line => ({ key: nextKey++, productId: null, productLabel: '', productHasSize: false, quantity: '', stackLayers: '1' });
 
 export function SpaceSimulator({ warehouses }: { warehouses: WarehouseSpaceSummary[] }) {
   const { m } = useT();
@@ -36,8 +39,9 @@ export function SpaceSimulator({ warehouses }: { warehouses: WarehouseSpaceSumma
   const [areaM2, setAreaM2] = useState('');
   const [slots, setSlots] = useState('');
   const [whIds, setWhIds] = useState<string[]>([]);
-  const [palletL, setPalletL] = useState('120');
-  const [palletW, setPalletW] = useState('100');
+  // Centimetres, as stored. 120 × 100 cm is the standard pallet.
+  const [palletL, setPalletL] = useState<number | undefined>(120);
+  const [palletW, setPalletW] = useState<number | undefined>(100);
   const [lines, setLines] = useState<Line[]>(() => [newLine()]);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -51,13 +55,13 @@ export function SpaceSimulator({ warehouses }: { warehouses: WarehouseSpaceSumma
     } else if (input.mode === 'SLOTS') {
       const v = Number(slots); if (!(Number.isInteger(v) && v > 0)) return toast.error(s.validation); input.slots = v;
     } else {
-      const pl = optNum(palletL), pw = optNum(palletW);
+      const pl = palletL, pw = palletW;
       if (pl !== undefined) { if (!(pl > 0)) return toast.error(s.validation); input.palletLengthCm = pl; }
       if (pw !== undefined) { if (!(pw > 0)) return toast.error(s.validation); input.palletWidthCm = pw; }
       const valid = lines.filter((l) => Number(l.quantity) > 0);
       if (!valid.length) return toast.error(s.validationLines);
       input.lines = valid.map((l) => {
-        const dim = (v: string) => { const n = optNum(v); return n !== undefined && n > 0 ? n : undefined; };
+        const dim = (n: number | undefined) => (n !== undefined && n > 0 ? n : undefined);
         return {
           productId: l.productId ?? undefined,
           label: l.productLabel || undefined,
@@ -108,9 +112,10 @@ export function SpaceSimulator({ warehouses }: { warehouses: WarehouseSpaceSumma
         ) : (
           <div className="space-y-3">
             <div className="flex flex-wrap items-end gap-3">
-              <Field label={s.palletLength}><Input type="number" min={1} step="any" value={palletL} onChange={(e) => setPalletL(e.target.value)} className="w-28" /></Field>
-              <Field label={s.palletWidth}><Input type="number" min={1} step="any" value={palletW} onChange={(e) => setPalletW(e.target.value)} className="w-28" /></Field>
+              <Field label={s.palletLength}><LengthInput value={palletL} onChange={setPalletL} className="w-28" /></Field>
+              <Field label={s.palletWidth}><LengthInput value={palletW} onChange={setPalletW} className="w-28" /></Field>
               <span className="text-xs text-slate-500 pb-2">{s.pallet}</span>
+              <LengthUnitPicker className="pb-1.5" />
             </div>
             <div>
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">{s.lines}</p>
@@ -172,16 +177,16 @@ function LineRow({ line, onChange, onRemove }: { line: Line; onChange: (p: Parti
           ? <Input placeholder={s.lineCol} value={line.productLabel} onChange={(e) => onChange({ productLabel: e.target.value })} />
           : <ProductPicker line={line} onPick={(p) => onChange({
               productId: p.id, productLabel: `${p.code} · ${p.name}`, productHasSize: p.lengthCm != null && p.widthCm != null,
-              lengthCm: p.lengthCm != null ? String(p.lengthCm) : line.lengthCm, widthCm: p.widthCm != null ? String(p.widthCm) : line.widthCm, heightCm: p.heightCm != null ? String(p.heightCm) : line.heightCm,
+              lengthCm: p.lengthCm ?? line.lengthCm, widthCm: p.widthCm ?? line.widthCm, heightCm: p.heightCm ?? line.heightCm,
             })} />}
         {!manual && line.productId && !line.productHasSize && <p className="mt-1 text-xs text-amber-700">{s.noProductSize}</p>}
       </div>
       <div className="col-span-2 md:col-span-4">
         <label className="text-xs font-medium text-slate-600 block mb-1">{s.boxSize}</label>
         <div className="grid grid-cols-3 gap-1.5">
-          <Input type="number" min={0} step="any" aria-label={m.warehouseMaster.form.length} value={line.lengthCm} onChange={(e) => onChange({ lengthCm: e.target.value })} />
-          <Input type="number" min={0} step="any" aria-label={m.warehouseMaster.form.width} value={line.widthCm} onChange={(e) => onChange({ widthCm: e.target.value })} />
-          <Input type="number" min={0} step="any" aria-label={m.warehouseMaster.form.height} value={line.heightCm} onChange={(e) => onChange({ heightCm: e.target.value })} />
+          <LengthInput aria-label={m.warehouseMaster.form.length} value={line.lengthCm} onChange={(cm) => onChange({ lengthCm: cm })} />
+          <LengthInput aria-label={m.warehouseMaster.form.width} value={line.widthCm} onChange={(cm) => onChange({ widthCm: cm })} />
+          <LengthInput aria-label={m.warehouseMaster.form.height} value={line.heightCm} onChange={(cm) => onChange({ heightCm: cm })} />
         </div>
       </div>
       <Field label={s.quantity} className="md:col-span-2"><Input type="number" min={0} value={line.quantity} onChange={(e) => onChange({ quantity: e.target.value })} /></Field>
@@ -194,7 +199,8 @@ function LineRow({ line, onChange, onRemove }: { line: Line; onChange: (p: Parti
 }
 
 function ProductPicker({ line, onPick }: { line: Line; onPick: (p: any) => void }) {
-  const { m } = useT();
+  const { m, fmt } = useT();
+  const unit = useLengthUnit();
   const [q, setQ] = useState(line.productLabel);
   const [items, setItems] = useState<any[]>([]);
   const [open, setOpen] = useState(false);
@@ -222,7 +228,11 @@ function ProductPicker({ line, onPick }: { line: Line; onPick: (p: any) => void 
             <li key={p.id}>
               <button type="button" className="w-full text-left px-3 py-2 text-sm hover:bg-green-50" onMouseDown={(e) => e.preventDefault()} onClick={() => { onPick(p); setOpen(false); }}>
                 <span className="font-medium text-slate-800">{p.code}</span> <span className="text-slate-600">{p.name}</span>
-                {p.lengthCm != null && p.widthCm != null && <span className="block text-xs text-slate-500">{p.lengthCm} × {p.widthCm} × {p.heightCm ?? '—'} cm</span>}
+                {p.lengthCm != null && p.widthCm != null && (
+                  <span className="block text-xs text-slate-500">
+                    {formatLength(p.lengthCm, unit, { withUnit: false, format: fmt.number })} × {formatLength(p.widthCm, unit, { withUnit: false, format: fmt.number })} × {formatLength(p.heightCm, unit, { format: fmt.number })}
+                  </span>
+                )}
               </button>
             </li>
           ))}

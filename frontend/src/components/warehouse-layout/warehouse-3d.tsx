@@ -20,7 +20,8 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { Box, AlertTriangle, Loader2, Info, Move } from 'lucide-react';
+import { Box, AlertTriangle, Loader2, Info, Move, Eye } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { layoutApi, localizeError } from '@/lib/api';
 import { useAuthStore } from '@/store/auth.store';
@@ -37,7 +38,7 @@ import {
 import { bbox } from './floor-geometry';
 import type { SceneApi, CameraInfo, CameraPreset, ArrangeProps } from './scene-3d';
 import { ArrangeBar, ResetLayoutDialog } from './w3d-arrange';
-import { useLayoutPlan, useStockAge, useSlotDetail, useStockHistory, useRelatedStock, useReservedStock, type ReservedSlot } from './use-w3d-data';
+import { useLayoutPlan, useStockAge, useSlotDetail, useStockHistory, useRelatedStock, useReservedStock, type LayoutPlan, type ReservedSlot } from './use-w3d-data';
 import {
   ALL, NO_FILTERS, PopupContainer, type Filters, type DetailTab,
   FilterBar, LocationDetails, BottomSummary, summarizeSlot,
@@ -137,18 +138,24 @@ function withReserved(wh: WarehouseData | null, bySlot: Map<string, ReservedSlot
 
 // ─── Main ──────────────────────────────────────────────────────────────────────
 
-export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading, onReload, onViewStock }: {
+export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading, onReload, onViewStock, previewPlan, onExitPreview }: {
   warehouses: WarehouseData[];
   wh: WarehouseData | null;
   onSelectWarehouse: (id: string) => void;
   loading: boolean;
   onReload: () => void | Promise<void>;
   onViewStock: (slotId: string) => void;
+  /** RQ13: a plan being drawn in the 2D editor, shown here before it is saved. */
+  previewPlan?: LayoutPlan | null;
+  onExitPreview?: () => void;
 }) {
   const { m, t } = useT();
   const V = m.layout3d.view, W = m.layout3d.w3d;
   const warehouseId = whTree?.id ?? '';
-  const { plan, setPlan } = useLayoutPlan(warehouseId);
+  const { plan: savedPlan, setPlan } = useLayoutPlan(warehouseId);
+  // RQ13: while previewing, the scene is built from the unsaved drawing instead
+  // of the stored one. Nothing here writes — the preview is read-only by nature.
+  const plan = previewPlan ?? savedPlan;
   const objects = plan ? plan.objects : null;
   const age = useStockAge(warehouseId);
   const tower = useTowerData(warehouseId);
@@ -607,6 +614,20 @@ export function Warehouse3D({ warehouses, wh: whTree, onSelectWarehouse, loading
   return (
     <div className="space-y-3">
       {header}
+
+      {/* RQ13: this is the plan being drawn, not the stored one. Say so plainly. */}
+      {previewPlan && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+          <span className="inline-flex items-center gap-1.5 font-medium">
+            <Eye className="h-4 w-4" /> {m.layout3d.floor.lifecycle.previewBanner}
+          </span>
+          {onExitPreview && (
+            <Button variant="outline" size="sm" className="h-7 bg-white text-xs" onClick={onExitPreview}>
+              {m.layout3d.floor.lifecycle.previewExit}
+            </Button>
+          )}
+        </div>
+      )}
 
       {!barInScene && filterBar}
 

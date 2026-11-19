@@ -46,17 +46,47 @@ export class RelocationController {
     );
   }
 
+  @Get('products')
+  @Access(ACCESS.relocationRequest)
+  @ApiOperation({
+    summary:
+      'Part numbers with stock this screen can move, for the searchable list (requirement 32 step 1)',
+  })
+  products(
+    @Query('warehouseId') warehouseId: string,
+    @Query('q') q: string | undefined,
+    @CurrentUser() user: any,
+  ) {
+    return this.relocation.products(warehouseId, q, user);
+  }
+
   @Get('movable')
   @Access(ACCESS.relocationRequest)
   @ApiOperation({
-    summary: 'Stock rows in a slot that a relocation request may move',
+    summary:
+      'Stock rows a relocation request may move — everything in one slot, or everywhere one product is',
   })
   movable(
     @Query('warehouseId') warehouseId: string,
-    @Query('slotId') slotId: string,
+    @Query('slotId') slotId: string | undefined,
+    @Query('productId') productId: string | undefined,
     @CurrentUser() user: any,
   ) {
-    return this.relocation.movable(warehouseId, slotId, user);
+    return this.relocation.movable(warehouseId, { slotId, productId }, user);
+  }
+
+  @Get('destinations')
+  @Access(ACCESS.relocationRequest)
+  @ApiOperation({
+    summary:
+      'Slots that can take a stock row, with the room left and the most that may be moved (requirement 32). Full, blocked and retired slots are left out.',
+  })
+  destinations(
+    @Query('warehouseId') warehouseId: string,
+    @Query('stockItemId') stockItemId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.relocation.destinations(warehouseId, stockItemId, user);
   }
 
   @Get(':id')

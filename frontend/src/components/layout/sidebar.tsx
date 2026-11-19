@@ -7,8 +7,7 @@ import {
   LogOut, Warehouse, ChevronRight, PackagePlus, MapPin, Truck,
   CheckCircle2, RefreshCw, AlertTriangle,
   Tag, Settings, BarChart3, ShieldCheck, Database, Bell, Trash2, ListTodo,
-  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck, ClipboardCheck, ArrowRightLeft,
-} from 'lucide-react';
+  PackageCheck, Undo2, Building2, Handshake, ListChecks, GitBranch, BellRing, ClipboardList as PlanIcon, Boxes, BadgeCheck, ClipboardCheck, ArrowRightLeft, Box } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/auth.store';
 import { Button } from '@/components/ui/button';
@@ -61,6 +60,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/settings', label: 'systemSettings', icon: Settings, roles: ['SYSTEM_ADMIN'] },
       { href: '/company-profile', label: 'companyProfile', icon: BadgeCheck, roles: ['SYSTEM_ADMIN'] },
       { href: '/system-master', label: 'listsCodes', icon: ListChecks, roles: ['SYSTEM_ADMIN', 'WAREHOUSE_MANAGER'] },
+      // The published Thai Post list: everyone filling in an address needs it.
+      { href: '/postal-codes', label: 'postalCodes', icon: MapPin },
       { href: '/approval-rules', label: 'approvalRules', icon: GitBranch, roles: ['SYSTEM_ADMIN'] },
       { href: '/notification-templates', label: 'notificationTemplates', icon: BellRing, roles: ['SYSTEM_ADMIN'] },
     ],
@@ -71,6 +72,8 @@ const NAV_GROUPS: NavGroup[] = [
       { href: '/warehouse-layout', label: 'warehouseOperations', icon: Warehouse, roles: WH },
       { href: '/receiving', label: 'goodsReceiving', icon: PackagePlus, roles: WH },
       { href: '/putaway', label: 'putaway', icon: MapPin, roles: WH },
+      // RQ17 / RQ18: boxes are floor work, same roles as putaway.
+      { href: '/containers', label: 'containers', icon: Box, roles: WH },
       { href: '/inventory', label: 'inventory', icon: Package },
       // PR7: same legacy roles as the backend rule relocationRead (operators); the API enforces the real permission.
       { href: '/relocation', label: 'relocation', icon: ArrowRightLeft, roles: WH },

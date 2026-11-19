@@ -1,6 +1,21 @@
 import type { Messages } from '../en';
 
 export const putaway: Messages['putaway'] = {
+  suggest: {
+    title: 'ตำแหน่งที่แนะนำ',
+    loading: 'กำลังหาที่ว่าง…',
+    none: 'ไม่มีช่องไหนในคลังนี้ที่ว่างพอ เคลียร์ช่องก่อน หรือเลือกตำแหน่งเองด้านล่าง',
+    needs: 'งานนี้คือ {qty} × {l}×{w}×{h} ซม. — รวมประมาณ {volume} ลบ.ม.',
+    noProductSize: 'สินค้านี้ยังไม่มีขนาด รายการข้างล่างจึงเรียงตามที่ว่างเท่านั้น',
+    free: 'ว่าง {free} จาก {capacity}',
+    sameProduct: 'มีสินค้านี้อยู่แล้ว',
+    fits: 'กล่องใส่ได้',
+    sizeUnknown: 'ไม่รู้ขนาดช่อง',
+    holdsUnits: 'ใส่ได้ราว {n}',
+    use: 'ใช้ช่องนี้',
+    skipped: 'ไม่ได้แสดง: เต็ม {full}, ปิดใช้ {blocked}, เล็กเกินไป {tooSmall}',
+    manual: 'หรือเลือกตำแหน่งเอง',
+  },
   title: 'จัดการการจัดเก็บสินค้า',
   subtitle: 'กำหนดตำแหน่งและยืนยันการจัดเก็บ',
   table: {

@@ -35,6 +35,22 @@ export const errors = {
     'Internal server error': 'Server error. Please try again later.',
     'Too Many Requests': 'Too many requests. Please wait a moment and try again.',
     'ThrottlerException: Too Many Requests': 'Too many attempts. Please wait a minute and try again.',
+    // MDM-003 product families
+    'A family cannot sit inside itself': 'A family cannot sit inside itself.',
+    'That would put the family inside one of its own sub-groups': 'That would put the family inside one of its own sub-groups.',
+    'Family name is required': 'A family name is required.',
+    'Parent family not found': 'That parent family no longer exists.',
+    'Products still belong to this family': 'Move the products out of this family first.',
+    'Sub-groups still sit inside this family': 'Move the sub-groups out of this family first.',
+    'Product family not found': 'That product family no longer exists.',
+    // Requirement 32 — relocation destination room
+    'That destination is blocked': 'That destination is blocked.',
+    'That destination is no longer in use': 'That destination is no longer in use.',
+    'That destination has no room left for more pieces': 'That destination has no room left for more pieces.',
+    'That destination cannot take this quantity': 'That destination cannot take this quantity. Pick another one or send less.',
+    'Stock row not found': 'That stock row no longer exists.',
+    'That stock row is not in this warehouse': 'That stock row is not in this warehouse.',
+    'Destination slot not found': 'That destination no longer exists.',
     // PR6 pick locations
     'Pick locations can only be chosen when stock is reserved at approval': 'Locations can be chosen only when stock is reserved at approval.',
     'Pick locations can only be chosen at the final approval step': 'Locations can be chosen only at the final approval step.',

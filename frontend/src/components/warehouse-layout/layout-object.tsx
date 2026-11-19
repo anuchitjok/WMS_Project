@@ -16,6 +16,9 @@ const STYLES: Record<LayoutObjectType, Style> = {
   // Structure — neutral, dashed: these are containers, not surfaces
   ZONE:           { fill: 'transparent',      stroke: '#94a3b8', text: '#475569', dashed: true },
   AISLE:          { fill: '#f8fafc',          stroke: '#e2e8f0', text: '#94a3b8', dashed: true },
+  // RQ8 — a door is an opening in a wall, not a region: solid dark outline on
+  // white, like a wall break on an architect's plan, plus the swing arc below.
+  DOOR:           { fill: '#ffffff',          stroke: '#475569', text: '#334155' },
   CUSTOM_AREA:    { fill: '#f8fafc',          stroke: '#cbd5e1', text: '#64748b', dashed: true },
   // Storage — neutral slate
   STORAGE_AREA:   { fill: '#f1f5f9',          stroke: '#cbd5e1', text: '#475569' },
@@ -34,6 +37,45 @@ export const OBJECT_STYLES = STYLES;
 
 // Objects taking up less than this many pixels on screen don't get a label.
 const LABEL_MIN_PX = 34;
+
+/**
+ * RQ8 — the architect's door symbol: the leaf standing open, and the dashed arc
+ * it sweeps. Drawn so a door reads as a door and not as one more coloured box.
+ *
+ * The hinge sits on the first corner of the LONG side (the opening's width) and
+ * the leaf swings out perpendicular to it, which is why the arc reaches past the
+ * object's own rectangle. Purely decorative: `pointerEvents` is off, so it never
+ * widens the hit area or interferes with dragging the door itself.
+ *
+ * Geometry is in grid units and the group above already applies `rotation`, so
+ * turning a door turns its swing with it.
+ */
+function DoorSwing({ obj, stroke }: { obj: LayoutObject; stroke: string }) {
+  const horizontal = obj.width >= obj.height;
+  const r = horizontal ? obj.width : obj.height;
+  if (!(r > 0)) return null;
+  // Hinge, leaf tip (open), and where the leaf would meet the wall (closed).
+  // SVG y points down, so the sweep flag differs between the two orientations.
+  const hinge: [number, number] = horizontal
+    ? [obj.x, obj.y + obj.height]
+    : [obj.x + obj.width, obj.y];
+  const tip: [number, number] = horizontal
+    ? [hinge[0], hinge[1] + r]
+    : [hinge[0] + r, hinge[1]];
+  const closed: [number, number] = horizontal
+    ? [hinge[0] + r, hinge[1]]
+    : [hinge[0], hinge[1] + r];
+  const sweep = horizontal ? 0 : 1;
+  return (
+    <g pointerEvents="none" opacity={0.85}>
+      <line x1={hinge[0]} y1={hinge[1]} x2={tip[0]} y2={tip[1]}
+        stroke={stroke} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      <path d={`M ${tip[0]} ${tip[1]} A ${r} ${r} 0 0 ${sweep} ${closed[0]} ${closed[1]}`}
+        fill="none" stroke={stroke} strokeWidth={1} strokeDasharray="3 2"
+        vectorEffect="non-scaling-stroke" />
+    </g>
+  );
+}
 
 export function LayoutObjectShape({ obj, selected, pxPerUnit, onSelect, onPointerDown, occupancy }: {
   obj: LayoutObject;
@@ -91,6 +133,9 @@ export function LayoutObjectShape({ obj, selected, pxPerUnit, onSelect, onPointe
         strokeDasharray={style.dashed ? '4 3' : undefined}
         vectorEffect="non-scaling-stroke"
       />
+      {obj.objectType === 'DOOR' && (
+        <DoorSwing obj={obj} stroke={blocked ? '#ef4444' : style.stroke} />
+      )}
       {/* Orphan marker: the linked slot was deleted out from under the drawing. */}
       {occupancy?.orphaned && (
         <>

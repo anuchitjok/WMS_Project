@@ -88,6 +88,7 @@ export const documents = {
     found: 'Found: {name}',
     notFound: 'No item found for: {code}',
     openingRequest: 'Opening request {ref}',
+    openingBox: 'Opening box {code}',
     resultTitle: 'Stock Item Found',
     product: 'Product',
     status: 'Status',

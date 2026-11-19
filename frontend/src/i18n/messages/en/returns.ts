@@ -24,6 +24,11 @@ export const returns = {
     title: 'My Issued Items',
     subtitle: 'Confirm usage of issued goods — Used, DOA, or Unused return. Use “Per unit” when only part was used.',
     empty: 'No issued items awaiting usage confirmation',
+    // RQ23: an empty list has two meanings — say which one it is.
+    emptyOwn: 'You have no issued items awaiting usage confirmation',
+    emptyAll: 'There are no issued items awaiting usage confirmation in the system',
+    emptyOwnNote: 'This page shows only the requests you raised yourself.',
+    emptyOwnOthers: 'Other requesters do have items awaiting confirmation — only they, or someone allowed to confirm on their behalf, can confirm those.',
     unitsRecorded: '{count} unit(s) recorded',
     usageConfirmed: 'Usage confirmed',
     used: 'Used',

@@ -20,8 +20,10 @@ import { returns } from './returns';
 import { fulfillment } from './fulfillment';
 import { requests } from './requests';
 import { putaway } from './putaway';
+import { containers } from './containers';
 import { receiving } from './receiving';
 import { warehouseMaster } from './warehouseMaster';
+import { postalCodes } from './postalCodes';
 import { space } from './space';
 import { products } from './products';
 import { partners } from './partners';
@@ -39,6 +41,7 @@ export const th: Messages = {
   errors,
   receiving,
   putaway,
+  containers,
   requests,
   fulfillment,
   returns,
@@ -53,6 +56,7 @@ export const th: Messages = {
   dataio,
   inbox,
   warehouseMaster,
+  postalCodes,
   space,
   products,
   partners,

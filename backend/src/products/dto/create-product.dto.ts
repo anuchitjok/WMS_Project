@@ -48,6 +48,11 @@ export class CreateProductDto {
   @IsOptional()
   brandId?: string;
 
+  @ApiPropertyOptional({ description: 'MDM-004 — the product family this SKU belongs to' })
+  @IsString()
+  @IsOptional()
+  productFamilyId?: string;
+
   @ApiPropertyOptional()
   @IsString()
   @IsOptional()
@@ -155,6 +160,11 @@ export class UpdateProductDto {
   @IsString()
   @IsOptional()
   brandId?: string;
+
+  @ApiPropertyOptional({ description: 'MDM-004 — the product family this SKU belongs to' })
+  @IsString()
+  @IsOptional()
+  productFamilyId?: string;
 
   @ApiPropertyOptional()
   @IsString()

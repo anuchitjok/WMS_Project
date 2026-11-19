@@ -271,8 +271,44 @@ export class SaveRackPositionsDto {
   racks: RackPositionDto[];
 }
 
+// ─── RQ27: place a batch of unplaced racks on the plan ──────────────────────
+// Drawings only. The server picks the positions, using each rack's real size
+// from its Rack Type; the client supplies nothing but the clearance it wants.
+export class PlaceRacksDto {
+  @ApiPropertyOptional({ description: 'Layout version the client last read (omit when there is no layout yet); 409 if stale' })
+  @IsOptional() @IsInt() @Min(0)
+  version?: number;
+
+  @ApiPropertyOptional({ description: 'Limit to these racks; omit to place every unplaced rack of the warehouse' })
+  @IsOptional() @IsArray() @ArrayMaxSize(5000) @IsString({ each: true })
+  rackIds?: string[];
+
+  @ApiPropertyOptional({ default: 0.5, description: 'Free space to leave between racks, in plan units' })
+  @IsOptional() @IsNumber() @Min(0) @Max(100)
+  gap?: number;
+
+  @ApiPropertyOptional({ description: 'Metres per plan unit; only recorded when the layout has none yet (default 1)' })
+  @IsOptional() @IsNumber() @Min(0.001) @Max(1000)
+  metersPerUnit?: number;
+
+  @ApiPropertyOptional({ default: false, description: 'Work out the positions and return them without saving anything' })
+  @IsOptional() @IsBoolean()
+  dryRun?: boolean;
+}
+
 export class ResetRackPositionsDto {
   @ApiProperty({ description: 'Layout version the client last read; 409 if stale' })
   @IsInt() @Min(0)
   version: number;
+}
+
+/** RQ13 — approve a plan, or send it back with a reason. */
+export class LayoutDecisionDto {
+  @ApiProperty({ description: 'true approves the plan, false sends it back to the people drawing it' })
+  @IsBoolean()
+  approved: boolean;
+
+  @ApiPropertyOptional({ description: 'Why. Shown on the plan after it is sent back.' })
+  @IsOptional() @IsString() @MaxLength(500)
+  notes?: string;
 }

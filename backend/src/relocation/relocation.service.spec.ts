@@ -42,6 +42,8 @@ type Line = {
 
 const WH = 'wh1',
   OTHER_WH = 'wh2';
+// `capacity` counts PLACES (stock rows); `maxQuantity` counts PIECES, and null
+// means nobody set a ceiling (requirement 32 / migration 41).
 const SLOTS = [
   {
     id: 's1',
@@ -49,6 +51,7 @@ const SLOTS = [
     rackId: 'r1',
     status: SlotStatus.OCCUPIED,
     capacity: 5,
+    maxQuantity: null as number | null,
   },
   {
     id: 's2',
@@ -56,6 +59,7 @@ const SLOTS = [
     rackId: 'r1',
     status: SlotStatus.EMPTY,
     capacity: 1,
+    maxQuantity: null as number | null,
   },
   {
     id: 's3',
@@ -63,6 +67,7 @@ const SLOTS = [
     rackId: 'r2',
     status: SlotStatus.BLOCKED,
     capacity: 5,
+    maxQuantity: null as number | null,
   },
   {
     id: 'x1',
@@ -70,6 +75,25 @@ const SLOTS = [
     rackId: 'rx',
     status: SlotStatus.EMPTY,
     capacity: 5,
+    maxQuantity: null as number | null,
+  },
+  // Room for many pallets, but only 12 pieces in all.
+  {
+    id: 's4',
+    code: 'A-03',
+    rackId: 'r1',
+    status: SlotStatus.EMPTY,
+    capacity: 5,
+    maxQuantity: 12 as number | null,
+  },
+  // No places limit at all (nobody entered one) and no piece ceiling.
+  {
+    id: 's5',
+    code: 'A-04',
+    rackId: 'r1',
+    status: SlotStatus.EMPTY,
+    capacity: 0,
+    maxQuantity: null as number | null,
   },
 ];
 const RACKS = [
@@ -93,6 +117,13 @@ const staff2: Principal = {
 
 function makeDb() {
   let seq = 0;
+  // Copies: a test may change a slot's ceiling without leaking into the next one.
+  const slots = SLOTS.map((x) => ({
+    ...x,
+    isActive: true,
+    isDeleted: false,
+    rack: { code: x.rackId.toUpperCase() },
+  }));
   const rows: Row[] = [
     {
       id: 'st-avail',
@@ -166,8 +197,47 @@ function makeDb() {
     ...r,
     lines: lines
       .filter((l) => l.requestId === r.id)
-      .map((l) => ({ ...l, toSlot: SLOTS.find((s) => s.id === l.toSlotId) })),
+      .map((l) => ({ ...l, toSlot: slots.find((s) => s.id === l.toSlotId) })),
   });
+
+  // Rows are read by id, by slot and by product now, and the reads ask for the
+  // product and the slot alongside. Both are filled in here from the fixtures.
+  const PRODUCTS: Record<string, { id: string; code: string; name: string; unit: string }> = {
+    p1: { id: 'p1', code: 'PN-001', name: 'Widget', unit: 'pcs' },
+    p2: { id: 'p2', code: 'PN-002', name: 'Serial widget', unit: 'pcs' },
+    p3: { id: 'p3', code: 'PN-003', name: 'Quarantined widget', unit: 'pcs' },
+    p9: { id: 'p9', code: 'PN-009', name: 'Filler', unit: 'pcs' },
+  };
+  const dress = (r: Row) => ({
+    ...r,
+    product: PRODUCTS[r.productId] ?? {
+      id: r.productId, code: r.productId, name: r.productId, unit: 'pcs',
+    },
+    slot: r.slotId
+      ? (() => {
+          const sl = slots.find((x) => x.id === r.slotId);
+          return sl ? { id: sl.id, code: sl.code, rack: { id: sl.rackId, code: sl.rack.code } } : null;
+        })()
+      : null,
+  });
+  const matches = (where: any, r: Row) =>
+    (where?.id === undefined || inIds(where.id, r.id)) &&
+    (where?.warehouseId === undefined || where.warehouseId === r.warehouseId) &&
+    (where?.productId === undefined || where.productId === r.productId) &&
+    // the part-number search: code or name, ignoring case
+    (where?.product?.OR === undefined ||
+      where.product.OR.some((o: any) => {
+        const text = (o.code ?? o.name).contains.toLowerCase();
+        const pr = PRODUCTS[r.productId];
+        return (o.code ? pr?.code : pr?.name)?.toLowerCase().includes(text);
+      })) &&
+    (where?.slotId === undefined ||
+      (typeof where.slotId === 'string'
+        ? where.slotId === r.slotId
+        : where.slotId?.not === null
+          ? r.slotId !== null
+          : true)) &&
+    statusOk(where?.status, r.status);
 
   const db: any = {
     rows,
@@ -178,7 +248,7 @@ function makeDb() {
     stockItem: {
       // Copies, like Prisma: callers must not see later writes through a read result.
       findMany: jest.fn(async ({ where }: any) =>
-        rows.filter((r) => inIds(where?.id, r.id)).map((r) => ({ ...r })),
+        rows.filter((r) => matches(where, r)).map((r) => dress(r)),
       ),
       findUnique: jest.fn(async ({ where }: any) => {
         const r = rows.find((x) => x.id === where.id);
@@ -201,15 +271,23 @@ function makeDb() {
         return r;
       }),
       groupBy: jest.fn(async ({ where }: any) => {
-        const out = new Map<string, number>();
+        const out = new Map<string, { n: number; qty: number }>();
         for (const r of rows)
           if (
             r.slotId &&
             where.slotId.in.includes(r.slotId) &&
             statusOk(where.status, r.status)
-          )
-            out.set(r.slotId, (out.get(r.slotId) ?? 0) + 1);
-        return [...out].map(([slotId, n]) => ({ slotId, _count: { _all: n } }));
+          ) {
+            const at = out.get(r.slotId) ?? { n: 0, qty: 0 };
+            at.n += 1;
+            at.qty += r.quantity;
+            out.set(r.slotId, at);
+          }
+        return [...out].map(([slotId, at]) => ({
+          slotId,
+          _count: { _all: at.n },
+          _sum: { quantity: at.qty },
+        }));
       }),
     },
     relocationRequest: {
@@ -256,24 +334,61 @@ function makeDb() {
             }
           : null;
       }),
-      findMany: jest.fn(async ({ where }: any) =>
-        lines
+      findMany: jest.fn(async ({ where }: any) => {
+        // movable() asks which of these rows an open request is already holding.
+        if (where?.stockItemId) {
+          const open = where.request?.status?.in ?? [];
+          return lines
+            .filter(
+              (l) =>
+                where.stockItemId.in.includes(l.stockItemId) &&
+                open.includes(reqs.find((r) => r.id === l.requestId)!.status),
+            )
+            .map((l) => ({
+              stockItemId: l.stockItemId,
+              request: {
+                refNumber: reqs.find((r) => r.id === l.requestId)!.refNumber,
+              },
+            }));
+        }
+        // loadSlotSpace asks what open requests have promised to a set of slots.
+        if (where?.toSlotId) {
+          const open = where.request?.status?.in ?? [];
+          const notId = where.request?.id?.not;
+          return lines.filter((l) => {
+            const req = reqs.find((r) => r.id === l.requestId)!;
+            return (
+              where.toSlotId.in.includes(l.toSlotId) &&
+              open.includes(req.status) &&
+              (!notId || req.id !== notId)
+            );
+          });
+        }
+        return lines
           .filter((l) => l.requestId === where.requestId)
-          .sort((a, b) => a.stockItemId.localeCompare(b.stockItemId)),
-      ),
+          .sort((a, b) => a.stockItemId.localeCompare(b.stockItemId));
+      }),
       update: jest.fn(async ({ where, data }: any) =>
         Object.assign(lines.find((l) => l.id === where.id)!, data),
       ),
     },
     slot: {
       findFirst: jest.fn(
-        async ({ where }: any) => SLOTS.find((s) => s.id === where.id) ?? null,
+        async ({ where }: any) => slots.find((s) => s.id === where.id) ?? null,
       ),
       findUnique: jest.fn(
-        async ({ where }: any) => SLOTS.find((s) => s.id === where.id) ?? null,
+        async ({ where }: any) => slots.find((s) => s.id === where.id) ?? null,
       ),
+      // Either a list of ids, or "every live slot of this warehouse".
       findMany: jest.fn(async ({ where }: any) =>
-        SLOTS.filter((s) => where.id.in.includes(s.id)),
+        where?.id
+          ? slots.filter((s) => where.id.in.includes(s.id))
+          : slots.filter(
+              (s) =>
+                !s.isDeleted &&
+                RACKS.find((r) => r.id === s.rackId)?.warehouseId ===
+                  where.rack.warehouseId,
+            ),
       ),
     },
     rack: {
@@ -317,6 +432,7 @@ function makeDb() {
       throw e;
     }
   });
+  db.slotRows = slots;
   return db;
 }
 
@@ -413,17 +529,24 @@ describe('RelocationService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('warns (does not block) when the destination goes over capacity', async () => {
+    // -- Requirement 32: the destination must have room -----------------------
+    const fill = (slotId, quantity = 1, id = 'st-filler') =>
       db.rows.push({
-        id: 'st-in-s2',
+        id,
         productId: 'p9',
         warehouseId: WH,
         rackId: 'r1',
-        slotId: 's2',
+        slotId,
         status: StockStatus.AVAILABLE,
-        quantity: 1,
+        quantity,
         serialNumber: null,
       });
+
+    // The places figure (Slot.capacity) warns; it never refuses. It is NOT NULL
+    // with a default of 1, so a 1 in it says nothing about the real shelf, and
+    // putaway has been filling those slots past it for as long as it has run.
+    it('allows a destination whose last place is taken, and warns instead', async () => {
+      fill('s2'); // s2 says it holds one place, and now holds it
       const r = await create([
         { stockItemId: 'st-avail', toSlotId: 's2', quantity: 1 },
       ]);
@@ -436,6 +559,312 @@ describe('RelocationService', () => {
           capacity: 1,
         },
       ]);
+    });
+
+    it('counts a place promised to another open request, and still only warns', async () => {
+      await create([{ stockItemId: 'st-avail', toSlotId: 's2', quantity: 1 }]);
+      const second = await create([
+        { stockItemId: 'st-quar', toSlotId: 's2', quantity: 1 },
+      ]);
+      // The other request's line is counted, so this one is over capacity too.
+      expect(second.warnings).toEqual([
+        expect.objectContaining({ kind: 'OVER_CAPACITY', slotId: 's2' }),
+      ]);
+    });
+
+    it('refuses more pieces than the destination may hold, and allows exactly that many', async () => {
+      fill('s4', 5); // 5 of the 12 pieces s4 may hold are there already
+      await expect(
+        create([{ stockItemId: 'st-avail', toSlotId: 's4', quantity: 8 }]),
+      ).rejects.toThrow(/cannot take this quantity/);
+      await expect(
+        create([{ stockItemId: 'st-avail', toSlotId: 's4', quantity: 7 }]),
+      ).resolves.toBeTruthy();
+    });
+
+    it('refuses a destination already at its piece ceiling', async () => {
+      fill('s4', 12);
+      await expect(
+        create([{ stockItemId: 'st-avail', toSlotId: 's4', quantity: 1 }]),
+      ).rejects.toThrow(/no room left for more pieces/);
+    });
+
+    it('two lines of one request into one place are allowed, and warned about once', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's2', quantity: 1 },
+        { stockItemId: 'st-quar', toSlotId: 's2', quantity: 1 },
+      ]);
+      expect(r.warnings).toEqual([
+        {
+          kind: 'OVER_CAPACITY',
+          slotId: 's2',
+          slotCode: 'A-02',
+          rows: 2, // nothing there yet, two lines heading in, one place
+          capacity: 1,
+        },
+      ]);
+    });
+
+    it('two lines of one request share the piece ceiling', async () => {
+      await expect(
+        create([
+          { stockItemId: 'st-avail', toSlotId: 's4', quantity: 10 },
+          { stockItemId: 'st-quar', toSlotId: 's4', quantity: 2 },
+        ]),
+      ).resolves.toBeTruthy();
+      db.reqs.length = 0;
+      db.lines.length = 0;
+      fill('s4', 1); // one piece there, so the same two lines no longer fit
+      await expect(
+        create([
+          { stockItemId: 'st-avail', toSlotId: 's4', quantity: 10 },
+          { stockItemId: 'st-quar', toSlotId: 's4', quantity: 2 },
+        ]),
+      ).rejects.toThrow(/cannot take this quantity/);
+    });
+
+    it('a slot with no figures entered takes anything', async () => {
+      await expect(
+        create([{ stockItemId: 'st-avail', toSlotId: 's5', quantity: 10 }]),
+      ).resolves.toBeTruthy();
+    });
+
+    it('warns, and still allows the move, when the room goes after the request was raised', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's2', quantity: 1 },
+      ]);
+      expect(r.warnings).toEqual([]); // there was room when it was raised
+      fill('s2'); // ...and then someone else put a pallet there
+      const again = await svc.findOne(r.id, maker);
+      expect(again.warnings).toEqual([
+        {
+          kind: 'OVER_CAPACITY',
+          slotId: 's2',
+          slotCode: 'A-02',
+          rows: 2,
+          capacity: 1,
+        },
+      ]);
+      // A warning, not a refusal: the goods may already be on the floor there.
+      await svc.approve(r.id, checker);
+      await expect(svc.complete(r.id, maker)).resolves.toBeTruthy();
+      expect(row('st-avail').slotId).toBe('s2');
+    });
+
+    it('warns when a piece ceiling is tightened under an open request', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's4', quantity: 10 },
+      ]);
+      expect(r.warnings).toEqual([]);
+      db.slotRows.find((x) => x.id === 's4').maxQuantity = 4;
+      const again = await svc.findOne(r.id, maker);
+      expect(again.warnings).toEqual([
+        {
+          kind: 'OVER_QUANTITY',
+          slotId: 's4',
+          slotCode: 'A-03',
+          pieces: 10,
+          maxQuantity: 4,
+        },
+      ]);
+    });
+
+    it('the review shows the room before and after the move', async () => {
+      fill('s4', 2);
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's4', quantity: 6 },
+      ]);
+      expect(r.destinations).toEqual([
+        expect.objectContaining({
+          slotId: 's4',
+          slotCode: 'A-03',
+          capacity: 5,
+          maxQuantity: 12,
+          placesUsed: 1,
+          piecesOnHand: 2,
+          placesFree: 4, // 5 places - 1 taken
+          piecesFree: 10, // 12 pieces - 2 there
+          incomingPlaces: 1,
+          incomingPieces: 6,
+          placesLeft: 3,
+          piecesLeft: 4,
+        }),
+      ]);
+    });
+
+    it('a slot with no figures reviews as unlimited', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's5', quantity: 10 },
+      ]);
+      expect(r.destinations[0]).toMatchObject({
+        placesFree: null,
+        piecesFree: null,
+        placesLeft: null,
+        piecesLeft: null,
+      });
+      expect(r.warnings).toEqual([]);
+    });
+  });
+
+  // -- Requirement 32 steps 1 and 2: start from the part number --------------
+  describe('products and movable', () => {
+    it('lists the part numbers with movable stock, with the quantity and how many places hold it', async () => {
+      const out = await svc.products(WH, undefined, maker);
+      const p1 = out.find((x) => x.id === 'p1')!;
+      // st-avail (10 in s1) counts; st-res is RESERVED and st-dock is in no slot.
+      expect(p1).toMatchObject({ code: 'PN-001', quantity: 10, rows: 1, slots: 1 });
+      expect(out.map((x) => x.code).sort()).toEqual(['PN-001', 'PN-002', 'PN-003']);
+    });
+
+    it('adds up one part number across the places it is standing in', async () => {
+      db.rows.push({
+        id: 'st-elsewhere',
+        productId: 'p1',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 6,
+        serialNumber: null,
+      });
+      const p1 = (await svc.products(WH, undefined, maker)).find((x) => x.id === 'p1')!;
+      expect(p1).toMatchObject({ quantity: 16, rows: 2, slots: 2 });
+    });
+
+    it('searches on the code and on the name, ignoring case', async () => {
+      expect((await svc.products(WH, 'pn-002', maker)).map((x) => x.code)).toEqual(['PN-002']);
+      expect((await svc.products(WH, 'serial', maker)).map((x) => x.code)).toEqual(['PN-002']);
+      expect(await svc.products(WH, 'nothing-like-this', maker)).toEqual([]);
+    });
+
+    it('a part number gives back every row of it, each saying where it stands', async () => {
+      db.rows.push({
+        id: 'st-elsewhere',
+        productId: 'p1',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 6,
+        serialNumber: null,
+      });
+      const out = await svc.movable(WH, { productId: 'p1' }, maker);
+      expect(out.map((r) => [r.id, r.slot?.code])).toEqual([
+        ['st-avail', 'A-01'],
+        ['st-elsewhere', 'A-03'],
+      ]);
+      // Not the reserved row, and not the one standing in no slot at all.
+      expect(out.map((r) => r.id)).not.toContain('st-res');
+      expect(out.map((r) => r.id)).not.toContain('st-dock');
+    });
+
+    it('a slot still gives back everything standing in it', async () => {
+      const out = await svc.movable(WH, { slotId: 's1' }, maker);
+      expect(out.map((r) => r.id).sort()).toEqual(['st-avail', 'st-quar', 'st-serial']);
+    });
+
+    it('says so when neither a slot nor a part number is given', async () => {
+      await expect(svc.movable(WH, {}, maker)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('a row already in an open request is listed, marked with the request holding it', async () => {
+      const r = await create([
+        { stockItemId: 'st-avail', toSlotId: 's5', quantity: 1 },
+      ]);
+      const out = await svc.movable(WH, { productId: 'p1' }, maker);
+      expect(out.find((x) => x.id === 'st-avail')!.openRelocation).toBe(r.refNumber);
+    });
+  });
+
+  // -- Requirement 32 step 3: what the form is allowed to offer --------------
+  describe('destinations', () => {
+    const list = (stockItemId = 'st-avail') =>
+      svc.destinations(WH, stockItemId, maker);
+
+    it('leaves out the source slot, blocked slots and other warehouses', async () => {
+      const d = await list();
+      expect(d.slots.map((x) => x.slotId).sort()).toEqual(['s2', 's4', 's5']);
+      expect(d.hidden).toBe(1); // the blocked B-01
+    });
+
+    it('keeps a slot at its place limit, flags it, and offers it last', async () => {
+      db.rows.push({
+        id: 'st-in-s2',
+        productId: 'p9',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's2',
+        status: StockStatus.AVAILABLE,
+        quantity: 1,
+        serialNumber: null,
+      });
+      const d = await list();
+      expect(d.slots.find((x) => x.slotId === 's2')).toMatchObject({
+        atPlaceLimit: true,
+        placesFree: 0,
+      });
+      expect(d.slots[d.slots.length - 1].slotId).toBe('s2');
+      expect(d.hidden).toBe(1); // only the blocked slot is left out
+    });
+
+    it('leaves out a slot that can take no more pieces', async () => {
+      db.rows.push({
+        id: 'st-in-s4',
+        productId: 'p9',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 12, // s4 may hold 12 pieces in all
+        serialNumber: null,
+      });
+      const d = await list();
+      expect(d.slots.map((x) => x.slotId)).not.toContain('s4');
+      expect(d.hidden).toBe(2);
+    });
+
+    it('says how much may go into each slot, capped by the piece ceiling', async () => {
+      const d = await list(); // st-avail holds 10
+      expect(d.slots.find((x) => x.slotId === 's4')!.maxMovable).toBe(10);
+      expect(d.slots.find((x) => x.slotId === 's5')!.maxMovable).toBe(10);
+      db.rows.push({
+        id: 'st-in-s4',
+        productId: 'p9',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 9,
+        serialNumber: null,
+      });
+      const d2 = await list();
+      expect(d2.slots.find((x) => x.slotId === 's4')!.maxMovable).toBe(3);
+    });
+
+    it('takes what open requests have promised off the room', async () => {
+      db.rows.push({
+        id: 'st-in-s4',
+        productId: 'p9',
+        warehouseId: WH,
+        rackId: 'r1',
+        slotId: 's4',
+        status: StockStatus.AVAILABLE,
+        quantity: 5,
+        serialNumber: null,
+      });
+      // 12 pieces fit, 5 are there, another request has promised 2 more.
+      await create([{ stockItemId: 'st-quar', toSlotId: 's4', quantity: 2 }]);
+      const d = await list();
+      expect(d.slots.find((x) => x.slotId === 's4')!.maxMovable).toBe(5);
+    });
+
+    it('refuses a row from another warehouse or one that is gone', async () => {
+      await expect(
+        svc.destinations(OTHER_WH, 'st-avail', maker),
+      ).rejects.toThrow();
+      await expect(list('nope')).rejects.toThrow(/not found/);
     });
   });
 

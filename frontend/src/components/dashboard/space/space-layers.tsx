@@ -5,7 +5,9 @@
 //   Layer 2 "Rack Storage Space": rack area split by slot status share (an estimate).
 // Plus a warehouse summary table that drills down into one row per rack.
 // The two layers are never mixed, numbers are never clamped, and anything that
-// cannot be known shows "Data Unavailable" instead of a guessed value.
+// cannot be known is never guessed: where the reason is known (no rack size, no
+// slots) the row says so and what to do about it, and "Data Unavailable" is left
+// as the fallback for a value that is missing for no reason we can name.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ArrowLeft, ChevronRight, Info, LandPlot, Layers, SquareDashed, Gauge, Grid3x3, Archive, PackageCheck, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -276,13 +278,14 @@ function RackDetails({ warehouse, onBack }: { warehouse: WarehouseSpaceSummary; 
                 <th className={thR}>{R.rackSize}</th>
                 <th className={thR}>{R.occupied}</th>
                 <th className={thR}>{R.reserved}</th>
-                <th className={thR}>{R.available}</th>
+                <th className={thR} title={R.availableHint}>{R.available}</th>
                 <th className={thR}>{R.blockedOther}</th>
                 <th className={cn(thR, 'border-r border-slate-200')}>{R.util}</th>
                 <th className={thR}>{R.totalSlots}</th>
                 <th className={thR}>{R.occupiedSlots}</th>
                 <th className={thR}>{R.reservedSlots}</th>
-                <th className={thR}>{R.availableSlots}</th>
+                {/* Same measure as the "Empty Slots" card above, for one rack — so it carries the same name. */}
+                <th className={thR} title={R.emptySlotsHint}>{R.emptySlots}</th>
                 <th className={thR}>{R.blockedSlots}</th>
               </tr>
             </thead>
@@ -290,20 +293,38 @@ function RackDetails({ warehouse, onBack }: { warehouse: WarehouseSpaceSummary; 
               {racks.map((r) => {
                 const a = r.areaM2;
                 const na = <span className="text-slate-400">{L.unavailable}</span>;
-                const reason = !r.hasSize ? R.noSize : !r.counted ? R.noSlots : null;
+                // A rack is left out of the area split for one of two fixable reasons. Say which one
+                // and what to do, once per row, instead of "Data Unavailable" in five cells.
+                const gap = !r.hasSize
+                  ? { chip: R.noSize, cell: R.noSizeCell, hint: R.noSizeHint }
+                  : !r.counted
+                    ? { chip: R.noSlots, cell: R.noSlotsCell, hint: R.noSlotsHint }
+                    : null;
                 return (
                   <tr key={r.rackId} className={cn(!r.isActive && 'text-slate-400')}>
                     <td className={td}>
                       <span className="font-medium text-slate-900">{r.rackCode}</span>
                       {r.zone && <span className="ml-1.5 text-xs text-slate-400">{r.zone}</span>}
-                      {reason && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">{reason}</span>}
+                      {gap && <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500" title={gap.hint}>{gap.chip}</span>}
                     </td>
-                    <td className={tdR}>{r.rackSizeM2 == null ? na : area(r.rackSizeM2)}</td>
-                    <td className={tdR}>{a ? area(a.occupied) : na}</td>
-                    <td className={tdR}>{a ? area(a.reserved) : na}</td>
-                    <td className={tdR}>{a ? area(a.available) : na}</td>
-                    <td className={tdR}>{a ? area(a.blockedOther) : na}</td>
-                    <td className={cn(tdR, 'border-r border-slate-200')}>{r.utilPct == null ? na : pct(r.utilPct)}</td>
+                    <td className={tdR}>
+                      {r.rackSizeM2 != null ? area(r.rackSizeM2)
+                        : !r.hasSize ? <span className="text-slate-400" title={R.noSizeHint}>{R.sizeNotEntered}</span>
+                          : na}
+                    </td>
+                    {gap ? (
+                      <td colSpan={5} className={cn(td, 'whitespace-normal border-r border-slate-200 text-xs text-slate-500')} title={gap.hint}>
+                        {gap.cell}
+                      </td>
+                    ) : (
+                      <>
+                        <td className={tdR}>{a ? area(a.occupied) : na}</td>
+                        <td className={tdR}>{a ? area(a.reserved) : na}</td>
+                        <td className={tdR}>{a ? area(a.available) : na}</td>
+                        <td className={tdR}>{a ? area(a.blockedOther) : na}</td>
+                        <td className={cn(tdR, 'border-r border-slate-200')}>{r.utilPct == null ? na : pct(r.utilPct)}</td>
+                      </>
+                    )}
                     <td className={tdR}>{num(r.slots.total)}</td>
                     <td className={tdR}>{num(r.slots.occupied)}</td>
                     <td className={tdR}>{num(r.slots.reserved)}</td>

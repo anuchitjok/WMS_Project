@@ -93,6 +93,8 @@ class SlotEditFields {
   @ApiPropertyOptional({ enum: SlotType }) @IsOptional() @IsEnum(SlotType) slotType?: SlotType;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) capacity?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @Min(0) maxWeight?: number | null;
+  // Migration 41 — most pieces the slot may hold. null clears the ceiling.
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) maxQuantity?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() lengthCm?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() widthCm?: number | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() @IsPositive() heightCm?: number | null;
@@ -132,8 +134,27 @@ export class SetupZoneDto {
   @ApiProperty() @IsInt() @Min(1) @Max(SETUP_MAX_RACKS_PER_ZONE) racks: number;
 }
 
+/**
+ * Either an existing Rack Type (`rackTypeId`), or a size the wizard turns into
+ * one (C3: find-or-create a Rack Type matching that size). Exactly one of the
+ * two forms; the service rejects both-or-neither. Size still always comes from
+ * a Rack Type (RQ7) — the user just does not have to create it by hand first.
+ */
 export class SetupRacksDto {
-  @ApiProperty() @IsString() @IsNotEmpty() rackTypeId: string;
+  @ApiPropertyOptional({ description: 'Existing Rack Type Master id. Leave out to give a size instead.' })
+  @IsOptional() @IsString() @IsNotEmpty() rackTypeId?: string;
+
+  // ── Size form (C3) ──
+  @ApiPropertyOptional({ description: 'cm — with widthCm/heightCm, instead of rackTypeId' })
+  @IsOptional() @IsNumber() @IsPositive() lengthCm?: number;
+  @ApiPropertyOptional({ description: 'cm' }) @IsOptional() @IsNumber() @IsPositive() widthCm?: number;
+  @ApiPropertyOptional({ description: 'cm' }) @IsOptional() @IsNumber() @IsPositive() heightCm?: number;
+  @ApiPropertyOptional({ enum: RACK_CATEGORIES, description: 'Size form only; default STANDARD_RACK' })
+  @IsOptional() @IsIn(RACK_CATEGORIES) category?: RackCategory;
+  @ApiPropertyOptional({ description: 'Size form only; default 1' }) @IsOptional() @IsInt() @Min(1) @Max(MAX_GRID) levels?: number;
+  @ApiPropertyOptional({ description: 'Size form only; default 1' }) @IsOptional() @IsInt() @Min(1) @Max(MAX_GRID) columns?: number;
+  @ApiPropertyOptional({ description: 'Size form only; default 1' }) @IsOptional() @IsInt() @Min(1) slotCapacity?: number;
+
   @ApiProperty({ type: [SetupZoneDto] }) @IsArray() @ArrayMinSize(1) @ArrayMaxSize(SETUP_MAX_ZONES)
   @ValidateNested({ each: true }) @Type(() => SetupZoneDto) zones: SetupZoneDto[];
   @ApiPropertyOptional({ description: 'true = only plan, nothing is written' }) @IsOptional() @IsBoolean() preview?: boolean;

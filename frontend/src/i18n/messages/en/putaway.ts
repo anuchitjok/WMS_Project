@@ -1,5 +1,20 @@
 // Putaway.
 export const putaway = {
+  suggest: {
+    title: 'Suggested locations',
+    loading: 'Looking for room…',
+    none: 'No slot in this warehouse has room for it. Free one up, or pick a location by hand below.',
+    needs: 'This putaway is {qty} × {l}×{w}×{h} cm — about {volume} m³ in all.',
+    noProductSize: 'This product has no size recorded, so these are ranked by free space only.',
+    free: '{free} of {capacity} free',
+    sameProduct: 'Already holds this product',
+    fits: 'Box fits',
+    sizeUnknown: 'Slot size unknown',
+    holdsUnits: 'room for about {n}',
+    use: 'Use',
+    skipped: 'Not shown: {full} full, {blocked} blocked, {tooSmall} too small.',
+    manual: 'Or choose a location yourself',
+  },
   title: 'Putaway Management',
   subtitle: 'Assign location and confirm storage',
   table: {

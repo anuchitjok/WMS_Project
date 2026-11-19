@@ -2,7 +2,24 @@ import { Test } from '@nestjs/testing';
 import { NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { WarehouseLayoutService } from './warehouse-layout.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApprovalService } from '../approval/approval.service';
 import { LayoutObjectType, StockStatus } from '@prisma/client';
+
+// RQ13: the layout service asks the approval engine for a plan's chain, so every
+// test module needs one. The lifecycle itself is tested in
+// warehouse-layout-lifecycle.service.spec.ts with a stub that records calls.
+// RQ13: every write path first reads its plan to check the status, so the fake
+// needs one. DRAFT is the state in which editing is allowed.
+const DRAFT_LAYOUT = { id: 'L1', status: 'DRAFT', isDeleted: false };
+const APPROVAL_STUB = {
+  provide: ApprovalService,
+  useValue: {
+    getByEntity: jest.fn().mockResolvedValue(null),
+    ensurePendingInstance: jest.fn().mockResolvedValue({ id: 'ai1', currentStep: 1, steps: [{ stepOrder: 1, status: 'PENDING' }] }),
+    decide: jest.fn().mockResolvedValue({ status: 'APPROVED' }),
+  },
+};
+
 
 // Sprint 6: linking a drawing to a WMS location, and the live occupancy rollup.
 //
@@ -15,7 +32,7 @@ const LAYOUT = { id: 'lay_1', warehouseId: 'wh_1', isDeleted: false, version: 3 
 
 function makePrisma() {
   const p: any = {
-    warehouseLayout: { findFirst: jest.fn(), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
+    warehouseLayout: { findFirst: jest.fn().mockResolvedValue(DRAFT_LAYOUT), findUnique: jest.fn(), create: jest.fn(), update: jest.fn() },
     layoutObject: {
       findFirst: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(),
       count: jest.fn(), create: jest.fn(), update: jest.fn(), updateMany: jest.fn(),
@@ -41,7 +58,7 @@ describe('WarehouseLayoutService — linking & occupancy', () => {
   beforeEach(async () => {
     prisma = makePrisma();
     const mod = await Test.createTestingModule({
-      providers: [WarehouseLayoutService, { provide: PrismaService, useValue: prisma }],
+      providers: [WarehouseLayoutService, { provide: PrismaService, useValue: prisma }, APPROVAL_STUB],
     }).compile();
     service = mod.get(WarehouseLayoutService);
   });

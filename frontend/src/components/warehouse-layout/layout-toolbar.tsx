@@ -3,9 +3,11 @@
 // Floor Plan editing toolbar (Sprint 5): object palette, snap toggle,
 // undo/redo, duplicate, delete, and the explicit Save.
 
-import { Undo2, Redo2, Copy, Trash2, Grid3x3, Save, RotateCcw } from 'lucide-react';
+import { Undo2, Redo2, Copy, Trash2, Grid3x3, Save, RotateCcw, Info } from 'lucide-react';
 import type { LayoutObjectType } from '@/lib/api';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
 import { OBJECT_STYLES } from './layout-object';
 
@@ -16,6 +18,9 @@ const PALETTE: { type: LayoutObjectType; label: string }[] = [
   { type: 'SHELF', label: 'Shelf' },
   { type: 'BIN', label: 'Bin' },
   { type: 'AISLE', label: 'Aisle' },
+  // RQ8 — next to Aisle, not among the areas: both are things kept clear, and a
+  // user drawing the routes through the building draws the doors at the same time.
+  { type: 'DOOR', label: 'Door' },
   { type: 'STORAGE_AREA', label: 'Storage' },
   { type: 'RECEIVING_AREA', label: 'Receiving' },
   { type: 'SHIPPING_AREA', label: 'Shipping' },
@@ -41,17 +46,19 @@ function ToolButton({ onClick, disabled, title, children }: {
 
 export function LayoutToolbar({
   onAdd, onUndo, onRedo, onDuplicate, onDelete, onSave, onDiscard,
-  canUndo, canRedo, hasSelection, isDirty, saving, snapEnabled, onToggleSnap, unitLabel,
+  canUndo, canRedo, hasSelection, isDirty, saving, snapEnabled, onToggleSnap,
 }: {
   onAdd: (type: LayoutObjectType) => void;
   onUndo: () => void; onRedo: () => void;
   onDuplicate: () => void; onDelete: () => void;
+  /** Opens the save confirmation — see SaveDrawingDialog below. */
   onSave: () => void; onDiscard: () => void;
   canUndo: boolean; canRedo: boolean; hasSelection: boolean;
   isDirty: boolean; saving: boolean;
   snapEnabled: boolean; onToggleSnap: () => void;
-  unitLabel: string;
 }) {
+  const F = useT().m.layout3d.floor;
+
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -66,12 +73,13 @@ export function LayoutToolbar({
         </div>
         <span className="h-5 w-px bg-slate-200" />
         <button type="button" onClick={onToggleSnap}
-          title={`Snap to 1 ${unitLabel} grid`}
+          title={snapEnabled ? F.snap.on : F.snap.off}
+          aria-pressed={snapEnabled}
           className={cn('flex items-center gap-1.5 h-8 px-2.5 rounded-md border text-xs font-medium transition-colors',
             snapEnabled
               ? 'border-green-300 bg-green-50 text-green-700'
               : 'border-slate-200 text-slate-500 hover:bg-slate-50')}>
-          <Grid3x3 className="h-3.5 w-3.5" /> Snap
+          <Grid3x3 className="h-3.5 w-3.5" /> {F.snap.label}
         </button>
 
         <div className="ml-auto flex items-center gap-2">
@@ -108,6 +116,54 @@ export function LayoutToolbar({
           })}
         </div>
       </div>
+
     </div>
+  );
+}
+
+/**
+ * Save confirmation (RQ11 / decision C5).
+ *
+ * Saving the plan writes the DRAWING. It never moves goods and never touches a
+ * stock figure — and the one risk C5 leaves open is the user believing it did,
+ * so the dialog says so in as many words before anything is written.
+ *
+ * It lives outside the toolbar so that Ctrl+S goes through the same words as the
+ * Save button rather than writing silently.
+ */
+export function SaveDrawingDialog({ open, onOpenChange, onConfirm, dirtyWithStock = 0 }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+  /** How many of the changed objects are holding stock right now. */
+  dirtyWithStock?: number;
+}) {
+  const { m, t } = useT();
+  const F = m.layout3d.floor;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-slate-900">
+            <Save className="w-4 h-4 text-green-600" /> {F.save.title}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 text-sm text-slate-600">
+          <p className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">
+            <Info className="mt-px h-4 w-4 flex-shrink-0" />
+            <span>{F.save.body}</span>
+          </p>
+          {dirtyWithStock > 0 && <p>{t(F.save.withStock, { count: dirtyWithStock })}</p>}
+          <p className="text-xs text-slate-500">{t(F.save.howTo, { screen: m.nav.items.relocation })}</p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{F.save.cancel}</Button>
+          <Button className="bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => { onOpenChange(false); onConfirm(); }}>
+            {F.save.confirm}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

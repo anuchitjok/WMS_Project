@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { BarcodeParserService } from '../scan/barcode-parser.service';
 import { assertWarehouseAccess, ScopePrincipal } from '../common/warehouse-scope';
 import { buildLocationLabel, labelFromKey, LocationLabel } from './location-label';
+import { containerPayload } from '../containers/container-code';
 
 /** What to print location labels for — any mix; at least one must resolve. */
 export interface BinLabelInput {
@@ -64,6 +65,187 @@ export class LabelsService {
       lines: [`Code: ${p.code}`, `Brand: ${p.brand?.name ?? '-'}  ·  ${p.category ?? ''}`],
       barcodeText: this.parser.encode('product', p.code),
     })));
+  }
+
+  /**
+   * RQ17 — the sticker for a box: its code big, what it is and where it stands,
+   * and a QR holding BOX|<code>, which the scanner already understands.
+   */
+  async containerLabels(containerIds: string[]): Promise<Buffer> {
+    const boxes = await this.prisma.container.findMany({
+      where: { id: { in: containerIds }, isDeleted: false },
+      include: {
+        warehouse: { select: { code: true } },
+        rack: { select: { code: true } },
+        slot: { select: { code: true } },
+        _count: { select: { stockItems: true } },
+      },
+      orderBy: { code: 'asc' },
+    });
+    if (!boxes.length) throw new BadRequestException('No boxes found');
+    return this.render(boxes.map((b) => ({
+      title: b.code,
+      lines: [
+        [b.name, b.type].filter(Boolean).join(' · '),
+        [b.warehouse?.code, b.rack?.code, b.slot?.code].filter(Boolean).join(' > ') || 'Not placed yet',
+        `${b._count.stockItems} stock row(s)${b.status === 'CLOSED' ? ' · sealed' : ''}`,
+      ],
+      barcodeText: containerPayload(b.code),
+      qr: true,
+    })));
+  }
+
+  /**
+   * LOG-002 - the shipping label.
+   *
+   * A draft, deliberately: the owner asked to see one before settling the
+   * format. It is 100 x 150 mm, the size thermal printers and courier pouches
+   * are built around, and it carries only what someone handling the parcel or
+   * arguing about it later needs:
+   *
+   *   who it is from (the company profile), who it goes to,
+   *   the carrier and its brand, the tracking number as a CODE128 barcode,
+   *   the air waybill and the carrier's warehouse number,
+   *   the request it came from, so a parcel traces back to the paperwork,
+   *   and a QR holding SHP|<ref>, which this system's scanner already reads.
+   *
+   * Nothing on it is computed or guessed: a field with no value prints as a
+   * dash, so a half-filled label is visibly half-filled rather than quietly
+   * wrong.
+   */
+  async logisticsLabels(shipmentIds: string[]): Promise<Buffer> {
+    const shipments = await this.prisma.shipment.findMany({
+      where: { id: { in: shipmentIds } },
+      include: {
+        // FulfillmentTask keeps the request as an id plus a denormalised ref, and
+        // the warehouse as an id — neither is a relation, so both are read here.
+        task: { select: { refNumber: true, requestId: true, requestRef: true, warehouseId: true } },
+      },
+      orderBy: { refNumber: 'asc' },
+    });
+    if (!shipments.length) throw new BadRequestException('No shipments found');
+
+    const [company, warehouses, requests] = await Promise.all([
+      this.prisma.companyProfile.findUnique({ where: { id: 'default' } }),
+      this.prisma.warehouse.findMany({
+        where: { id: { in: shipments.map((s) => s.task?.warehouseId).filter((x): x is string => !!x) } },
+        select: { id: true, code: true },
+      }),
+      this.prisma.withdrawalRequest.findMany({
+        where: { id: { in: shipments.map((s) => s.task?.requestId).filter((x): x is string => !!x) } },
+        select: { id: true, department: true },
+      }),
+    ]);
+    const whOf = new Map(warehouses.map((w) => [w.id, w.code]));
+    const deptOf = new Map(requests.map((r) => [r.id, r.department]));
+    return this.renderLogisticsLabels(
+      shipments.map((s) => ({
+        ...s,
+        warehouseCode: s.task?.warehouseId ? (whOf.get(s.task.warehouseId) ?? null) : null,
+        department: s.task?.requestId ? (deptOf.get(s.task.requestId) ?? null) : null,
+      })),
+      company,
+    );
+  }
+
+  private async renderLogisticsLabels(
+    shipments: any[],
+    company: { displayName: string | null; legalName: string | null; address: string | null; phone: string | null } | null,
+  ): Promise<Buffer> {
+    // 100 x 150 mm in points, the usual courier sticker.
+    const W = 283, H = 425, PAD = 14;
+    const doc = new PDFDocument({ size: [W, H], margin: 0 });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c) => chunks.push(c as Buffer));
+    const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+    const innerW = W - PAD * 2;
+    const dash = (v?: string | null) => (v && String(v).trim() ? String(v).trim() : '-');
+
+    for (let i = 0; i < shipments.length; i++) {
+      if (i > 0) doc.addPage({ size: [W, H], margin: 0 });
+      const s = shipments[i];
+      let y = PAD;
+
+      const text = (
+        v: string, size: number, bold = false, color = '#000000', gap = 2, width = innerW, x = PAD,
+      ) => {
+        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
+          .text(v, x, y, { width, lineBreak: true, ellipsis: true });
+        y = doc.y + gap;
+      };
+      const rule = (gap = 6) => {
+        doc.moveTo(PAD, y).lineTo(W - PAD, y).lineWidth(0.6).strokeColor('#cccccc').stroke();
+        y += gap;
+      };
+      const field = (label: string, value?: string | null, big = false) => {
+        text(label.toUpperCase(), 6, true, '#777777', 1);
+        text(dash(value), big ? 13 : 9, big, '#000000', 5);
+      };
+
+      // ── who it is from ──────────────────────────────────────────────────
+      text(dash(company?.displayName || company?.legalName), 9, true, '#000000', 1);
+      text([company?.address, company?.phone].filter(Boolean).join(' · ') || ' ', 6, false, '#666666', 4);
+      rule();
+
+      // ── carrier, the loudest thing on the label ─────────────────────────
+      text('SHIP VIA', 6, true, '#777777', 1);
+      text(dash(s.carrierBrand || s.carrier), 16, true, '#000000', 1);
+      if (s.carrierBrand && s.carrier) text(s.carrier, 7, false, '#666666', 4);
+      else y += 3;
+
+      // ── tracking, as a barcode anyone's scanner can read ───────────────
+      text('TRACKING', 6, true, '#777777', 2);
+      if (s.trackingNumber) {
+        const png = await this.barcodePng(String(s.trackingNumber), 'code128');
+        doc.image(png, PAD, y, { width: innerW });
+        y += 34;
+        doc.font('Courier-Bold').fontSize(9).fillColor('#000000')
+          .text(String(s.trackingNumber), PAD, y, { width: innerW, align: 'center' });
+        y = doc.y + 6;
+      } else {
+        text('-', 11, true, '#000000', 6);
+      }
+      rule();
+
+      // ── the numbers a claim is argued over ─────────────────────────────
+      const half = (innerW - 10) / 2;
+      const top = y;
+      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('AIR WAYBILL', PAD, top, { width: half });
+      doc.font('Helvetica').fontSize(9).fillColor('#000000').text(dash(s.awbNumber), PAD, top + 8, { width: half });
+      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('WAREHOUSE NO.', PAD + half + 10, top, { width: half });
+      doc.font('Helvetica').fontSize(9).fillColor('#000000').text(dash(s.warehouseNumber), PAD + half + 10, top + 8, { width: half });
+      y = top + 24;
+      rule();
+
+      // ── who it goes to ─────────────────────────────────────────────────
+      field('deliver to', s.receiverName, true);
+      field('department', s.department);
+      rule();
+
+      // ── back to the paperwork ──────────────────────────────────────────
+      const row = y;
+      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('REQUEST', PAD, row, { width: half });
+      doc.font('Courier').fontSize(8).fillColor('#000000').text(dash(s.task?.requestRef), PAD, row + 8, { width: half });
+      doc.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text('FROM WAREHOUSE', PAD + half + 10, row, { width: half });
+      doc.font('Helvetica').fontSize(8).fillColor('#000000').text(dash(s.warehouseCode), PAD + half + 10, row + 8, { width: half });
+      y = row + 24;
+
+      // ── the shipment's own QR, at the foot ─────────────────────────────
+      const qr = await this.barcodePng(this.parser.encode('shipment', s.refNumber), 'qrcode');
+      const QR = 72;
+      doc.image(qr, PAD, H - PAD - QR, { width: QR });
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000')
+        .text(s.refNumber, PAD + QR + 10, H - PAD - QR + 4, { width: innerW - QR - 10 });
+      doc.font('Helvetica').fontSize(7).fillColor('#666666')
+        .text(`Task ${dash(s.task?.refNumber)}`, PAD + QR + 10, H - PAD - QR + 20, { width: innerW - QR - 10 });
+      doc.font('Helvetica').fontSize(7).fillColor('#666666')
+        .text(
+          s.shippedAt ? `Shipped ${new Date(s.shippedAt).toISOString().slice(0, 10)}` : 'Not dispatched yet',
+          PAD + QR + 10, H - PAD - QR + 32, { width: innerW - QR - 10 },
+        );
+    }
+    doc.end();
+    return done;
   }
 
   // ── Location labels (plan P5 5.4) ───────────────────────────────────────────

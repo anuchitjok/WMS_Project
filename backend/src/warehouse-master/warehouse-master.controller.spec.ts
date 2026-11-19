@@ -33,12 +33,16 @@ const ADMIN_ONLY: Array<[string, string, Record<string, unknown>]> = [
   ['patch', '/warehouse-master/warehouses/w1', { usableAreaPct: 80 }],
   ['patch', '/warehouse-master/warehouses/w1/activate', {}],
   ['patch', '/warehouse-master/warehouses/w1/deactivate', {}],
+  ['patch', '/warehouse-master/warehouses/w1/restore', {}],
   ['post', '/warehouse-master/rack-types', { code: 'T', name: 'T', category: 'STANDARD_RACK', lengthCm: 1, widthCm: 1, heightCm: 1 }],
   ['patch', '/warehouse-master/rack-types/t1', { isActive: false }],
 ];
 const MANAGER_WRITES: Array<[string, string, Record<string, unknown>]> = [
   ['post', '/warehouse-master/racks', { warehouseId: 'w1', code: 'A01', category: 'STANDARD_RACK', rackTypeId: 't1' }],
   ['patch', '/warehouse-master/racks/r1', { lengthCm: 250 }],
+  ['patch', '/warehouse-master/racks/r1/activate', {}],
+  ['patch', '/warehouse-master/racks/r1/deactivate', {}],
+  ['patch', '/warehouse-master/racks/r1/restore', {}],
   ['delete', '/warehouse-master/racks/r1', {}],
   ['post', '/warehouse-master/racks/r1/generate-slots', { levels: 5, columns: 5, preview: true }],
   ['post', '/warehouse-master/slots', { rackId: 'r1', code: 'A01-01-01' }],
@@ -51,7 +55,7 @@ const MANAGER_WRITES: Array<[string, string, Record<string, unknown>]> = [
 const READS = [
   '/warehouse-master', '/warehouse-master/summary', '/warehouse-master/space-summary',
   '/warehouse-master/rack-types', '/warehouse-master/space-planner?warehouseId=w1&rackTypeId=t1',
-  '/warehouse-master/space-summary/w1/racks',
+  '/warehouse-master/space-summary/w1/racks', '/warehouse-master/deleted',
 ];
 
 describe('WarehouseMasterController (HTTP)', () => {
@@ -128,6 +132,34 @@ describe('WarehouseMasterController (HTTP)', () => {
     expect(service.bulkDeleteSlots).toHaveBeenCalledWith(['a', 'b'], 'u1', true, expect.objectContaining({ warehouseIds: ['w1'] }));
   });
 
+  // RQ5 — the routes the Rack screen calls. PATCH racks/:id must not swallow them.
+  it.each([
+    ['activate', 'activateRack'],
+    ['deactivate', 'deactivateRack'],
+    ['restore', 'restoreRack'],
+  ])('PATCH racks/:id/%s reaches %s, not updateRack', async (route, method) => {
+    await send('patch', `/warehouse-master/racks/r9/${route}`, {}).expect(200);
+    expect(service[method]).toHaveBeenCalledWith('r9', 'u1');
+    expect(service.updateRack).not.toHaveBeenCalled();
+  });
+
+  it('PATCH warehouses/:id/restore reaches restoreWarehouse, not updateWarehouse', async () => {
+    await send('patch', '/warehouse-master/warehouses/w9/restore', {}).expect(200);
+    expect(service.restoreWarehouse).toHaveBeenCalledWith('w9', 'u1');
+    expect(service.updateWarehouse).not.toHaveBeenCalled();
+  });
+
+  it('GET deleted passes the caller scope and is not read as an impact entity', async () => {
+    await request(app.getHttpServer()).get('/warehouse-master/deleted').expect(200);
+    expect(service.listDeleted).toHaveBeenCalledWith(expect.objectContaining({ warehouseIds: ['w1'] }));
+    expect(service.getImpact).not.toHaveBeenCalled();
+  });
+
+  it('DELETE racks/:id reaches deleteRack with the caller id', async () => {
+    await send('delete', '/warehouse-master/racks/r9', {}).expect(200);
+    expect(service.deleteRack).toHaveBeenCalledWith('r9', 'u1');
+  });
+
   it('DELETE slots/:id passes the caller scope', async () => {
     await send('delete', '/warehouse-master/slots/s9', {}).expect(200);
     expect(service.deleteSlot).toHaveBeenCalledWith('s9', 'u1', expect.objectContaining({ warehouseIds: ['w1'] }));
@@ -161,7 +193,11 @@ describe('WarehouseMasterController (HTTP)', () => {
       await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A B', racks: 1 }] }).expect(400);
       await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 0 }] }).expect(400);
       await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 100 }] }).expect(400);
-      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 1 }], levels: 9 }).expect(400);
+      await send('post', url, { rackTypeId: 't1', zones: [{ name: 'A', racks: 1 }], rackCount: 9 }).expect(400);
+      // C3 size form: valid shapes pass the pipe, bad ones do not.
+      await send('post', url, { lengthCm: 250, widthCm: 100, heightCm: 400, levels: 3, columns: 4, zones: [{ name: 'A', racks: 1 }] }).expect(200);
+      await send('post', url, { lengthCm: -1, widthCm: 100, heightCm: 400, zones: [{ name: 'A', racks: 1 }] }).expect(400);
+      await send('post', url, { lengthCm: 250, widthCm: 100, heightCm: 400, levels: 0, zones: [{ name: 'A', racks: 1 }] }).expect(400);
     });
     it('setup passes the warehouse id, body and caller scope', async () => {
       await send('post', '/warehouse-master/warehouses/w1/setup-racks', { rackTypeId: 't1', zones: [{ name: 'A', racks: 2 }] }).expect(200);

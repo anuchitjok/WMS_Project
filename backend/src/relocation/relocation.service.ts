@@ -29,6 +29,12 @@ import {
   warehouseFilter,
 } from '../common/warehouse-scope';
 import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
+import {
+  SlotSpace,
+  loadSlotSpace,
+  maxMovable,
+  reserve,
+} from './slot-space';
 
 /**
  * PR7 Location Relocation Request — move stock between slots of ONE warehouse.
@@ -43,7 +49,21 @@ import { ACCESS, AccessPrincipal, hasAccess } from '../auth/access';
  *   • rows on hand and not committed (ON_HAND_UNCOMMITTED) — reserved / picking /
  *     packed / shipped stock is never moved here, so pick tasks keep their stock
  *   • same warehouse only · maker ≠ checker (no exception, as everywhere else)
- *   • destination over capacity → warning only; blocked / inactive slot → refused
+ *   • blocked / inactive slot → refused
+ *
+ * Requirement 32 (19 Nov 2026) changed how the destination is handled. A slot
+ * has two ceilings, kept apart on purpose (see slot-space.ts): PLACES, which is
+ * `Slot.capacity` and counts stock rows, and PIECES, which is the new
+ * `Slot.maxQuantity`. Neither is guessed from the other.
+ *   • raising a request → a destination that can take no more PIECES is
+ *     REFUSED, and so is a quantity above what it can still take. The form
+ *     lists only slots that can take the row, so nobody picks a dead end.
+ *     Running out of PLACES (`Slot.capacity`) only warns — slot-space.ts says
+ *     why that figure cannot be trusted to bar anything.
+ *   • approving / completing one → still a WARNING, never a refusal. The room
+ *     may have gone while the paper was in the tray, and trapping goods that
+ *     have already been carried across the floor helps nobody; the approver is
+ *     told, and decides.
  *   • part of a row → the row splits (splitStockRow); serial rows move whole
  */
 
@@ -69,11 +89,18 @@ export type Principal = ScopePrincipal & AccessPrincipal & { id: string };
 
 export type RelocationWarning =
   | {
-      kind: 'OVER_CAPACITY';
+      kind: 'OVER_CAPACITY'; // more rows than the slot has places
       slotId: string;
       slotCode: string;
       rows: number;
       capacity: number;
+    }
+  | {
+      kind: 'OVER_QUANTITY'; // more pieces than the slot's ceiling
+      slotId: string;
+      slotCode: string;
+      pieces: number;
+      maxQuantity: number;
     }
   | {
       kind: 'SLOT_MARKED';
@@ -115,6 +142,7 @@ const DETAIL = {
           code: true,
           status: true,
           capacity: true,
+          maxQuantity: true,
           rack: { select: { id: true, code: true } },
         },
       },
@@ -176,25 +204,117 @@ export class RelocationService {
     });
     if (!r) throw new NotFoundException('Relocation request not found');
     assertWarehouseAccess(user, r.warehouseId, 'this relocation request');
-    const warnings = OPEN.includes(r.status)
-      ? await this.warnings(this.prisma, r.lines)
-      : [];
-    return { ...r, warnings };
+    const review = OPEN.includes(r.status)
+      ? await this.review(this.prisma, r)
+      : { warnings: [] as RelocationWarning[], destinations: [] };
+    return { ...r, ...review };
   }
 
-  /** Stock rows in a slot that may be relocated, with any open request / count holding them. */
-  async movable(warehouseId: string, slotId: string, user?: Principal) {
-    if (!warehouseId || !slotId)
-      throw new BadRequestException('warehouseId and slotId are required');
+  /**
+   * Requirement 32 step 1 — the part numbers that have stock this screen could
+   * move, so the person can start from the PN instead of having to know which
+   * shelf it is on. `q` matches the code or the name; the figures are what is
+   * movable (reserved and picked stock is not counted, because this screen
+   * cannot move it).
+   */
+  async products(warehouseId: string, q: string | undefined, user?: Principal) {
+    if (!warehouseId) throw new BadRequestException('warehouseId is required');
+    assertWarehouseAccess(user, warehouseId, 'this warehouse');
+    const text = (q ?? '').trim().slice(0, 100);
+    const rows = await this.prisma.stockItem.findMany({
+      where: {
+        warehouseId,
+        slotId: { not: null },
+        status: { in: ON_HAND_UNCOMMITTED },
+        ...(text
+          ? {
+              product: {
+                OR: [
+                  { code: { contains: text, mode: 'insensitive' } },
+                  { name: { contains: text, mode: 'insensitive' } },
+                ],
+              },
+            }
+          : {}),
+      },
+      select: {
+        quantity: true,
+        slotId: true,
+        product: { select: { id: true, code: true, name: true, unit: true } },
+      },
+      take: 5000,
+    });
+
+    const by = new Map<
+      string,
+      {
+        product: { id: string; code: string; name: string; unit: string | null };
+        quantity: number;
+        rows: number;
+        slots: Set<string>;
+      }
+    >();
+    for (const r of rows) {
+      const at = by.get(r.product.id) ?? {
+        product: r.product,
+        quantity: 0,
+        rows: 0,
+        slots: new Set<string>(),
+      };
+      at.quantity += Number(r.quantity);
+      at.rows += 1;
+      if (r.slotId) at.slots.add(r.slotId);
+      by.set(r.product.id, at);
+    }
+    return [...by.values()]
+      .map((x) => ({
+        ...x.product,
+        quantity: x.quantity,
+        rows: x.rows,
+        slots: x.slots.size,
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code))
+      .slice(0, 200);
+  }
+
+  /**
+   * Stock rows that may be relocated, with any open request / count holding
+   * them. Either everything in one slot, or everywhere one product is —
+   * requirement 32 step 2 asks for the second, so each row carries the slot it
+   * is standing in.
+   */
+  async movable(
+    warehouseId: string,
+    where: { slotId?: string; productId?: string },
+    user?: Principal,
+  ) {
+    const slotId = where.slotId || undefined;
+    const productId = where.productId || undefined;
+    if (!warehouseId || (!slotId && !productId))
+      throw new BadRequestException(
+        'warehouseId and either slotId or productId are required',
+      );
     assertWarehouseAccess(user, warehouseId, 'this warehouse');
     const rows = await this.prisma.stockItem.findMany({
-      where: { warehouseId, slotId, status: { in: ON_HAND_UNCOMMITTED } },
+      where: {
+        warehouseId,
+        status: { in: ON_HAND_UNCOMMITTED },
+        ...(slotId ? { slotId } : { slotId: { not: null }, productId }),
+      },
       select: {
         id: true,
         quantity: true,
         status: true,
         serialNumber: true,
         batchNumber: true,
+        slotId: true,
+        slot: {
+          select: {
+            id: true,
+            code: true,
+            rack: { select: { id: true, code: true } },
+          },
+        },
         product: { select: { id: true, code: true, name: true, unit: true } },
       },
       orderBy: [{ product: { code: 'asc' } }, { id: 'asc' }],
@@ -216,6 +336,62 @@ export class RelocationService {
       openRelocation: openOf.get(r.id) ?? null,
       countRef: locks.get(r.id) ?? null,
     }));
+  }
+
+  /**
+   * Requirement 32 step 3 — the slots that can take this stock row, each with
+   * the room it has left and the most that may go into it.
+   *
+   * Full, blocked and retired slots are left OUT rather than offered and then
+   * refused, which is what the requirement asks for. `hidden` says how many were
+   * left out, so the screen can account for them instead of a short list looking
+   * like a missing warehouse.
+   */
+  async destinations(warehouseId: string, stockItemId: string, user?: Principal) {
+    if (!warehouseId || !stockItemId)
+      throw new BadRequestException('warehouseId and stockItemId are required');
+    assertWarehouseAccess(user, warehouseId, 'this warehouse');
+    const row = await this.prisma.stockItem.findUnique({
+      where: { id: stockItemId },
+      select: {
+        id: true,
+        warehouseId: true,
+        slotId: true,
+        quantity: true,
+        status: true,
+        serialNumber: true,
+        product: { select: { id: true, code: true, name: true, unit: true } },
+        slot: { select: { id: true, code: true } },
+      },
+    });
+    if (!row) throw new NotFoundException('Stock row not found');
+    if (row.warehouseId !== warehouseId)
+      throw new BadRequestException('That stock row is not in this warehouse');
+
+    const space = await loadSlotSpace(this.prisma, { warehouseId });
+    const candidates = [...space.values()].filter(
+      (sp) => sp.slotId !== row.slotId,
+    );
+    const quantity = Number(row.quantity);
+    const usable = candidates
+      .filter((sp) => !sp.unavailable)
+      .map((sp) => ({ ...sp, maxMovable: maxMovable(sp, quantity) }))
+      .filter((sp) => sp.maxMovable > 0)
+      // Somewhere with a place free first; one at its place limit still works,
+      // but the person should have to reach past the roomier ones for it.
+      .sort((a, b) => Number(a.atPlaceLimit) - Number(b.atPlaceLimit));
+    return {
+      row: {
+        id: row.id,
+        quantity,
+        status: row.status,
+        serialNumber: row.serialNumber,
+        product: row.product,
+        slot: row.slot,
+      },
+      slots: usable,
+      hidden: candidates.length - usable.length,
+    };
   }
 
   // ─── Create ────────────────────────────────────────────────────────────────
@@ -257,6 +433,20 @@ export class RelocationService {
           `Stock row ${open.stockItemId} is already in open relocation ${open.request.refNumber}`,
         );
 
+      // Requirement 32 — the room left in every destination this request names,
+      // read once. Each line then takes its share, so two lines of the same
+      // request cannot both be told the last place is free.
+      const space = await loadSlotSpace(tx, {
+        warehouseId,
+        slotIds: [
+          ...new Set(
+            lines
+              .map((l) => l?.toSlotId)
+              .filter((x): x is string => typeof x === 'string' && !!x),
+          ),
+        ],
+      });
+
       const data: Prisma.RelocationLineCreateManyRequestInput[] = [];
       for (const l of lines) {
         const row = rowOf.get(l.stockItemId);
@@ -268,6 +458,10 @@ export class RelocationService {
           throw new BadRequestException(
             `Stock row ${row.id} is already in that slot`,
           );
+        const fits = space.get(dest.slotId);
+        if (!fits) throw new NotFoundException('Destination slot not found');
+        this.assertFits(fits, Number(l.quantity));
+        space.set(dest.slotId, reserve(fits, Number(l.quantity)));
         data.push({
           stockItemId: row.id,
           productId: row.productId,
@@ -544,6 +738,29 @@ export class RelocationService {
       );
   }
 
+  /**
+   * Requirement 32 steps 3 and 4 — a destination that cannot take this much is
+   * refused while the request is being raised.
+   *
+   * The messages name no slot and carry no figures, so the client can translate
+   * them: the form is showing the slot it is adding and the most it may send, so
+   * repeating either here would only be harder to read in Thai.
+   */
+  private assertFits(space: SlotSpace, qty: number) {
+    switch (space.unavailable) {
+      case 'BLOCKED':
+        throw new BadRequestException('That destination is blocked');
+      case 'INACTIVE':
+        throw new BadRequestException('That destination is no longer in use');
+      case 'NO_PIECES':
+        throw new ConflictException(
+          'That destination has no room left for more pieces',
+        );
+    }
+    if (qty > maxMovable(space, qty))
+      throw new ConflictException('That destination cannot take this quantity');
+  }
+
   /** Destination slot: active, in this warehouse, not blocked. */
   private async destination(
     db: Prisma.TransactionClient,
@@ -562,66 +779,102 @@ export class RelocationService {
     return { slotId: loc.slotId!, rackId: loc.rackId! };
   }
 
-  /** Not blocking: destination over capacity, destination marked by hand, row held by a count. */
-  private async warnings(
+  /**
+   * What the review before approval shows, and what it warns about. Nothing here
+   * refuses anything — see the note at the top of this file.
+   */
+  private async review(
     db: Prisma.TransactionClient | PrismaService,
-    lines: {
-      stockItemId: string;
-      toSlotId: string;
-      toSlot?: {
-        id: string;
-        code: string;
-        status: SlotStatus;
-        capacity: number;
-      } | null;
-    }[],
-  ): Promise<RelocationWarning[]> {
-    const out: RelocationWarning[] = [];
-    const incoming = new Map<string, number>();
-    for (const l of lines)
-      incoming.set(l.toSlotId, (incoming.get(l.toSlotId) ?? 0) + 1);
-    const slotIds = [...incoming.keys()];
-    const [slots, counts, locks] = await Promise.all([
-      db.slot.findMany({
-        where: { id: { in: slotIds } },
-        select: { id: true, code: true, status: true, capacity: true },
-      }),
-      db.stockItem.groupBy({
-        by: ['slotId'],
-        where: { slotId: { in: slotIds }, status: { notIn: GONE } },
-        _count: { _all: true },
+    r: {
+      id: string;
+      warehouseId: string;
+      lines: { stockItemId: string; toSlotId: string; quantity: number }[];
+    },
+  ) {
+    const slotIds = [...new Set(r.lines.map((l) => l.toSlotId))];
+    const [space, locks] = await Promise.all([
+      loadSlotSpace(db as Prisma.TransactionClient, {
+        warehouseId: r.warehouseId,
+        slotIds,
+        // This request's own lines are shown on their own below, so they must
+        // not also be counted as room someone else has promised away.
+        exceptRequestId: r.id,
       }),
       countLocks(
         db,
-        lines.map((l) => l.stockItemId),
+        r.lines.map((l) => l.stockItemId),
       ),
     ]);
-    const now = new Map(counts.map((c) => [c.slotId!, c._count._all]));
-    for (const s of slots) {
-      const rows = (now.get(s.id) ?? 0) + (incoming.get(s.id) ?? 0);
-      if (s.capacity > 0 && rows > s.capacity)
-        out.push({
+
+    // What this request itself is sending to each slot.
+    const incoming = new Map<string, { places: number; pieces: number }>();
+    for (const l of r.lines) {
+      const at = incoming.get(l.toSlotId) ?? { places: 0, pieces: 0 };
+      at.places += 1;
+      at.pieces += Number(l.quantity);
+      incoming.set(l.toSlotId, at);
+    }
+
+    const left = (free: number | null, taken: number) =>
+      free === null ? null : free - taken;
+
+    const destinations = slotIds.map((slotId) => {
+      const sp = space.get(slotId);
+      const inc = incoming.get(slotId) ?? { places: 0, pieces: 0 };
+      return {
+        slotId,
+        slotCode: sp?.code ?? '',
+        rackCode: sp?.rackCode ?? '',
+        status: sp?.status ?? null,
+        capacity: sp?.capacity ?? 0,
+        maxQuantity: sp?.maxQuantity ?? null,
+        placesUsed: sp?.placesUsed ?? 0,
+        piecesOnHand: sp?.piecesOnHand ?? 0,
+        // Room before this request is carried out…
+        placesFree: sp?.placesFree ?? null,
+        piecesFree: sp?.piecesFree ?? null,
+        incomingPlaces: inc.places,
+        incomingPieces: inc.pieces,
+        // …and after. Negative means it will not fit; the warnings say so too.
+        placesLeft: left(sp?.placesFree ?? null, inc.places),
+        piecesLeft: left(sp?.piecesFree ?? null, inc.pieces),
+      };
+    });
+
+    const warnings: RelocationWarning[] = [];
+    for (const d of destinations) {
+      if (d.placesLeft !== null && d.placesLeft < 0)
+        warnings.push({
           kind: 'OVER_CAPACITY',
-          slotId: s.id,
-          slotCode: s.code,
-          rows,
-          capacity: s.capacity,
+          slotId: d.slotId,
+          slotCode: d.slotCode,
+          rows: d.placesUsed + d.incomingPlaces,
+          capacity: d.capacity,
+        });
+      if (d.piecesLeft !== null && d.piecesLeft < 0)
+        warnings.push({
+          kind: 'OVER_QUANTITY',
+          slotId: d.slotId,
+          slotCode: d.slotCode,
+          pieces: d.piecesOnHand + d.incomingPieces,
+          maxQuantity: d.maxQuantity ?? 0,
         });
       if (
-        s.status === SlotStatus.RESERVED ||
-        s.status === SlotStatus.QUARANTINE ||
-        s.status === SlotStatus.RTV
+        d.status === SlotStatus.RESERVED ||
+        d.status === SlotStatus.QUARANTINE ||
+        d.status === SlotStatus.RTV
       ) {
-        out.push({
+        warnings.push({
           kind: 'SLOT_MARKED',
-          slotId: s.id,
-          slotCode: s.code,
-          status: s.status,
+          slotId: d.slotId,
+          slotCode: d.slotCode,
+          status: d.status,
         });
       }
     }
     for (const [stockItemId, countRef] of locks)
-      out.push({ kind: 'COUNT_LOCKED', stockItemId, countRef });
-    return out;
+      warnings.push({ kind: 'COUNT_LOCKED', stockItemId, countRef });
+
+    return { warnings, destinations };
   }
 }

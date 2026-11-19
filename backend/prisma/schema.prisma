@@ -322,6 +322,25 @@ model Brand {
   createdAt DateTime  @default(now())
 }
 
+// Migration 40 — MDM-003. The group a product belongs to, chosen from a list
+// instead of typed into Product.category. A family may sit inside a wider one.
+model ProductFamily {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  parentId    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  parent   ProductFamily?  @relation("FamilyTree", fields: [parentId], references: [id])
+  children ProductFamily[] @relation("FamilyTree")
+  products Product[]
+
+  @@index([parentId])
+}
+
 model Vendor {
   id        String    @id @default(cuid())
   code      String    @unique
@@ -351,6 +370,7 @@ model Warehouse {
   deletedAt  DateTime?
   deletedBy  String?
   racks      Rack[]
+  containers Container[]
   stockItems StockItem[]
   userAccess UserWarehouse[]
   layout     WarehouseLayout? // Physical Layout (Sprint 2) — virtual, FK lives on WarehouseLayout
@@ -380,6 +400,7 @@ model Rack {
   deletedBy   String?
   warehouse   Warehouse   @relation(fields: [warehouseId], references: [id])
   slots       Slot[]
+  containers  Container[]
   stockItems  StockItem[]
   layoutObjects LayoutObject[] // Physical Layout (Sprint 2) — virtual, FK lives on LayoutObject
   createdAt   DateTime    @default(now())
@@ -423,7 +444,11 @@ model Slot {
   column     Int        @default(1)
   slotType   SlotType   @default(STANDARD)
   status     SlotStatus @default(EMPTY)
-  capacity   Int        @default(1)
+  capacity   Int        @default(1) // places (stock rows) this slot holds — NOT pieces
+  // Migration 41 — requirement 32. Most pieces the slot may hold in total.
+  // NULL = no piece ceiling. Deliberately separate from `capacity` above, which
+  // the planning space engine and the location label both read as places.
+  maxQuantity Int?
   maxWeight  Float?
   lengthCm   Float?
   widthCm    Float?
@@ -434,6 +459,7 @@ model Slot {
   deletedBy  String?
   rack       Rack       @relation(fields: [rackId], references: [id])
   stockItems StockItem[]
+  containers Container[]
   layoutObject LayoutObject? // Physical Layout (Sprint 2) — virtual, FK lives on LayoutObject
   createdAt  DateTime   @default(now())
   updatedAt  DateTime   @default(now()) @updatedAt
@@ -466,6 +492,8 @@ model Product {
   vendorPartNumber String?
   productType      ProductType   @default(SPARE_PART)
   brandId          String?
+  // Migration 40 — MDM-004. The typed group; `category` below stays as it was.
+  productFamilyId  String?
   category         String?
   unit             String        @default("unit")
   unitCost         Float         @default(0)
@@ -486,6 +514,7 @@ model Product {
   updatedAt        DateTime      @updatedAt
 
   brand                  Brand?                @relation(fields: [brandId], references: [id])
+  productFamily          ProductFamily?        @relation(fields: [productFamilyId], references: [id])
   stockItems             StockItem[]
   withdrawalRequestItems WithdrawalRequestItem[]
   goodsReceivingItems    GoodsReceivingItem[]
@@ -497,6 +526,7 @@ model Product {
   @@index([partNumber])
   @@index([productType])
   @@index([productStatus])
+  @@index([productFamilyId])
 }
 
 // ─── Inventory ────────────────────────────────────────────────────────────────
@@ -512,6 +542,10 @@ model StockItem {
   warehouseId   String?
   rackId        String?
   slotId        String?
+  // RQ18 (39_container.sql) — the box this stock is packed in, if any. The slot
+  // columns above stay the single source of WHERE the stock is; a container
+  // move writes both, in one transaction.
+  containerId   String?
   receivedDate  DateTime      @default(now())
   expiryDate    DateTime?
   notes         String?
@@ -522,6 +556,7 @@ model StockItem {
   warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
   rack        Rack?      @relation(fields: [rackId], references: [id])
   slot        Slot?      @relation(fields: [slotId], references: [id])
+  container   Container? @relation(fields: [containerId], references: [id], onDelete: SetNull)
   createdBy   User?      @relation("CreatedBy", fields: [createdById], references: [id])
 
   withdrawalRequestItems WithdrawalRequestItem[]
@@ -535,6 +570,7 @@ model StockItem {
   @@index([serialNumber])
   @@index([status])
   @@index([productId])
+  @@index([containerId])
 }
 
 // ─── Goods Receiving ──────────────────────────────────────────────────────────
@@ -918,6 +954,12 @@ model Shipment {
   taskId          String    @unique
   carrier         String?
   trackingNumber  String?
+  // Migration 42 - LOG-001. The shipping details, on the way out. `carrier` is
+  // the company, `carrierBrand` the brand it trades under; `warehouseNumber` is
+  // the number the CARRIER gives the consignment, not a WMS warehouse code.
+  awbNumber       String?
+  warehouseNumber String?
+  carrierBrand    String?
   handoverById    String?
   dispatchedById  String?   // user who confirmed dispatch (Goods Issue)
   receiverName    String?
@@ -1241,6 +1283,34 @@ enum LayoutObjectType {
   WORK_AREA
   STORAGE_AREA
   CUSTOM_AREA
+  // RQ8 (migration 37). Appended last on purpose: Postgres `ALTER TYPE ... ADD
+  // VALUE` without BEFORE/AFTER appends, so this order mirrors the live enum's
+  // sort order. A DOOR is a drawing of an opening — it must stay clear of racks,
+  // which layout-geometry.ts reports as a warning, never a block.
+  DOOR
+}
+
+/// RQ17 — what kind of physical container this is.
+enum ContainerType {
+  BOX
+  CARTON
+  CRATE
+  TOTE
+  PALLET
+}
+
+/// RQ18 — OPEN accepts stock in and out; CLOSED is sealed and refuses both
+/// until it is opened again. A closed box can still be moved.
+enum ContainerStatus {
+  OPEN
+  CLOSED
+}
+
+/// RQ13 — the approval state of a warehouse floor plan.
+enum LayoutStatus {
+  DRAFT
+  PENDING
+  PUBLISHED
 }
 
 enum LayoutObjectStatus {
@@ -1248,6 +1318,52 @@ enum LayoutObjectStatus {
   INACTIVE
   BLOCKED
   PLANNED
+}
+
+/// RQ17 / RQ18 — a physical box, crate, tote or pallet with its own code and QR.
+///
+/// A container is a place, like a slot: it has a location of its own and holds
+/// stock. Moving it moves what is inside (one transaction, audited), and a box
+/// may sit inside another box — a carton on a pallet.
+///
+/// What it is NOT: a quantity. Splitting a container moves whole stock rows into
+/// another container; splitting a quantity (100 pcs into 60 + 40) is RQ16 and
+/// stays out of this model on purpose.
+model Container {
+  id       String          @id @default(cuid())
+  code     String          @unique // BOX-000123, generated by the API
+  name     String?
+  type     ContainerType   @default(BOX)
+  status   ContainerStatus @default(OPEN)
+  notes    String?         @db.Text
+
+  /// The box this one is packed inside (a carton on a pallet).
+  parentContainerId String?
+  /// Where the container is. Mirrors the stock columns so both agree.
+  warehouseId String?
+  rackId      String?
+  slotId      String?
+  /// The container this one was split out of — the paper trail RQ18 asks for.
+  splitFromId String?
+
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
+
+  parent    Container?  @relation("ContainerTree", fields: [parentContainerId], references: [id], onDelete: SetNull)
+  children  Container[] @relation("ContainerTree")
+  splitFrom Container?  @relation("ContainerSplit", fields: [splitFromId], references: [id], onDelete: SetNull)
+  splitInto Container[] @relation("ContainerSplit")
+  warehouse Warehouse?  @relation(fields: [warehouseId], references: [id])
+  rack      Rack?       @relation(fields: [rackId], references: [id])
+  slot      Slot?       @relation(fields: [slotId], references: [id])
+  stockItems StockItem[]
+
+  @@index([slotId])
+  @@index([parentContainerId])
+  @@index([warehouseId])
 }
 
 model WarehouseLayout {
@@ -1260,6 +1376,17 @@ model WarehouseLayout {
   unitLabel   String    @default("m") // display only
   version     Int       @default(0) // optimistic lock for batch saves (mirrors FulfillmentTask.version)
   notes       String?   @db.Text
+  // RQ13 (38_layout_lifecycle.sql) — who signed this plan off, and when.
+  // DRAFT: being drawn, edits allowed. PENDING: waiting for approval, edits refused.
+  // PUBLISHED: approved; any later edit drops it back to DRAFT.
+  // Plans that existed before this feature start as DRAFT — nobody approved them.
+  status          LayoutStatus @default(DRAFT)
+  submittedAt     DateTime?
+  submittedById   String?
+  publishedAt     DateTime?
+  publishedById   String?
+  /// Why the last submission was sent back. Cleared when a new one is submitted.
+  rejectedReason  String?   @db.Text
   // F6 (35_layout_meters_per_unit.sql): metres per plan unit, and where the floor's
   // top-left corner sits on the plan (m). NULL = not saved from 3D yet.
   metersPerUnit Float?
@@ -1879,4 +2006,57 @@ model MrpRunLine {
 
   @@index([runId])
   @@index([productId])
+}
+
+// ── Migration 43 — the Thai Post address book ────────────────────────────────
+// Reference data, loaded by the migration and only read by the app: someone
+// types a postal code and the tambon, district and province come back instead
+// of being typed by hand. Three levels, because the ids nest that way
+// (province 2 digits → district 4 → tambon 6) and the source sheet repeats the
+// upper levels on every one of its 7,436 rows.
+
+model ThaiProvince {
+  id             String  @id @db.VarChar(2)
+  nameTh         String
+  nameEn         String
+  regionOfficial String?
+  region4        String?
+  regionTourism  String?
+  metroGroup     String?
+
+  districts ThaiDistrict[]
+}
+
+model ThaiDistrict {
+  id          String  @id @db.VarChar(4)
+  provinceId  String  @db.VarChar(2)
+  nameTh      String
+  nameEn      String
+  nameThShort String?
+  nameEnShort String?
+
+  province ThaiProvince @relation(fields: [provinceId], references: [id])
+  tambons  ThaiTambon[]
+
+  @@index([provinceId])
+}
+
+model ThaiTambon {
+  id          String  @id @db.VarChar(6)
+  districtId  String  @db.VarChar(4)
+  nameTh      String
+  nameEn      String
+  nameThShort String?
+  nameEnShort String?
+  /// The code to use.
+  postCode    String  @db.VarChar(5)
+  /// Every code this tambon may use, as the sheet gives it ("10220/10230").
+  postCodes   String?
+  /// The Thai sentence saying when the other code applies. 97 tambons have one.
+  postCodeRemark String?
+
+  district ThaiDistrict @relation(fields: [districtId], references: [id])
+
+  @@index([districtId])
+  @@index([postCode])
 }

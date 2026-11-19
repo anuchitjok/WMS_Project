@@ -48,11 +48,43 @@ interface ProductAvailable {
   id: string;
   code: string;
   name: string;
-  brand?: { id: string; name: string };
+  brand?: { id: string; name: string } | null;
   availableQty: number;
+  /** RQ22: false when the product's status keeps it out of requests. Absent on the older API shape → treat as requestable. */
+  requestable?: boolean;
 }
 
 interface Brand { id: string; name: string; }
+
+/** RQ22: why a brand cannot be picked, or null when it can. */
+type BrandWhy = 'noProducts' | 'noActive' | 'noStock' | null;
+
+/** A brand as the Brand dropdown shows it: always listed, disabled only when nothing can be requested. */
+interface BrandOption extends Brand {
+  disabled: boolean;
+  why: BrandWhy;
+}
+
+/** The older API shape had no `requestable` field and only ever returned ACTIVE rows. */
+const isRequestable = (p: ProductAvailable) => p.requestable !== false;
+
+/**
+ * RQ22 — the Brand dropdown used to be `brands.filter(has a product)`, so a brand
+ * whose products were all non-ACTIVE disappeared without a word (users saw only
+ * "ACER"). Every brand is listed now; one with no requestable SKU is disabled and
+ * carries the reason. A brand that has requestable SKUs but no stock stays
+ * selectable — exactly as before — and only shows a hint.
+ */
+function brandOptionsFrom(brands: Brand[], products: ProductAvailable[]): BrandOption[] {
+  return brands.map((b) => {
+    const mine = products.filter((p) => p.brand?.id === b.id);
+    const requestable = mine.filter(isRequestable);
+    const why: BrandWhy = requestable.length === 0
+      ? (mine.length === 0 ? 'noProducts' : 'noActive')
+      : requestable.every((p) => p.availableQty <= 0) ? 'noStock' : null;
+    return { ...b, disabled: requestable.length === 0, why };
+  });
+}
 
 interface ItemRow {
   brandId: string;
@@ -197,7 +229,7 @@ function ItemCard({
 }: {
   idx: number;
   item: ItemRow;
-  brands: Brand[];
+  brands: BrandOption[];
   brandProducts: ProductAvailable[];
   selectedProduct: ProductAvailable | undefined;
   canRemove: boolean;
@@ -252,11 +284,28 @@ function ItemCard({
                 </SelectValue>
               </SelectTrigger>
               <SelectContent>
+                {brands.length === 0 && (
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">{R.brandNone}</p>
+                )}
                 {brands.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                  // RQ22: a brand with nothing requestable is shown and disabled with its
+                  // reason, never dropped from the list.
+                  <SelectItem key={b.id} value={b.id} disabled={b.disabled}>
+                    <span className="flex w-full items-center justify-between gap-3">
+                      <span className="truncate">{b.name}</span>
+                      {b.why && (
+                        <span className="shrink-0 text-[11px] text-muted-foreground">
+                          {labelOf(R.brandWhy, b.why)}
+                        </span>
+                      )}
+                    </span>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {brands.some((b) => b.disabled) && (
+              <p className="text-xs text-muted-foreground">{R.brandGreyHint}</p>
+            )}
           </div>
 
           {/* SKU */}
@@ -481,14 +530,17 @@ export default function RequestsPage() {
     );
   }
 
-  // Brands that actually have at least one active product (derived from allProducts)
-  const brandsWithProducts = brands.filter((b) =>
-    allProducts.some((p) => p.brand?.id === b.id),
-  );
+  // RQ22: every brand is offered; the ones with nothing requestable are disabled
+  // with a reason instead of being filtered out of the list.
+  const brandOptions = brandOptionsFrom(brands, allProducts);
+  // Requestable SKUs that have no brand at all: unreachable through the Brand
+  // field (brand is mandatory), so say so rather than leave them invisible.
+  const unbrandedCount = allProducts.filter((p) => isRequestable(p) && !p.brand?.id).length;
 
   function productsForBrand(brandId: string) {
-    if (!brandId) return allProducts;
-    return allProducts.filter((p) => p.brand?.id === brandId);
+    const pool = allProducts.filter(isRequestable);
+    if (!brandId) return pool;
+    return pool.filter((p) => p.brand?.id === brandId);
   }
 
   function getProduct(productId: string) {
@@ -669,13 +721,20 @@ export default function RequestsPage() {
                   </Button>
                 </div>
 
+                {/* RQ22: SKUs with no brand can never be reached through the Brand field. */}
+                {unbrandedCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t(R.brandNoBrandItems, { count: unbrandedCount })}
+                  </p>
+                )}
+
                 <div className="space-y-4">
                   {items.map((item, idx) => (
                     <ItemCard
                       key={idx}
                       idx={idx}
                       item={item}
-                      brands={brandsWithProducts}
+                      brands={brandOptions}
                       brandProducts={productsForBrand(item.brandId)}
                       selectedProduct={getProduct(item.productId)}
                       canRemove={items.length > 1}

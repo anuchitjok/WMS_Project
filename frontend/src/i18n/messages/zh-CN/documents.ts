@@ -89,6 +89,7 @@ export const documents: Messages['documents'] = {
     found: '已找到：{name}',
     notFound: '未找到对应物品：{code}',
     openingRequest: '正在打开申请 {ref}',
+    openingBox: '正在打开货箱 {code}',
     resultTitle: '已找到库存物品',
     product: '产品',
     status: '状态',

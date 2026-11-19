@@ -354,11 +354,16 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
       <DialogTrigger render={<Button variant="outline" className="gap-1.5" />}>
         <Upload className="h-4 w-4" /> {I.button}
       </DialogTrigger>
-      <DialogContent className="w-full max-w-3xl sm:max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        <DialogHeader>
+      {/* Width/scroll convention (same as products, requests, relocation):
+          only a `sm:`-prefixed max-width — an unprefixed `max-w-*` replaces DialogContent's own
+          `max-w-[calc(100%-2rem)]`, which is what keeps the popup inside the viewport with a gutter —
+          and the scrolling lives on an inner body, not on the popup, so nothing is ever laid out
+          wider than the frame and then clipped by `overflow-x-hidden`. */}
+      <DialogContent className="w-full sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+        <DialogHeader className="shrink-0 px-6 pt-5 pb-4 border-b">
           <DialogTitle>{I.title}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-5">
+        <div className="min-w-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-5">
           {/* Receipt header — applies to the whole file. Order: Source → Reference → Warehouse → Notes */}
           <FormSection icon={Truck} title={I.headerSection}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -471,7 +476,8 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
                   </label>
                 </div>
               )}
-              <div className="rounded-lg border border-slate-200 overflow-auto max-h-[320px]">
+              {/* The file's own columns scroll inside this box, so a wide file never widens the dialog. */}
+              <div className="max-w-full overflow-auto rounded-lg border border-slate-200 max-h-[320px]">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0">
                     <tr className="bg-slate-50 border-b border-slate-100">
@@ -498,7 +504,8 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
             </FormSection>
           )}
         </div>
-        <DialogFooter>
+        {/* Plain div footer — DialogFooter's -mx-4 -mb-4 assumes p-4 on the popup, which p-0 removes. */}
+        <div className="shrink-0 flex flex-col-reverse gap-2 border-t bg-muted/50 px-6 py-4 sm:flex-row sm:justify-end">
           <Button
             onClick={confirm}
             disabled={busy || !preview || preview.summary.valid === 0 || (!!preview.alreadyImported && !reimport)}
@@ -507,7 +514,7 @@ function ImportReceivingDialog({ warehouses, onCreated }: { warehouses: any[]; o
             <CheckCircle2 className="h-4 w-4 mr-1.5" />
             {busy ? I.working : t(I.confirm, { count: preview?.summary.valid ?? 0 })}
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -540,7 +547,9 @@ function ReverseReceiptDialog({ gr, onDone }: { gr: any; onDone: () => void }) {
       <DialogTrigger render={<Button variant="outline" size="sm" className="gap-1 h-7 text-xs" />}>
         <Undo2 className="h-3.5 w-3.5" /> {V.button}
       </DialogTrigger>
-      <DialogContent className="w-full max-w-md sm:max-w-md">
+      {/* Short dialog: no inner scroll needed, but still only a `sm:` max-width so DialogContent
+          keeps its own `max-w-[calc(100%-2rem)]` viewport clamp on small screens. */}
+      <DialogContent className="w-full sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t(V.title, { ref: gr.refNumber })}</DialogTitle>
         </DialogHeader>
@@ -685,11 +694,12 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
       <DialogTrigger render={<Button className="bg-green-600 hover:bg-green-700 text-white gap-1.5" />}>
         <PackagePlus className="h-4 w-4" /> {F.receiveGoods}
       </DialogTrigger>
-      <DialogContent className="w-full max-w-2xl sm:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
-        <DialogHeader>
+      {/* Same width/scroll convention as the import dialog above. */}
+      <DialogContent className="w-full sm:max-w-2xl max-h-[90vh] overflow-hidden flex flex-col p-0 gap-0">
+        <DialogHeader className="shrink-0 px-6 pt-5 pb-4 border-b">
           <DialogTitle>{F.dialogTitle}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-5">
+        <div className="min-w-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-5">
           {/* Source */}
           <FormSection icon={Truck} title={F.sections.source}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -901,12 +911,13 @@ function ReceiveDialog({ products, warehouses, brands, vendors, onCreated }: {
             </div>
           </FormSection>
         </div>
-        <DialogFooter>
-          {missingForReceive.length > 0 && <p className="mr-auto self-center text-xs text-amber-700">{t(F.stillNeeded, { list: missingForReceive.join(', ') })}</p>}
+        {/* Plain div footer — see the import dialog. */}
+        <div className="shrink-0 flex flex-col-reverse gap-2 border-t bg-muted/50 px-6 py-4 sm:flex-row sm:items-center sm:justify-end">
+          {missingForReceive.length > 0 && <p className="text-xs text-amber-700 sm:mr-auto">{t(F.stillNeeded, { list: missingForReceive.join(', ') })}</p>}
           <Button onClick={submit} disabled={missingForReceive.length > 0 || busy} className="bg-green-600 hover:bg-green-700 text-white disabled:opacity-50">
             {busy ? F.creating : F.submit}
           </Button>
-        </DialogFooter>
+        </div>
       </DialogContent>
     </Dialog>
   );

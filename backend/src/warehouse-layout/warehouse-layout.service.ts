@@ -2,13 +2,18 @@ import { NOT_IN_LOCATION } from '../common/stock-presence';
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, ForbiddenException,
 } from '@nestjs/common';
-import { StockStatus, LayoutObjectType } from '@prisma/client';
+import { StockStatus, LayoutObjectType, LayoutStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { ApprovalService } from '../approval/approval.service';
 import {
   CreateLayoutDto, UpdateLayoutCanvasDto, CreateLayoutObjectDto, UpdateLayoutObjectDto,
-  BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto,
+  BatchSaveDto, DuplicateObjectDto, SaveRackPositionsDto, ResetRackPositionsDto, PlaceRacksDto,
 } from './dto/layout.dto';
 import { type Pt, type FloorRect, bbox, outlineOf, rectCorners, rectInPolygon, rectsOverlap } from '../warehouse-master/floor-geometry';
+import {
+  type PlanObject, type RackToPlace, type PlanFloor, type LayoutProblem,
+  PLAN_ROLE, countProblems, isWalkway, layoutProblems, planFloor, planRect, placeRacks as fitRacks,
+} from './layout-geometry';
 
 // Physical Layout is the *drawing* of the warehouse floor. It never owns
 // inventory and never writes Warehouse / Rack / Slot / StockItem — this service
@@ -44,7 +49,10 @@ export interface LayoutScope {
 
 @Injectable()
 export class WarehouseLayoutService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private approval: ApprovalService,
+  ) {}
 
   // Mirrors warehouse-master: detail carries a before/after pair.
   private audit(userId: string, action: string, entityType: string, entityId: string, before: any, after: any) {
@@ -99,6 +107,108 @@ export class WarehouseLayoutService {
     return obj;
   }
 
+  // ── Plan lifecycle (RQ13) ───────────────────────────────────────────────────
+  // DRAFT is the working state. PENDING is frozen while someone decides. An
+  // approved plan that is changed goes back to DRAFT, so the status never claims
+  // an approval that no longer covers what is on the screen. Nothing here reads
+  // or writes stock — approval governs the drawing only (decision C5).
+
+  private async layoutOfWarehouseOrThrow(warehouseId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
+    if (!layout) throw new NotFoundException('This warehouse has no layout');
+    return layout;
+  }
+
+  /** Guard every write to a plan. Returns nothing; throws when the plan is frozen. */
+  private async assertEditable(layoutId: string, userId: string) {
+    const layout = await this.getLayoutOrThrow(layoutId);
+    if (layout.status === LayoutStatus.PENDING) {
+      throw new ConflictException({
+        code: 'LAYOUT_PENDING_APPROVAL',
+        message: 'This plan is waiting for approval. Approve it or send it back before changing it.',
+      });
+    }
+    if (layout.status === LayoutStatus.PUBLISHED) {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layoutId },
+        data: { status: LayoutStatus.DRAFT, publishedAt: null, publishedById: null },
+      });
+      await this.audit(userId, 'LAYOUT_UNPUBLISHED', 'WarehouseLayout', layoutId, layout, after);
+    }
+  }
+
+  /** The same guard for endpoints addressed by warehouse. No plan yet = nothing to guard. */
+  private async assertEditableWarehouse(warehouseId: string, userId: string) {
+    const layout = await this.prisma.warehouseLayout.findFirst({
+      where: { warehouseId, isDeleted: false }, select: { id: true },
+    });
+    if (layout) await this.assertEditable(layout.id, userId);
+  }
+
+  /**
+   * Send the plan for approval. The chain itself is the shared approval engine
+   * (entityType 'WarehouseLayout'), so an admin can set steps and roles in
+   * Approval Rules; with no rule, one step open to whoever may decide.
+   */
+  async submitForApproval(warehouseId: string, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const layout = await this.layoutOfWarehouseOrThrow(warehouseId);
+    if (layout.status === LayoutStatus.PENDING) {
+      throw new ConflictException('This plan is already waiting for approval');
+    }
+    if (layout.status === LayoutStatus.PUBLISHED) {
+      throw new ConflictException('This plan is already approved. Change it first, then send it again.');
+    }
+    const drawn = await this.prisma.layoutObject.count({ where: { layoutId: layout.id, isDeleted: false } });
+    if (drawn === 0) throw new BadRequestException('Draw the plan before sending it for approval');
+
+    const after = await this.prisma.warehouseLayout.update({
+      where: { id: layout.id },
+      data: { status: LayoutStatus.PENDING, submittedAt: new Date(), submittedById: userId, rejectedReason: null },
+    });
+    const approval = await this.approval.ensurePendingInstance('WarehouseLayout', layout.id, userId);
+    await this.audit(userId, 'LAYOUT_SUBMITTED', 'WarehouseLayout', layout.id, layout, after);
+    return { layout: after, approval };
+  }
+
+  /**
+   * Approve or send back. The engine owns the rules — including that the person
+   * who asked for approval cannot grant it — and may hold the plan at PENDING
+   * when a rule has more than one step. The plan only becomes PUBLISHED once the
+   * whole chain is APPROVED.
+   */
+  async decideApproval(warehouseId: string, approved: boolean, notes: string | undefined, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const layout = await this.layoutOfWarehouseOrThrow(warehouseId);
+    if (layout.status !== LayoutStatus.PENDING) {
+      throw new ConflictException('This plan is not waiting for approval');
+    }
+    const instance: any = await this.approval.ensurePendingInstance(
+      'WarehouseLayout', layout.id, layout.submittedById ?? userId,
+    );
+    const step = instance.steps?.find((x: any) => x.status === 'PENDING')?.stepOrder ?? instance.currentStep ?? 1;
+    const decided: any = await this.approval.decide(instance.id, step, userId, approved, notes, { internal: true });
+
+    if (decided?.status === 'APPROVED') {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layout.id },
+        data: { status: LayoutStatus.PUBLISHED, publishedAt: new Date(), publishedById: userId, rejectedReason: null },
+      });
+      await this.audit(userId, 'LAYOUT_PUBLISHED', 'WarehouseLayout', layout.id, layout, after);
+      return { layout: after, approval: decided };
+    }
+    if (decided?.status === 'REJECTED') {
+      const after = await this.prisma.warehouseLayout.update({
+        where: { id: layout.id },
+        data: { status: LayoutStatus.DRAFT, submittedAt: null, submittedById: null, rejectedReason: notes?.trim() || 'Sent back without a reason' },
+      });
+      await this.audit(userId, 'LAYOUT_REJECTED', 'WarehouseLayout', layout.id, layout, after);
+      return { layout: after, approval: decided };
+    }
+    // More steps to go: the plan stays PENDING and the next approver is notified.
+    return { layout, approval: decided };
+  }
+
   // ── Reads ───────────────────────────────────────────────────────────────────
 
   // Returns the canvas plus a FLAT array of objects; the client assembles the
@@ -121,7 +231,10 @@ export class WarehouseLayoutService {
       where: { layoutId: layout.id, isDeleted: false },
       orderBy: [{ zIndex: 'asc' }, { displayOrder: 'asc' }, { createdAt: 'asc' }],
     });
-    return { warehouse, layout, objects };
+    // RQ13: the latest approval chain for this plan, so the screen can show who
+    // asked, who decided and when. Null until the plan is first submitted.
+    const approval = await this.approval.getByEntity('WarehouseLayout', layout.id);
+    return { warehouse, layout, objects, approval };
   }
 
   // ── Layout (canvas) ─────────────────────────────────────────────────────────
@@ -152,6 +265,7 @@ export class WarehouseLayoutService {
   async updateCanvas(layoutId: string, dto: UpdateLayoutCanvasDto, userId: string, scope?: LayoutScope) {
     const before = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     const after = await this.prisma.warehouseLayout.update({ where: { id: layoutId }, data: { ...dto } });
     await this.audit(userId, 'LAYOUT_UPDATED', 'WarehouseLayout', layoutId, before, after);
     return after;
@@ -212,6 +326,7 @@ export class WarehouseLayoutService {
   async createObject(layoutId: string, dto: CreateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     this.assertValidJson(dto.metadata);
     if (dto.parentObjectId) await this.validateParent(dto.parentObjectId, layout.id);
 
@@ -228,6 +343,7 @@ export class WarehouseLayoutService {
   async updateObject(id: string, dto: UpdateLayoutObjectDto, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
     this.assertValidJson(dto.metadata);
 
     if (dto.parentObjectId !== undefined && dto.parentObjectId !== null) {
@@ -249,6 +365,7 @@ export class WarehouseLayoutService {
   async deleteObject(id: string, cascade: boolean, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
 
     const childCount = await this.prisma.layoutObject.count({
       where: { parentObjectId: id, isDeleted: false },
@@ -286,6 +403,7 @@ export class WarehouseLayoutService {
   async batchSave(layoutId: string, dto: BatchSaveDto, userId: string, scope?: LayoutScope) {
     const layout = await this.getLayoutOrThrow(layoutId);
     await this.assertLayoutInScope(layoutId, scope);
+    await this.assertEditable(layoutId, userId);
     if (layout.version !== dto.version) {
       throw new ConflictException(
         `This layout changed elsewhere (your version ${dto.version}, current ${layout.version}). Reload before saving.`,
@@ -389,6 +507,7 @@ export class WarehouseLayoutService {
 
   async saveRackPositions(warehouseId: string, dto: SaveRackPositionsDto, userId: string, scope?: LayoutScope) {
     this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
     const wh = await this.prisma.warehouse.findFirst({
       where: { id: warehouseId, isDeleted: false },
       select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
@@ -522,6 +641,7 @@ export class WarehouseLayoutService {
   // any 3D drawing that has objects under it.
   async resetRackPositions(warehouseId: string, dto: ResetRackPositionsDto, userId: string, scope?: LayoutScope) {
     this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
     const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
     if (!layout) throw new NotFoundException('This warehouse has no layout');
     if (layout.version !== dto.version) throw new ConflictException('This layout changed elsewhere. Reload before saving.');
@@ -550,12 +670,188 @@ export class WarehouseLayoutService {
     return result;
   }
 
+  // ─── RQ10: geometry problems on the 2D plan ─────────────────────────────────
+  //
+  // READ ONLY. Returns warnings; it is a separate endpoint precisely so that
+  // saving a plan never depends on it. C5 "Separate": the layout is a drawing,
+  // and a wrong drawing does not make stock wrong, so the editor must be able to
+  // save an imperfect plan and come back to it. Nothing here refuses a save and
+  // nothing here writes at all — not even an audit row.
+  // The return type is explicit on purpose. Without it TypeScript infers the
+  // union of the two returns below, and the no-layout one gives `problems: never[]`
+  // — so `res.problems[0].severity` stops type-checking for every caller and for
+  // the specs. It is also the contract the editor is written against, so it should
+  // be stated here rather than inferred.
+  async problems(
+    warehouseId: string,
+    scope?: LayoutScope,
+  ): Promise<{
+    warehouseId: string;
+    layoutId: string | null;
+    floor: PlanFloor;
+    counts: ReturnType<typeof countProblems>;
+    problems: LayoutProblem[];
+  }> {
+    this.assertWarehouseInScope(warehouseId, scope);
+    const wh = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, isDeleted: false },
+      select: { id: true, code: true, name: true, lengthCm: true, widthCm: true, floorOutline: true },
+    });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    const layout = await this.prisma.warehouseLayout.findFirst({ where: { warehouseId, isDeleted: false } });
+    if (!layout) {
+      return {
+        warehouseId, layoutId: null, floor: { source: 'NONE' as const, points: null },
+        counts: countProblems([]), problems: [],
+      };
+    }
+    const objects = await this.prisma.layoutObject.findMany({
+      where: { layoutId: layout.id, isDeleted: false },
+      orderBy: this.sameOrder,
+    });
+    const floor = planFloor(wh, layout);
+    const problems = layoutProblems(objects as PlanObject[], floor.points);
+    return { warehouseId, layoutId: layout.id, floor, counts: countProblems(problems), problems };
+  }
+
+  // ─── RQ27: place a batch of unplaced racks on the plan ──────────────────────
+  //
+  // DRAWINGS ONLY. It creates LayoutObject rows pointing at racks that already
+  // exist, and bumps WarehouseLayout. No Rack is created, renamed, resized or
+  // moved; no Slot and no StockItem is touched. Moving real stock stays with
+  // Putaway and the Relocation Request workflow.
+  //
+  // Footprints come from the Rack Type (decision C3), falling back to a legacy
+  // rack's own size, so what is drawn is the size the rack really is.
+  async placeRacks(warehouseId: string, dto: PlaceRacksDto, userId: string, scope?: LayoutScope) {
+    this.assertWarehouseInScope(warehouseId, scope);
+    await this.assertEditableWarehouse(warehouseId, userId);
+    const wh = await this.prisma.warehouse.findFirst({
+      where: { id: warehouseId, isDeleted: false },
+      select: { id: true, lengthCm: true, widthCm: true, floorOutline: true },
+    });
+    if (!wh) throw new NotFoundException('Warehouse not found');
+
+    const racks = await this.prisma.rack.findMany({
+      where: {
+        warehouseId, isDeleted: false, isActive: true,
+        ...(dto.rackIds?.length ? { id: { in: dto.rackIds } } : {}),
+      },
+      select: {
+        id: true, code: true, lengthCm: true, widthCm: true,
+        rackTypeMaster: { select: { lengthCm: true, widthCm: true } },
+      },
+      orderBy: { code: 'asc' },
+    });
+    if (dto.rackIds?.length) {
+      const found = new Set(racks.map((r) => r.id));
+      const unknown = dto.rackIds.filter((id) => !found.has(id));
+      if (unknown.length) throw new BadRequestException(`Not an active rack of this warehouse: ${codeList(unknown)}`);
+    }
+
+    const layout = await this.prisma.warehouseLayout.findUnique({ where: { warehouseId } });
+    const live = layout && !layout.isDeleted ? layout : null;
+    if (live ? live.version !== dto.version : dto.version !== undefined && dto.version !== null) {
+      throw new ConflictException('This layout changed elsewhere. Reload before saving.');
+    }
+
+    const existing = live
+      ? await this.prisma.layoutObject.findMany({ where: { layoutId: live.id, isDeleted: false }, orderBy: this.sameOrder })
+      : [];
+    const drawn = new Set(existing.filter((o) => o.objectType === LayoutObjectType.RACK && o.rackId).map((o) => o.rackId!));
+
+    // Same frame as the 3D arrange path: metres per plan unit and the floor's
+    // top-left anchor. Recorded here when the plan has none yet, exactly as
+    // saveRackPositions does, so 3D and the plan keep agreeing afterwards.
+    const mpu = live?.metersPerUnit ?? dto.metersPerUnit ?? 1;
+    const originX = live?.floorOriginX ?? 0;
+    const originZ = live?.floorOriginZ ?? 0;
+    const widthUnits = live?.widthUnits ?? 100;
+    const heightUnits = live?.heightUnits ?? 60;
+    const floor = planFloor(wh, { widthUnits, heightUnits, metersPerUnit: mpu, floorOriginX: originX, floorOriginZ: originZ });
+
+    const skipped: { rackId: string; code: string; reason: 'ALREADY_DRAWN' | 'NO_SIZE' | 'NO_ROOM' }[] = [];
+    const todo: RackToPlace[] = [];
+    for (const r of racks) {
+      if (drawn.has(r.id)) { skipped.push({ rackId: r.id, code: r.code, reason: 'ALREADY_DRAWN' }); continue; }
+      const L = r.rackTypeMaster?.lengthCm ?? r.lengthCm;
+      const W = r.rackTypeMaster?.widthCm ?? r.widthCm;
+      if (!L || !W || L <= 0 || W <= 0) { skipped.push({ rackId: r.id, code: r.code, reason: 'NO_SIZE' }); continue; }
+      todo.push({ rackId: r.id, code: r.code, width: L / 100 / mpu, height: W / 100 / mpu });
+    }
+
+    // A new rack may stand inside a zone or an area, but not on another drawn
+    // object, an aisle, a door or a zone marked as a walkway.
+    const blockers: FloorRect[] = existing
+      .filter((o) => PLAN_ROLE[o.objectType] === 'SOLID' || PLAN_ROLE[o.objectType] === 'KEEP_CLEAR' || isWalkway(o))
+      .map((o) => planRect(o));
+
+    const fit = fitRacks(todo, floor.points, blockers, { gap: dto.gap ?? 0.5 });
+    for (const r of fit.noRoom) skipped.push({ rackId: r.rackId, code: r.code, reason: 'NO_ROOM' });
+
+    if (dto.dryRun) {
+      return {
+        dryRun: true, layout: live, objects: existing,
+        placed: fit.placed.map((p) => ({ ...p, objectId: null })),
+        skipped,
+      };
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const lay = live
+        ?? (layout
+          ? await tx.warehouseLayout.update({ where: { id: layout.id }, data: { isDeleted: false, deletedAt: null, deletedBy: null } })
+          : await tx.warehouseLayout.create({ data: { warehouseId } }));
+
+      const made: { rackId: string; code: string; objectId: string; x: number; y: number; width: number; height: number }[] = [];
+      let maxX = 0, maxY = 0;
+      for (const p of fit.placed) {
+        const o = await tx.layoutObject.create({
+          data: {
+            layoutId: lay.id, objectType: LayoutObjectType.RACK, name: p.code, code: p.code, rackId: p.rackId,
+            x: p.x, y: p.y, width: p.width, height: p.height, rotation: 0,
+            metadata: JSON.stringify({ source: 'auto-place' }),
+          },
+        });
+        made.push({ rackId: p.rackId, code: p.code, objectId: o.id, x: p.x, y: p.y, width: p.width, height: p.height });
+        maxX = Math.max(maxX, p.x + p.width); maxY = Math.max(maxY, p.y + p.height);
+      }
+      if (floor.points) for (const [x, y] of floor.points) { maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+
+      const after = await tx.warehouseLayout.update({
+        where: { id: lay.id },
+        data: {
+          version: { increment: 1 },
+          ...(lay.metersPerUnit == null ? { metersPerUnit: mpu } : {}),
+          ...(lay.floorOriginX == null || lay.floorOriginZ == null ? { floorOriginX: originX, floorOriginZ: originZ } : {}),
+          widthUnits: Math.max(lay.widthUnits, Math.ceil(maxX + 2)),
+          heightUnits: Math.max(lay.heightUnits, Math.ceil(maxY + 2)),
+        },
+      });
+      const objects = await tx.layoutObject.findMany({ where: { layoutId: lay.id, isDeleted: false }, orderBy: this.sameOrder });
+      return { layout: after, objects, made };
+    });
+
+    await this.audit(
+      userId, 'LAYOUT_RACKS_PLACED', 'WarehouseLayout', result.layout.id,
+      { version: live?.version ?? null },
+      {
+        version: result.layout.version, considered: racks.length,
+        placed: result.made.length, skipped: skipped.length,
+        reasons: skipped.reduce<Record<string, number>>((a, s) => ({ ...a, [s.reason]: (a[s.reason] ?? 0) + 1 }), {}),
+      },
+    );
+    return { dryRun: false, layout: result.layout, objects: result.objects, placed: result.made, skipped };
+  }
+
   // ─── Sprint 5: duplicate ────────────────────────────────────────────────────
   // Copies drop slotId/rackId and code: a WMS slot has exactly one physical bin,
   // so a duplicate must never inherit the original's link or its location code.
   async duplicateObject(id: string, dto: DuplicateObjectDto, userId: string, scope?: LayoutScope) {
     const source = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(source.layoutId, scope);
+    await this.assertEditable(source.layoutId, userId);
     const dx = dto.offsetX ?? 2;
     const dy = dto.offsetY ?? 2;
 
@@ -612,6 +908,7 @@ export class WarehouseLayoutService {
   async linkObject(id: string, dto: { slotId?: string; rackId?: string }, userId: string, scope?: LayoutScope) {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
+    await this.assertEditable(before.layoutId, userId);
     const wantSlot = !!dto.slotId;
     const wantRack = !!dto.rackId;
 
@@ -676,6 +973,7 @@ export class WarehouseLayoutService {
     const before = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(before.layoutId, scope);
     if (!before.slotId && !before.rackId) return before;
+    await this.assertEditable(before.layoutId, userId);
     const after = await this.prisma.layoutObject.update({
       where: { id },
       data: { slotId: null, rackId: null },
@@ -771,6 +1069,7 @@ export class WarehouseLayoutService {
   async generateBinsFromRack(id: string, userId: string, scope?: LayoutScope) {
     const parent = await this.getObjectOrThrow(id);
     await this.assertLayoutInScope(parent.layoutId, scope);
+    await this.assertEditable(parent.layoutId, userId);
     if (parent.objectType !== LayoutObjectType.RACK) {
       throw new ConflictException('Only a rack object can generate bins');
     }

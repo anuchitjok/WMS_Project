@@ -29,7 +29,12 @@ import { DeliveryMethodBadge } from '@/components/requests/delivery-method-badge
 type FMsgs = Messages['fulfillment'];
 
 const BLANK_PACK_FORM = { cartonCount: 1, totalWeight: '', notes: '' };
-const BLANK_SHIP_FORM = { carrier: '', trackingNumber: '', receiverName: '', notes: '' };
+// LOG-001 — carrier is the company, carrierBrand the brand it trades under;
+// warehouseNumber is the number the CARRIER gives this consignment.
+const BLANK_SHIP_FORM = {
+  carrier: '', carrierBrand: '', trackingNumber: '', awbNumber: '', warehouseNumber: '',
+  receiverName: '', notes: '',
+};
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -911,9 +916,22 @@ export default function FulfillmentBoardPage() {
                   onChange={(e) => setShipForm((f) => ({ ...f, carrier: e.target.value }))}
                   placeholder="DHL, FedEx, J&T…" />
               </div>
+              <div className="space-y-1"><Label className="text-xs">{F.shipping.carrierBrand}</Label>
+                <Input value={shipForm.carrierBrand}
+                  onChange={(e) => setShipForm((f) => ({ ...f, carrierBrand: e.target.value }))} />
+              </div>
               <div className="space-y-1"><Label className="text-xs">{F.shipping.tracking}</Label>
                 <Input value={shipForm.trackingNumber}
                   onChange={(e) => setShipForm((f) => ({ ...f, trackingNumber: e.target.value }))} />
+              </div>
+              <div className="space-y-1"><Label className="text-xs">{F.shipping.awb}</Label>
+                <Input value={shipForm.awbNumber}
+                  onChange={(e) => setShipForm((f) => ({ ...f, awbNumber: e.target.value }))} />
+              </div>
+              <div className="space-y-1 col-span-2"><Label className="text-xs">{F.shipping.warehouseNumber}</Label>
+                <Input value={shipForm.warehouseNumber}
+                  onChange={(e) => setShipForm((f) => ({ ...f, warehouseNumber: e.target.value }))} />
+                <p className="text-[11px] text-slate-400">{F.shipping.logisticsLater}</p>
               </div>
             </div>
             <div className="space-y-1"><Label className="text-xs">{F.shipping.receiver}</Label>

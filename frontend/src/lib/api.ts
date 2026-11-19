@@ -396,6 +396,15 @@ export const warehouseApi = {
   brandsManaged: () => request<any[]>('/warehouse/brands/managed'),
   createBrand: (dto: { code?: string; name: string; contact?: string }) => request<any>('/warehouse/brands', { method: 'POST', body: JSON.stringify(dto) }),
   updateBrand: (id: string, dto: { name?: string; contact?: string; isActive?: boolean }) => request<any>(`/warehouse/brands/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
+
+  // MDM-003 — product families. `families` is the short list a product form
+  // offers; `familiesManaged` carries the counts the master screen shows.
+  families: () => request<{ id: string; code: string; name: string; parentId: string | null }[]>('/warehouse/product-families'),
+  familiesManaged: () => request<any[]>('/warehouse/product-families/managed'),
+  createFamily: (dto: { code?: string; name: string; description?: string; parentId?: string }) =>
+    request<any>('/warehouse/product-families', { method: 'POST', body: JSON.stringify(dto) }),
+  updateFamily: (id: string, dto: { name?: string; description?: string; parentId?: string | null; isActive?: boolean }) =>
+    request<any>(`/warehouse/product-families/${id}`, { method: 'PATCH', body: JSON.stringify(dto) }),
   deleteBrand: (id: string) => request<any>(`/warehouse/brands/${id}`, { method: 'DELETE' }),
   // Vendor Master
   vendorsManaged: () => request<any[]>('/warehouse/vendors/managed'),
@@ -428,10 +437,14 @@ export const warehouseMasterApi = {
 
 // Physical Warehouse Layout (Sprint 3 API). Read-only surface is all the Floor
 // Plan tab needs today; the write calls exist for the Sprint 5 editor.
+// RQ8: DOOR is appended last, mirroring the Prisma enum — Postgres
+// `ALTER TYPE ... ADD VALUE` without BEFORE/AFTER appends, so the live enum sorts
+// it last too. Like AISLE it is a "keep clear" opening, not an area.
 export type LayoutObjectType =
   | 'ZONE' | 'RACK' | 'SHELF' | 'BIN' | 'AISLE'
   | 'RECEIVING_AREA' | 'SHIPPING_AREA' | 'STAGING_AREA'
-  | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA';
+  | 'QC_AREA' | 'WORK_AREA' | 'STORAGE_AREA' | 'CUSTOM_AREA'
+  | 'DOOR';
 export type LayoutObjectStatus = 'ACTIVE' | 'INACTIVE' | 'BLOCKED' | 'PLANNED';
 
 export interface LayoutObject {
@@ -452,6 +465,9 @@ export interface LayoutObject {
   updatedAt: string;
 }
 
+/** RQ13 — where a floor plan is in its approval. */
+export type LayoutStatus = 'DRAFT' | 'PENDING' | 'PUBLISHED';
+
 export interface WarehouseLayout {
   id: string;
   warehouseId: string;
@@ -466,6 +482,23 @@ export interface WarehouseLayout {
   metersPerUnit?: number | null;
   floorOriginX?: number | null;
   floorOriginZ?: number | null;
+  /** RQ13 lifecycle. DRAFT until the plan has been through an approval. */
+  status?: LayoutStatus;
+  submittedAt?: string | null;
+  submittedById?: string | null;
+  publishedAt?: string | null;
+  publishedById?: string | null;
+  rejectedReason?: string | null;
+}
+
+/** RQ13 — the approval chain for a plan (the shared engine, entityType 'WarehouseLayout'). */
+export interface LayoutApproval {
+  id: string;
+  status: string; // PENDING | APPROVED | REJECTED | CANCELLED | ESCALATED
+  requestedById?: string | null;
+  completedById?: string | null;
+  completedAt?: string | null;
+  steps?: { stepOrder: number; stepName: string; status: string; actorName?: string | null; decidedAt?: string | null; notes?: string | null }[];
 }
 
 /** F6: one rack's position from the 3D arrange mode (metres; rotation 0/90/180/270). */
@@ -475,6 +508,8 @@ export interface LayoutResponse {
   warehouse: { id: string; code: string; name: string; isActive: boolean };
   layout: WarehouseLayout | null; // null = this warehouse has no layout yet
   objects: LayoutObject[];
+  /** RQ13: the latest approval chain, or null before the plan is first sent. */
+  approval?: LayoutApproval | null;
 }
 
 export const layoutApi = {
@@ -485,6 +520,14 @@ export const layoutApi = {
   /** F6: back to auto layout — removes the rack drawings 3D created. */
   resetRackPositions: (warehouseId: string, version: number) =>
     request<{ layout: WarehouseLayout; objects: LayoutObject[]; removed: number; kept: number }>(`/warehouse-layout/${warehouseId}/rack-positions/reset`, { method: 'POST', body: JSON.stringify({ version }) }),
+  /** RQ13: send the plan for approval (DRAFT -> PENDING). It is frozen while it waits. */
+  submitPlan: (warehouseId: string) =>
+    request<{ layout: WarehouseLayout; approval: LayoutApproval }>(`/warehouse-layout/${warehouseId}/submit`, { method: 'POST' }),
+  /** RQ13: approve the plan (-> PUBLISHED) or send it back (-> DRAFT). Never the person who sent it. */
+  decidePlan: (warehouseId: string, approved: boolean, notes?: string) =>
+    request<{ layout: WarehouseLayout; approval: LayoutApproval }>(`/warehouse-layout/${warehouseId}/decision`, {
+      method: 'POST', body: JSON.stringify({ approved, notes }),
+    }),
   create: (warehouseId: string, dto: Partial<WarehouseLayout> = {}) =>
     request<WarehouseLayout>(`/warehouse-layout/${warehouseId}`, { method: 'POST', body: JSON.stringify(dto) }),
   updateCanvas: (layoutId: string, dto: Partial<WarehouseLayout>) =>
@@ -512,7 +555,78 @@ export const layoutApi = {
     request<{ created: number; skipped: number }>(`/warehouse-layout/objects/${id}/generate-bins`, { method: 'POST' }),
   occupancy: (warehouseId: string) =>
     request<LayoutOccupancy[]>(`/warehouse-layout/${warehouseId}/occupancy`),
+  /**
+   * RQ10: geometry warnings for the plan. READ ONLY, and every problem is a
+   * WARNING — decision C5 ("the plan is a drawing") means a wrong drawing never
+   * blocks a save, so nothing in the editor may depend on this call succeeding.
+   */
+  problems: (warehouseId: string) =>
+    request<LayoutProblemsResponse>(`/warehouse-layout/${warehouseId}/problems`),
+  /**
+   * RQ27: draw the warehouse's unplaced racks on the plan in one go.
+   * `version` is the layout version last read (omit when there is no layout yet);
+   * a stale one comes back as 409. `dryRun` computes the positions and writes
+   * nothing — always preview before committing.
+   */
+  placeRacks: (warehouseId: string, dto: { version?: number; rackIds?: string[]; gap?: number; metersPerUnit?: number; dryRun?: boolean } = {}) =>
+    request<PlaceRacksResult>(`/warehouse-layout/${warehouseId}/place-racks`, { method: 'POST', body: JSON.stringify(dto) }),
 };
+
+// ─── RQ10: plan geometry problems ───────────────────────────────────────────────
+
+export type LayoutProblemKind =
+  | 'OUT_OF_BOUNDS' | 'OVERLAP' | 'BLOCKS_AISLE' | 'BLOCKS_DOOR' | 'BLOCKS_WALKWAY';
+
+/**
+ * Where the boundary the objects were checked against came from.
+ * `OUTLINE` the real building outline · `CANVAS` the plan's own extent, for a
+ * hand-drawn plan with no saved scale · `NONE` no extent is known, so the
+ * boundary check was SKIPPED and only overlaps are reported.
+ */
+export type LayoutFloorSource = 'OUTLINE' | 'CANVAS' | 'NONE';
+
+export interface LayoutProblem {
+  kind: LayoutProblemKind;
+  /** Always 'WARNING'. Nothing here refuses a save. */
+  severity: 'WARNING';
+  objectId: string;
+  objectType: LayoutObjectType;
+  objectName: string;
+  objectCode: string | null;
+  /** The second object — present on every kind except OUT_OF_BOUNDS. */
+  otherId?: string;
+  otherType?: LayoutObjectType;
+  otherName?: string;
+  otherCode?: string | null;
+  /** Server's plain-English explanation. The UI translates by `kind` instead. */
+  message: string;
+}
+
+export interface LayoutProblemsResponse {
+  warehouseId: string;
+  /** null when this warehouse has no layout yet. */
+  layoutId: string | null;
+  floor: { source: LayoutFloorSource; points: [number, number][] | null };
+  counts: {
+    total: number; outOfBounds: number; overlap: number;
+    blocksAisle: number; blocksDoor: number; blocksWalkway: number;
+  };
+  problems: LayoutProblem[];
+}
+
+// ─── RQ27: bulk rack placement ─────────────────────────────────────────────────
+
+/** Why a rack was not drawn. Never silent, and never stacked on top of another. */
+export type RackPlacementSkipReason = 'ALREADY_DRAWN' | 'NO_SIZE' | 'NO_ROOM';
+
+export interface PlaceRacksResult {
+  dryRun: boolean;
+  layout: WarehouseLayout | null;
+  objects: LayoutObject[];
+  /** `objectId` is null on a dry run — nothing was written. */
+  placed: { rackId: string; code: string; objectId: string | null; x: number; y: number; width: number; height: number }[];
+  skipped: { rackId: string; code: string; reason: RackPlacementSkipReason }[];
+}
 
 // Live per-bin rollup, derived from StockItem at read time. Nothing here is
 // stored on the layout — the WMS remains the only inventory system.
@@ -556,8 +670,34 @@ export const receivingApi = {
 };
 
 // Putaway
+/** RQ15 — one place the item could go, with the reason it is being offered. */
+export interface PutawaySuggestion {
+  slotId: string; slotCode: string; rackId: string; rackCode: string; zone: string | null;
+  warehouseId: string; warehouseCode: string;
+  capacity: number; used: number; free: number;
+  /** true / false by size, or null when the product or the slot has no size. */
+  fits: boolean | null;
+  unitsBySize: number | null;
+  holdsSameProduct: boolean;
+  reason: 'SAME_PRODUCT' | 'EMPTY' | 'HAS_ROOM';
+}
+
+export interface PutawaySuggestions {
+  item: { id: string; quantity: number; productCode: string | null; productName: string | null;
+          box: { lengthCm: number | null; widthCm: number | null; heightCm: number | null } };
+  warehouseId: string | null;
+  slotsConsidered: number;
+  hasProductSize: boolean;
+  need: { quantity: number; unitVolumeM3: number | null; totalVolumeM3: number | null; unitFootprintM2: number | null };
+  suggestions: PutawaySuggestion[];
+  skipped: { full: number; blocked: number; tooSmall: number };
+}
+
 export const putawayApi = {
   pending: () => request<any[]>('/putaway/pending'),
+  /** RQ15: room this quantity needs + the slots that suit it. Read only. */
+  suggestions: (stockItemId: string, warehouseId?: string) =>
+    request<PutawaySuggestions>(`/putaway/${stockItemId}/suggestions${warehouseId ? `?warehouseId=${encodeURIComponent(warehouseId)}` : ''}`),
   confirm: (stockItemId: string, loc: { warehouseId?: string; rackId?: string; slotId?: string }) =>
     request<any>(`/putaway/${stockItemId}/confirm`, { method: 'PATCH', body: JSON.stringify(loc) }),
   fitCheck: (slotId: string, box: { length: number; width: number; height: number }) =>
@@ -607,7 +747,11 @@ export const fulfillmentApi = {
     request<any>(`/fulfillment/${taskId}/packing/complete`, { method: 'POST' }),
 
   // Dispatch (Goods Issue)
-  createShipment: (taskId: string, dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string }) =>
+  /** LOG-001 — change the shipping details after the shipment was raised, until it is delivered. */
+  updateLogistics: (shipmentId: string, dto: { carrier?: string | null; carrierBrand?: string | null; trackingNumber?: string | null; awbNumber?: string | null; warehouseNumber?: string | null }) =>
+    request<any>(`/fulfillment/shipments/${shipmentId}/logistics`, { method: 'PATCH', body: JSON.stringify(dto) }),
+  /** LOG-001 — the shipping details may also be filled in later, see updateLogistics. */
+  createShipment: (taskId: string, dto: { carrier?: string; trackingNumber?: string; receiverName?: string; notes?: string; awbNumber?: string; warehouseNumber?: string; carrierBrand?: string }) =>
     request<any>(`/fulfillment/${taskId}/shipment`, { method: 'POST', body: JSON.stringify(dto) }),
   confirmDispatch: (shipmentId: string) =>
     request<any>(`/fulfillment/shipments/${shipmentId}/dispatch`, { method: 'POST' }),
@@ -634,7 +778,13 @@ export interface IssuedUnitRow {
 }
 
 export const rmaApi = {
-  pendingUsage: () => request<any[]>('/rma/pending-usage'),
+  // RQ23: an envelope, not a bare array — `scope` tells the page whether it is
+  // showing everyone's issued items or only the viewer's own, so an empty list
+  // can explain itself. `pendingElsewhere` is only set when scope is 'own'.
+  pendingUsage: () =>
+    request<{ rows: any[]; scope: 'own' | 'all'; pendingElsewhere: boolean | null }>(
+      '/rma/pending-usage',
+    ),
   confirmUsage: (requestId: string, usage: string, notes?: string) =>
     request<any>(`/rma/${requestId}/usage`, { method: 'PATCH', body: JSON.stringify({ usage, notes }) }),
   /** Phase 5: issued units of a request and what has been recorded for each. */
@@ -813,6 +963,48 @@ export const scrapApi = {
     request<any>(`/scrap/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status, ...extra }) }),
 };
 
+/**
+ * Requirement 32 — a destination the stock row can actually go into.
+ *
+ * Two ceilings, kept apart: `places` is how many stock rows the slot holds
+ * (`Slot.capacity`), `pieces` is how many pieces it holds in total
+ * (`Slot.maxQuantity`). `null` on either means nobody set a figure, so that one
+ * does not limit anything. `maxMovable` is already the smaller of the row's own
+ * quantity and the room in pieces.
+ */
+export interface RelocationDestination {
+  slotId: string;
+  code: string;
+  rackCode: string;
+  status: string;
+  capacity: number;
+  placesUsed: number;
+  placesHeld: number;
+  placesFree: number | null;
+  maxQuantity: number | null;
+  piecesOnHand: number;
+  piecesHeld: number;
+  piecesFree: number | null;
+  maxMovable: number;
+}
+/** Requirement 32 step 1 — one line of the searchable part-number list. */
+export interface RelocationProduct {
+  id: string;
+  code: string;
+  name: string;
+  unit: string | null;
+  /** Movable quantity in this warehouse, across every location. */
+  quantity: number;
+  rows: number;
+  slots: number;
+}
+export interface RelocationDestinations {
+  row: { id: string; quantity: number; status: string; serialNumber: string | null; product: any; slot: { id: string; code: string } | null };
+  slots: RelocationDestination[];
+  /** Slots left out because they are full, blocked or retired. */
+  hidden: number;
+}
+
 // PR7 Location Relocation Request — stock moves only on complete().
 export const relocationApi = {
   list: (q: { status?: string; warehouseId?: string; page?: number; limit?: number } = {}) => {
@@ -822,8 +1014,20 @@ export const relocationApi = {
     return request<{ data: any[]; total: number; page: number; limit: number }>(`/relocations${qs ? `?${qs}` : ''}`);
   },
   get: (id: string) => request<any>(`/relocations/${id}`),
-  movable: (warehouseId: string, slotId: string) =>
-    request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&slotId=${encodeURIComponent(slotId)}`),
+  /** Requirement 32 step 1 — part numbers with stock this screen can move. */
+  products: (warehouseId: string, q?: string) =>
+    request<RelocationProduct[]>(
+      `/relocations/products?warehouseId=${encodeURIComponent(warehouseId)}${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+    ),
+  /** Everything movable in one slot, or everywhere one product is. */
+  movable: (warehouseId: string, where: { slotId?: string; productId?: string }) => {
+    const key = where.slotId ? 'slotId' : 'productId';
+    const val = where.slotId ?? where.productId ?? '';
+    return request<any[]>(`/relocations/movable?warehouseId=${encodeURIComponent(warehouseId)}&${key}=${encodeURIComponent(val)}`);
+  },
+  /** Requirement 32 — only the slots that can take this row, with the room each has left. */
+  destinations: (warehouseId: string, stockItemId: string) =>
+    request<RelocationDestinations>(`/relocations/destinations?warehouseId=${encodeURIComponent(warehouseId)}&stockItemId=${encodeURIComponent(stockItemId)}`),
   create: (body: { warehouseId: string; reason?: string; lines: { stockItemId: string; toSlotId: string; quantity: number }[] }) =>
     request<any>('/relocations', { method: 'POST', body: JSON.stringify(body) }),
   approve: (id: string) => request<any>(`/relocations/${id}/approve`, { method: 'POST' }),
@@ -950,8 +1154,53 @@ export const scanApi = {
 };
 
 // ─── Labels (PDF) ────────────────────────────────────────────────────────────
+// ─── Thai Post address book (migration 43) ───────────────────────────────────
+// Reference data, read only: type a postal code or a place name and get the
+// tambon with its district and province.
+export interface ThaiProvince {
+  id: string; nameTh: string; nameEn: string;
+  regionOfficial: string | null; region4: string | null;
+  regionTourism: string | null; metroGroup: string | null;
+}
+export interface ThaiDistrict {
+  id: string; provinceId: string; nameTh: string; nameEn: string;
+  nameThShort: string | null; nameEnShort: string | null;
+}
+export interface ThaiTambon {
+  id: string;
+  nameTh: string; nameEn: string;
+  nameThShort: string | null; nameEnShort: string | null;
+  postCode: string;
+  /** Every code this tambon may use, as Thai Post gives it ("10220/10230"). */
+  postCodes: string | null;
+  /** Thai sentence saying when the other code applies. */
+  postCodeRemark: string | null;
+  district: Omit<ThaiDistrict, 'provinceId'> & { province: ThaiProvince };
+}
+export interface ThaiAddressSearch {
+  query: string;
+  mode: 'empty' | 'postCode' | 'name';
+  total: number;
+  rows: ThaiTambon[];
+}
+
+export const thaiAddressApi = {
+  search: (q: string, limit?: number) =>
+    request<ThaiAddressSearch>(`/thai-addresses/search?q=${encodeURIComponent(q)}${limit ? `&limit=${limit}` : ''}`),
+  byPostCode: (postCode: string) =>
+    request<{ postCode: string; total: number; rows: ThaiTambon[] }>(`/thai-addresses/${encodeURIComponent(postCode)}`),
+  provinces: () => request<ThaiProvince[]>('/thai-addresses/provinces'),
+  districts: (provinceId?: string) =>
+    request<ThaiDistrict[]>(`/thai-addresses/districts${provinceId ? `?provinceId=${encodeURIComponent(provinceId)}` : ''}`),
+  tambons: (districtId?: string) =>
+    request<ThaiTambon[]>(`/thai-addresses/tambons${districtId ? `?districtId=${encodeURIComponent(districtId)}` : ''}`),
+};
+
 export const labelsApi = {
   product: (ids: string[]) => downloadPost('/labels/product/print', { ids }, 'labels-product.pdf'),
+  /** LOG-002 — the shipping label for one or more shipments. */
+  logistics: (shipmentIds: string[]) =>
+    downloadPost('/labels/logistics/print', { ids: shipmentIds }, 'labels-shipping.pdf'),
   serial: (ids: string[]) => downloadPost('/labels/serial/print', { ids }, 'labels-serial.pdf'),
   bin: (locations: string[]) => downloadPost('/labels/bin/print', { locations }, 'labels-bin.pdf'),
 };

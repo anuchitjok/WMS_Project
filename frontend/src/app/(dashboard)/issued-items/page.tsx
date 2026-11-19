@@ -23,6 +23,11 @@ const USAGE_VALUES = ['USED', 'UNUSED', 'WRONG_ITEM', 'DOA', 'DEFECTIVE'] as con
 
 export default function IssuedItemsPage() {
   const [rows, setRows] = useState<any[]>([]);
+  // RQ23: an empty list is not one thing. 'own' = the viewer only sees requests they
+  // raised; 'all' = they see everyone's, so empty really means empty. null = the API
+  // answered with a plain array (older build), and the neutral message is used.
+  const [scope, setScope] = useState<'own' | 'all' | null>(null);
+  const [pendingElsewhere, setPendingElsewhere] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [split, setSplit] = useState<{ req: any; units: IssuedUnitRow[] } | null>(null);
@@ -34,7 +39,13 @@ export default function IssuedItemsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setRows(await rmaApi.pendingUsage()); } finally { setLoading(false); }
+    try {
+      const res: any = await rmaApi.pendingUsage();
+      const envelope = !Array.isArray(res) && Array.isArray(res?.rows);
+      setRows(envelope ? res.rows : Array.isArray(res) ? res : []);
+      setScope(envelope && (res.scope === 'own' || res.scope === 'all') ? res.scope : null);
+      setPendingElsewhere(envelope ? res.pendingElsewhere ?? null : null);
+    } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -83,7 +94,16 @@ export default function IssuedItemsPage() {
           </tr></thead>
           <tbody className="divide-y divide-slate-50">
             {loading ? [...Array(3)].map((_, i) => <tr key={i}>{[...Array(5)].map((_, j) => <td key={j} className="px-4 py-3"><Skeleton className="h-4" /></td>)}</tr>)
-              : rows.length === 0 ? <tr><td colSpan={5} className="px-4 py-12 text-center text-slate-400">{I.empty}</td></tr>
+              : rows.length === 0 ? (
+                <tr><td colSpan={5} className="px-4 py-12 text-center">
+                  <p className="text-slate-500">{scope === 'own' ? I.emptyOwn : scope === 'all' ? I.emptyAll : I.empty}</p>
+                  {scope === 'own' && (
+                    <p className="mx-auto mt-1 max-w-md text-xs text-slate-400">
+                      {I.emptyOwnNote}{pendingElsewhere ? ` ${I.emptyOwnOthers}` : ''}
+                    </p>
+                  )}
+                </td></tr>
+              )
               : rows.map((r) => {
                 const recorded = r.unitUsages?.length ?? 0;
                 const legacyDone = !recorded && r.items?.some((it: any) => it.usageStatus);

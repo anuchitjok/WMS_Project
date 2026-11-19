@@ -5,7 +5,7 @@ import { getAvailableUnitsByProduct } from '../common/inventory-metrics';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
-import { RequestStatus, UserRole, StockStatus, Prisma } from '@prisma/client';
+import { RequestStatus, UserRole, StockStatus, ProductStatus, Prisma } from '@prisma/client';
 import { assertNotSelfApproval } from '../common/separation-of-duties';
 import { MasterDataService } from '../master-data/master-data.service';
 import { nanoid } from 'nanoid';
@@ -124,6 +124,35 @@ export class RequestsService {
 
   private genRef() {
     return `WR-${new Date().getFullYear()}-${nanoid(6).toUpperCase()}`;
+  }
+
+  /**
+   * Every product on a new request must exist and be active. Mirrors the guard
+   * Receive Goods (`receiving.service.ts`) and the receiving import apply, with
+   * the verb changed to fit the action. `isActive` is the field both receiving
+   * paths check and is kept in sync with `productStatus` (see schema); the
+   * message names the status so the user knows which one it is.
+   *
+   * One `findMany` for all lines. Throws on the first offending product, named by
+   * code, so a multi-line request says which line is the problem.
+   */
+  private async assertRequestableProducts(productIds: string[]) {
+    const ids = [...new Set(productIds.filter(Boolean))];
+    if (!ids.length) return;
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, code: true, isActive: true, productStatus: true },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+    for (const id of ids) {
+      const product = byId.get(id);
+      if (!product) throw new BadRequestException(`Product ${id} does not exist — pick it from Product Master`);
+      if (!product.isActive) {
+        throw new BadRequestException(
+          `Product ${product.code} is ${String(product.productStatus).toLowerCase()} and cannot be requested`,
+        );
+      }
+    }
   }
 
   async findAll(filter: { status?: RequestStatus; stage?: string; requesterId?: string; page?: number; limit?: number; q?: string }) {
@@ -246,6 +275,15 @@ export class RequestsService {
     data: { department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string; remark?: string; deliveryMethod?: string | null; items: { productId: string; quantity: number }[] },
     requesterId: string,
   ) {
+    // RQ22 follow-up: refuse a line whose product cannot be requested, before
+    // anything is written. The form no longer hides non-ACTIVE products (it lists
+    // them disabled with the reason), so every product id is now in the page
+    // payload and the server has to be the one that says no. Same rule and
+    // wording as Receive Goods and the receiving import, verb changed to fit the
+    // action: discontinued / inactive products cannot be requested.
+    // One query for all lines — never one per line.
+    await this.assertRequestableProducts(data.items.map((i) => i.productId));
+
     // Auto-fill department from the requester's profile when not supplied.
     // An explicit department must be a managed, active one; the profile fallback was validated when it was set.
     let department = (await this.masterData.assertDepartment(data.department)) ?? undefined;
@@ -294,9 +332,25 @@ export class RequestsService {
     });
   }
 
-  /** Active products with their requestable AVAILABLE units (optionally filtered by brand). */
+  /**
+   * RQ22 — products for the New Withdrawal Request form, with their requestable
+   * AVAILABLE units (optionally narrowed to one brand).
+   *
+   * Every product is returned, not only the ACTIVE ones. The old method filtered
+   * `productStatus: 'ACTIVE'` in SQL, so a brand whose products are all
+   * DISCONTINUED/INACTIVE had no row at all and silently vanished from the Brand
+   * list — the user saw a short list (often a single brand) with no explanation.
+   * That filter is now a field instead of a WHERE clause: `requestable` is true
+   * for exactly the rows this method used to return, so a caller that wants the
+   * old set filters on it, and the form can show the brand and say why it is
+   * unavailable.
+   *
+   * `availableQty` is unchanged — AVAILABLE units a request may draw on. Zero is
+   * a valid answer: such a SKU is still listed (with a zero badge), as before.
+   * A product with no brand is returned too, with `brand: null`.
+   */
   async getProductsWithAvailableQty(brandId?: string) {
-    const where: any = { productStatus: 'ACTIVE' };
+    const where: Prisma.ProductWhereInput = {};
     if (brandId) where.brandId = brandId;
 
     const products = await this.prisma.product.findMany({
@@ -305,6 +359,7 @@ export class RequestsService {
         id: true,
         code: true,
         name: true,
+        productStatus: true,
         brand: { select: { id: true, name: true } },
       },
       orderBy: { name: 'asc' },
@@ -313,6 +368,7 @@ export class RequestsService {
     const units = await getAvailableUnitsByProduct(this.prisma, products.map((p) => p.id));
     return products.map((p) => ({
       ...p,
+      requestable: p.productStatus === ProductStatus.ACTIVE,
       availableQty: units.get(p.id) ?? 0,
     }));
   }
