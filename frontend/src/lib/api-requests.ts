@@ -48,6 +48,20 @@ export interface CreateRequestBody {
   department?: string;
   purpose?: string;
   deliveryMethod?: DeliveryMethod;
+  /**
+   * Migration 44 — where a SHIP request goes. All optional: an incomplete
+   * address warns the requester and still submits. The server ignores these
+   * on a COLLECT request.
+   */
+  shipToName?: string;
+  shipToPhone?: string;
+  shipToAddress?: string;
+  shipToTambonId?: string;
+  shipToTambon?: string;
+  shipToDistrict?: string;
+  shipToProvince?: string;
+  shipToPostCode?: string;
+  shipToNote?: string;
   items: { productId: string; quantity: number }[];
 }
 

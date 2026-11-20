@@ -33,6 +33,7 @@ export const approvals = {
     title: 'Request {ref}',
     requester: 'Requester',
     department: 'Department',
+    shipTo: 'Deliver to',
     rma: 'RMA case',
     purpose: 'Purpose',
     remarks: 'Remarks',

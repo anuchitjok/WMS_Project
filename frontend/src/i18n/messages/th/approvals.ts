@@ -35,6 +35,7 @@ export const approvals: Messages['approvals'] = {
     title: 'ใบขอเบิก {ref}',
     requester: 'ผู้ขอ',
     department: 'แผนก',
+    shipTo: 'ส่งถึง',
     rma: 'RMA Case',
     purpose: 'วัตถุประสงค์',
     remarks: 'หมายเหตุ',

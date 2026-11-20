@@ -85,6 +85,22 @@ export function RequestDetailDrawer({
                 <Field label={D.rma}><span className="font-mono">{req.rmaCaseNumber ?? '—'}</span></Field>
                 <Field label={D.created}>{fmt.dateTime(req.createdAt)}</Field>
                 <Field label={D.delivery}><DeliveryMethodBadge value={req.deliveryMethod} /></Field>
+                {/* Migration 44 - where a SHIP request is going. One line, in
+                    the order an address is written, so it reads as an address
+                    and not as a row of fields. */}
+                {(() => {
+                  const r = req as any;
+                  const line = [r.shipToAddress, r.shipToTambon, r.shipToDistrict, r.shipToProvince, r.shipToPostCode]
+                    .map((x: unknown) => (typeof x === 'string' ? x.trim() : '')).filter(Boolean).join(' ');
+                  if (!r.shipToName && !line) return null;
+                  return (
+                    <Field label={D.shipTo} wide>
+                      <span className="block">{[r.shipToName, r.shipToPhone].filter(Boolean).join(' · ') || '—'}</span>
+                      {line && <span className="block text-slate-600">{line}</span>}
+                      {r.shipToNote && <span className="block text-xs text-slate-500">{r.shipToNote}</span>}
+                    </Field>
+                  );
+                })()}
                 {req.purpose && <Field label={D.purpose} wide>{req.purpose}</Field>}
                 {req.notes && <Field label={D.remarks} wide>{req.notes}</Field>}
               </div>

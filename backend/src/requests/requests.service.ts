@@ -110,6 +110,25 @@ export const REQUEST_STAGES: RequestStage[] = [
 
 const REVIEWABLE: RequestStatus[] = [RequestStatus.SUBMITTED, RequestStatus.PENDING_APPROVAL];
 
+/**
+ * The delivery address off a create payload, trimmed, with blanks dropped.
+ * Kept out of the service so the rule is readable and testable on its own:
+ * a field someone left empty is stored as nothing, not as an empty string,
+ * so "is there an address?" is one NULL check everywhere downstream.
+ */
+export function shipToOf(data: Record<string, unknown>) {
+  const keys = [
+    'shipToName', 'shipToPhone', 'shipToAddress', 'shipToTambonId',
+    'shipToTambon', 'shipToDistrict', 'shipToProvince', 'shipToPostCode', 'shipToNote',
+  ] as const;
+  const out: Record<string, string | null> = {};
+  for (const k of keys) {
+    const v = typeof data[k] === 'string' ? (data[k] as string).trim() : '';
+    out[k] = v === '' ? null : v;
+  }
+  return out;
+}
+
 @Injectable()
 export class RequestsService {
   constructor(
@@ -272,7 +291,14 @@ export class RequestsService {
   }
 
   async create(
-    data: { department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string; remark?: string; deliveryMethod?: string | null; items: { productId: string; quantity: number }[] },
+    data: {
+      department?: string; purpose?: string; requiredDate?: string; rmaCaseNumber: string;
+      remark?: string; deliveryMethod?: string | null;
+      shipToName?: string; shipToPhone?: string; shipToAddress?: string;
+      shipToTambonId?: string; shipToTambon?: string; shipToDistrict?: string;
+      shipToProvince?: string; shipToPostCode?: string; shipToNote?: string;
+      items: { productId: string; quantity: number }[];
+    },
     requesterId: string,
   ) {
     // RQ22 follow-up: refuse a line whose product cannot be requested, before
@@ -283,6 +309,8 @@ export class RequestsService {
     // action: discontinued / inactive products cannot be requested.
     // One query for all lines — never one per line.
     await this.assertRequestableProducts(data.items.map((i) => i.productId));
+
+    const shipTo = normalizeDeliveryMethod(data.deliveryMethod) === 'SHIP' ? shipToOf(data) : {};
 
     // Auto-fill department from the requester's profile when not supplied.
     // An explicit department must be a managed, active one; the profile fallback was validated when it was set.
@@ -302,6 +330,10 @@ export class RequestsService {
         rmaCaseNumber: data.rmaCaseNumber,
         notes: data.remark,
         deliveryMethod: normalizeDeliveryMethod(data.deliveryMethod),
+        // Migration 44. A delivery address only means something for SHIP, so a
+        // COLLECT request never carries one even if the client sends it — that
+        // way nobody reads a stale address off a request collected at the desk.
+        ...shipTo,
         status: RequestStatus.DRAFT,
         items: {
           create: data.items.map((i) => ({

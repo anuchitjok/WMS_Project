@@ -53,6 +53,48 @@ export class CreateRequestDto {
   @IsIn(DELIVERY_METHODS as unknown as string[], { message: 'deliveryMethod must be COLLECT or SHIP' })
   deliveryMethod?: DeliveryMethod;
 
+  /**
+   * Migration 44 — where a SHIP request is going. Everything is optional: the
+   * owner's rule is that a half-filled address warns the requester and still
+   * goes through, because the person raising the request often does not have
+   * the full address to hand. The server stores these only for SHIP.
+   */
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsString() @IsOptional() @MaxLength(120)
+  shipToName?: string;
+
+  @ApiPropertyOptional({ maxLength: 40 })
+  @IsString() @IsOptional() @MaxLength(40)
+  shipToPhone?: string;
+
+  @ApiPropertyOptional({ maxLength: 300, description: 'House number, street, building' })
+  @IsString() @IsOptional() @MaxLength(300)
+  shipToAddress?: string;
+
+  @ApiPropertyOptional({ maxLength: 6, description: 'ThaiTambon id as picked' })
+  @IsString() @IsOptional() @MaxLength(6)
+  shipToTambonId?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsString() @IsOptional() @MaxLength(120)
+  shipToTambon?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsString() @IsOptional() @MaxLength(120)
+  shipToDistrict?: string;
+
+  @ApiPropertyOptional({ maxLength: 120 })
+  @IsString() @IsOptional() @MaxLength(120)
+  shipToProvince?: string;
+
+  @ApiPropertyOptional({ maxLength: 5 })
+  @IsString() @IsOptional() @MaxLength(5)
+  shipToPostCode?: string;
+
+  @ApiPropertyOptional({ maxLength: 300 })
+  @IsString() @IsOptional() @MaxLength(300)
+  shipToNote?: string;
+
   @ApiProperty({ type: [RequestItemDto] })
   @IsArray()
   @ArrayMinSize(1, { message: 'at least one item is required' })

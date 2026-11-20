@@ -649,6 +649,19 @@ model WithdrawalRequest {
   rmaCaseNumber String?
   purpose       String?
   deliveryMethod String?      // Migration 32 — COLLECT | SHIP; null = COLLECT (older requests)
+  // Migration 44 — where a SHIP request is going. The tambon, district and
+  // province are kept as text beside the id on purpose: the Thai Post list
+  // can be corrected later and a shipped address must not change with it.
+  // All optional — an incomplete address warns, it never blocks the request.
+  shipToName     String?
+  shipToPhone    String?
+  shipToAddress  String?
+  shipToTambonId String?  @db.VarChar(6)
+  shipToTambon   String?
+  shipToDistrict String?
+  shipToProvince String?
+  shipToPostCode String?  @db.VarChar(5)
+  shipToNote     String?
   requiredDate  DateTime?
   status        RequestStatus @default(DRAFT)
   priority      Priority      @default(NORMAL)
