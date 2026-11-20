@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { requestsApi, warehouseApi } from '@/lib/api';
+import { requestsApi, warehouseApi, thaiAddressApi, type ThaiTambon } from '@/lib/api';
 import { useAuthStore } from '@/store/auth.store';
 import type { WithdrawalRequest, RequestStage } from '@/types';
 import type { PaginatedResponse } from '@/types';
@@ -20,6 +20,7 @@ import { Plus, Trash2, User, Search, ChevronDown, AlertTriangle, Package, CheckC
 import { toast } from 'sonner';
 import { requestsApiP4, DELIVERY_METHODS, type DeliveryMethod } from '@/lib/api-requests';
 import { DeliveryMethodBadge } from '@/components/requests/delivery-method-badge';
+import { PickList } from '@/components/ui/pick-list';
 
 // ── Lifecycle timeline row ──────────────────────────────────────────────────────
 function TimelineRow({ label, who, at, done, tone = 'slate' }: {
@@ -469,6 +470,31 @@ export default function RequestsPage() {
   const [rmaCaseNumber, setRmaCaseNumber] = useState('');
   const [remark, setRemark] = useState('');
   const [deliveryMethod, setDeliveryMethod] = useState<DeliveryMethod>('COLLECT');
+  // Migration 44 — the delivery address, asked for only when Ship is chosen.
+  const [shipTo, setShipTo] = useState({
+    name: '', phone: '', address: '', note: '',
+    tambonId: '', tambon: '', district: '', province: '', postCode: '',
+  });
+  const [placeQuery, setPlaceQuery] = useState('');
+  const [places, setPlaces] = useState<ThaiTambon[]>([]);
+  const [placesLoading, setPlacesLoading] = useState(false);
+
+  // One call per thought, not per keystroke. Digits are read as a postal code
+  // and anything else as a place name - the server decides which, so the box
+  // takes "10330" and "บางรัก" alike.
+  useEffect(() => {
+    const q = placeQuery.trim();
+    if (deliveryMethod !== 'SHIP' || q.length < 2) { setPlaces([]); return; }
+    let live = true;
+    setPlacesLoading(true);
+    const id = setTimeout(() => {
+      thaiAddressApi.search(q, 30)
+        .then((r) => { if (live) setPlaces(r.rows); })
+        .catch(() => { if (live) setPlaces([]); })
+        .finally(() => { if (live) setPlacesLoading(false); });
+    }, 250);
+    return () => { live = false; clearTimeout(id); };
+  }, [placeQuery, deliveryMethod]);
   const [items, setItems] = useState<ItemRow[]>([{ ...EMPTY_ITEM }]);
 
   const load = useCallback(async () => {
@@ -505,6 +531,9 @@ export default function RequestsPage() {
     setRmaCaseNumber('');
     setRemark('');
     setDeliveryMethod('COLLECT');
+    setShipTo({ name: '', phone: '', address: '', note: '', tambonId: '', tambon: '', district: '', province: '', postCode: '' });
+    setPlaceQuery('');
+    setPlaces([]);
     setItems([{ ...EMPTY_ITEM }]);
   }
 
@@ -601,12 +630,30 @@ export default function RequestsPage() {
       }
     }
 
+    // The owner's rule: a half-filled delivery address is a warning, not a
+    // refusal. The person raising the request often does not have the whole
+    // address yet, and the warehouse fills the rest in before it ships.
+    if (deliveryMethod === 'SHIP' && !(shipTo.name.trim() && shipTo.address.trim() && shipTo.postCode)) {
+      toast.warning(R.shipTo.incomplete);
+    }
+
     setSubmitting(true);
     try {
       await requestsApiP4.create({
         rmaCaseNumber: rmaCaseNumber.trim(),
         remark: remark.trim() || undefined,
         deliveryMethod,
+        ...(deliveryMethod === 'SHIP' ? {
+          shipToName: shipTo.name.trim() || undefined,
+          shipToPhone: shipTo.phone.trim() || undefined,
+          shipToAddress: shipTo.address.trim() || undefined,
+          shipToTambonId: shipTo.tambonId || undefined,
+          shipToTambon: shipTo.tambon || undefined,
+          shipToDistrict: shipTo.district || undefined,
+          shipToProvince: shipTo.province || undefined,
+          shipToPostCode: shipTo.postCode || undefined,
+          shipToNote: shipTo.note.trim() || undefined,
+        } : {}),
         items: items.map((i) => ({ productId: i.productId, quantity: Number(i.quantity) })),
       });
       toast.success(R.toast.created);
@@ -701,6 +748,74 @@ export default function RequestsPage() {
                     })}
                   </div>
                 </div>
+
+                {/* Migration 44 — Ship asks where it is going, here and now.
+                    Nothing is required: an incomplete address warns on submit. */}
+                {deliveryMethod === 'SHIP' && (
+                  <div className="col-span-2 space-y-3 rounded-md border border-green-200 bg-green-50/40 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-green-800">
+                      {R.shipTo.title}
+                    </p>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">{R.shipTo.name}</Label>
+                        <Input value={shipTo.name} placeholder={R.shipTo.namePlaceholder}
+                          onChange={(e) => setShipTo((v) => ({ ...v, name: e.target.value }))} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-sm font-medium">{R.shipTo.phone}</Label>
+                        <Input value={shipTo.phone} placeholder={R.shipTo.phonePlaceholder} inputMode="tel"
+                          onChange={(e) => setShipTo((v) => ({ ...v, phone: e.target.value }))} />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">{R.shipTo.address}</Label>
+                      <Input value={shipTo.address} placeholder={R.shipTo.addressPlaceholder}
+                        onChange={(e) => setShipTo((v) => ({ ...v, address: e.target.value }))} />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">{R.shipTo.place}</Label>
+                      <PickList
+                        items={places.map((p) => ({
+                          id: p.id,
+                          label: `${p.nameTh} · ${p.district.nameTh} · ${p.district.province.nameTh}`,
+                          hint: p.postCodeRemark ?? undefined,
+                          trailing: p.postCode,
+                        }))}
+                        value={shipTo.tambonId}
+                        onQuery={setPlaceQuery}
+                        loading={placesLoading}
+                        placeholder={R.shipTo.placePlaceholder}
+                        empty={placeQuery.trim().length < 2 ? R.shipTo.placeStart : R.shipTo.placeNone}
+                        clearLabel={R.shipTo.placeClear}
+                        onChange={(id) => {
+                          const p = places.find((x) => x.id === id);
+                          setShipTo((v) => p
+                            ? { ...v, tambonId: p.id, tambon: p.nameTh, district: p.district.nameTh,
+                                province: p.district.province.nameTh, postCode: p.postCode }
+                            : { ...v, tambonId: '', tambon: '', district: '', province: '', postCode: '' });
+                        }}
+                      />
+                      {shipTo.tambonId ? (
+                        <p className="text-xs text-slate-600">
+                          {shipTo.tambon} · {shipTo.district} · {shipTo.province} ·{' '}
+                          <span className="font-mono font-semibold text-green-700">{shipTo.postCode}</span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-400">{R.shipTo.placeHint}</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium">{R.shipTo.note}</Label>
+                      <Input value={shipTo.note} placeholder={R.shipTo.notePlaceholder}
+                        onChange={(e) => setShipTo((v) => ({ ...v, note: e.target.value }))} />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

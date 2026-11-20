@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import PDFDocument from 'pdfkit';
@@ -32,6 +33,27 @@ export class LabelsService {
    * image too, but only through `openImage`, which its type definitions do not
    * declare; this is eight bytes of a format that cannot change.
    */
+  /**
+   * Sarabun, registered on a document under the names the shipping label draws
+   * with.
+   *
+   * PDFKit's built-in Helvetica and Courier have no Thai glyphs at all: the
+   * text goes out in WinAnsi, so every Thai code point lands on whatever Latin
+   * character shares its byte and an address reads as accented nonsense. A
+   * delivery address is Thai in the ordinary case, so the font has to be a real
+   * one embedded in the file.
+   *
+   * nest-cli copies `assets/` into `dist/`, and this resolves from __dirname,
+   * so the same two lines work under ts-node and in production. Only the
+   * shipping label uses it; the other labels are ASCII codes and keep
+   * Helvetica, which is lighter and already proven on those stickers.
+   */
+  private useThaiFonts(doc: PDFKit.PDFDocument): void {
+    const dir = path.join(__dirname, '..', '..', 'assets', 'fonts');
+    doc.registerFont('body', path.join(dir, 'Sarabun-Regular.ttf'));
+    doc.registerFont('body-bold', path.join(dir, 'Sarabun-Bold.ttf'));
+  }
+
   private pngSize(png: Buffer): { width: number; height: number } {
     return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
   }
@@ -143,16 +165,26 @@ export class LabelsService {
       }),
       this.prisma.withdrawalRequest.findMany({
         where: { id: { in: shipments.map((s) => s.task?.requestId).filter((x): x is string => !!x) } },
-        select: { id: true, department: true },
+        select: {
+          id: true, department: true,
+          // Migration 44 — the delivery address the requester gave when they
+          // chose Ship. Read here so the label can print it; a COLLECT request
+          // never has one.
+          shipToName: true, shipToPhone: true, shipToAddress: true,
+          shipToTambon: true, shipToDistrict: true, shipToProvince: true,
+          shipToPostCode: true, shipToNote: true,
+        },
       }),
     ]);
     const whOf = new Map(warehouses.map((w) => [w.id, w.code]));
     const deptOf = new Map(requests.map((r) => [r.id, r.department]));
+    const shipToOf = new Map(requests.map((r) => [r.id, r]));
     return this.renderLogisticsLabels(
       shipments.map((s) => ({
         ...s,
         warehouseCode: s.task?.warehouseId ? (whOf.get(s.task.warehouseId) ?? null) : null,
         department: s.task?.requestId ? (deptOf.get(s.task.requestId) ?? null) : null,
+        shipTo: s.task?.requestId ? (shipToOf.get(s.task.requestId) ?? null) : null,
       })),
       company,
     );
@@ -173,6 +205,7 @@ export class LabelsService {
     const dash = (v?: string | null) => (v && String(v).trim() ? String(v).trim() : '-');
 
     const doc = new PDFDocument({ size: [W, H], margin: 0 });
+    this.useThaiFonts(doc);
     const chunks: Buffer[] = [];
     doc.on('data', (c) => chunks.push(c as Buffer));
     const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
@@ -187,7 +220,7 @@ export class LabelsService {
       const text = (
         v: string, size: number, bold = false, color = '#000000', gap = 2, width = innerW, x = PAD,
       ) => {
-        d.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color)
+        d.font(bold ? 'body-bold' : 'body').fontSize(size).fillColor(color)
           .text(v, x, y, { width, lineBreak: true, ellipsis: true });
         y = d.y + gap;
       };
@@ -204,11 +237,11 @@ export class LabelsService {
         leftLabel: string, leftValue: string, rightLabel: string, rightValue: string, mono = false,
       ) => {
         const top = y;
-        d.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text(leftLabel, PAD, top, { width: half });
-        d.font(mono ? 'Courier' : 'Helvetica').fontSize(mono ? 8 : 9).fillColor('#000000')
+        d.font('body-bold').fontSize(6).fillColor('#777777').text(leftLabel, PAD, top, { width: half });
+        d.font(mono ? 'Courier' : 'body').fontSize(mono ? 8 : 9).fillColor('#000000')
           .text(leftValue, PAD, top + 8, { width: half });
-        d.font('Helvetica-Bold').fontSize(6).fillColor('#777777').text(rightLabel, PAD + half + 10, top, { width: half });
-        d.font('Helvetica').fontSize(mono ? 8 : 9).fillColor('#000000')
+        d.font('body-bold').fontSize(6).fillColor('#777777').text(rightLabel, PAD + half + 10, top, { width: half });
+        d.font('body').fontSize(mono ? 8 : 9).fillColor('#000000')
           .text(rightValue, PAD + half + 10, top + 8, { width: half });
         y = top + 24;
       };
@@ -249,8 +282,21 @@ export class LabelsService {
       rule();
 
       // -- who it goes to --------------------------------------------------
-      field('deliver to', s.receiverName, true);
+      // The receiver's name may be on the shipment, the address only on the
+      // request (migration 44). Whoever is named on the shipment wins, since
+      // that is the later and more specific answer.
+      const to = s.shipTo ?? {};
+      field('deliver to', s.receiverName || to.shipToName, true);
+      if (to.shipToPhone) text(String(to.shipToPhone), 9, false, '#000000', 4);
+      const where = [to.shipToAddress, to.shipToTambon, to.shipToDistrict, to.shipToProvince]
+        .map((p: unknown) => (typeof p === 'string' ? p.trim() : ''))
+        .filter(Boolean)
+        .join(' ');
+      if (where || to.shipToPostCode) {
+        text([where, to.shipToPostCode].filter(Boolean).join(' '), 9, false, '#000000', 4);
+      }
       field('department', s.department);
+      if (to.shipToNote) text(String(to.shipToNote), 7, false, '#666666', 4);
       rule();
 
       // -- back to the paperwork -------------------------------------------
@@ -271,6 +317,9 @@ export class LabelsService {
       // label had a hole in its middle. Draw it once on a document nobody
       // keeps to learn how much room is left, then share that room out.
       const scratch = new PDFDocument({ size: [W, H], margin: 0 });
+      // The same fonts, or the measuring pass sizes the text with Helvetica's
+      // metrics and shares out the wrong amount of room.
+      this.useThaiFonts(scratch);
       scratch.on('data', () => undefined);
       const used = drawBody(scratch, s, bar, 0);
       scratch.end();
@@ -281,11 +330,11 @@ export class LabelsService {
       // -- the shipment's own QR, at the foot --------------------------------
       const qr = await this.barcodePng(this.parser.encode('shipment', s.refNumber), 'qrcode');
       doc.image(qr, PAD, footerTop, { width: QR });
-      doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000')
+      doc.font('body-bold').fontSize(11).fillColor('#000000')
         .text(s.refNumber, PAD + QR + 10, footerTop + 4, { width: innerW - QR - 10 });
-      doc.font('Helvetica').fontSize(7).fillColor('#666666')
+      doc.font('body').fontSize(7).fillColor('#666666')
         .text(`Task ${dash(s.task?.refNumber)}`, PAD + QR + 10, footerTop + 20, { width: innerW - QR - 10 });
-      doc.font('Helvetica').fontSize(7).fillColor('#666666')
+      doc.font('body').fontSize(7).fillColor('#666666')
         .text(
           s.shippedAt ? `Shipped ${new Date(s.shippedAt).toISOString().slice(0, 10)}` : 'Not dispatched yet',
           PAD + QR + 10, footerTop + 32, { width: innerW - QR - 10 },

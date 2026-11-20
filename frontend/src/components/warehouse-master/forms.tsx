@@ -1,7 +1,7 @@
 'use client';
 
 // Create/edit forms for warehouses and racks, and the rack delete dialog.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Lock, ShieldAlert, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -11,9 +11,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { warehouseMasterApi } from '@/lib/api';
 import { warehouseSpaceApi, RACK_CATEGORIES, type RackCategory, type RackTypeMaster } from '@/lib/api-warehouse';
 import { formatLength, lengthUnitLabel } from '@/lib/length';
-import { labelOf, useT } from '@/i18n';
+import { useT } from '@/i18n';
 import { cn } from '@/lib/utils';
-import { Field, ModalWrap, isPos, optNum, rackCategoryOf, selectClass } from './shared';
+import { Field, ModalWrap, isPos, optNum, rackCategoryOf } from './shared';
 import { type SizeCm, type SizeWarning, rackSizeWarnings, warehouseSizeWarnings, rackBiggerThanWarehouse } from './size-rules';
 import { FloorShapeField, initialShapeState, shapeResult, shapeTemplate, type ShapeState } from './floor-shape-field';
 import { outlineFromTemplate, validateOutline, normalizeOutline, polygonArea, type Pt } from '@/components/warehouse-layout/floor-geometry';
@@ -245,22 +245,18 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   const [busy, setBusy] = useState(false);
   const F = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm({ ...form, [k]: e.target.value });
 
-  const options = useMemo(() => rackTypes.filter((r) => r.isActive || r.id === form.rackTypeId), [rackTypes, form.rackTypeId]);
   const preview = rackPreview({ ...size, levels: form.levels, columns: form.columns }, form.category === 'PALLET_ON_FLOOR');
   const template = rackTypes.find((r) => r.id === form.rackTypeId);
-  /** RQ7 — with a rack type chosen, size / levels / columns are read from it. */
+  /**
+   * RQ7 — while a rack has a rack type, its size / levels / columns are read
+   * from that type and the API refuses them here. The type is not chosen on
+   * this form: it arrives from the capacity planner or the setup wizard, or
+   * the rack already had one.
+   */
   const sizeFromType = !!template;
   const sizeNow: SizeCm = size;
   const bigger = warehouse && rackBiggerThanWarehouse(sizeNow, warehouse) && warehouse.lengthCm && warehouse.widthCm
     ? { l: warehouse.lengthCm / 100, w: warehouse.widthCm / 100 } : null;
-
-  function chooseTemplate(id: string) {
-    setTypeTouched(true);
-    const tpl = rackTypes.find((r) => r.id === id);
-    if (!tpl) return setForm({ ...form, rackTypeId: '' });
-    setForm({ ...form, rackTypeId: tpl.id, category: tpl.category, levels: String(tpl.levels), columns: String(tpl.columns) });
-    setSize({ lengthCm: tpl.lengthCm, widthCm: tpl.widthCm, heightCm: tpl.heightCm });
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -292,22 +288,34 @@ export function RackForm({ mode, warehouseId, data, rackTypes, prefillTemplateId
   return (
     <ModalWrap title={mode === 'create' ? w.createRack : t(w.editRack, { code: data?.code })} onClose={onClose} widthClass="max-w-xl">
       <form onSubmit={submit} className="space-y-4">
-        <Field label={w.rackType} hint={w.rackTypeHint}>
-          <select className={selectClass} value={form.rackTypeId} onChange={(e) => chooseTemplate(e.target.value)}>
-            <option value="">{w.noRackType}</option>
-            {options.map((r) => (
-              <option key={r.id} value={r.id}>{r.code} · {r.name} ({labelOf(m.warehouseMaster.category, r.category)})</option>
-            ))}
-          </select>
-        </Field>
         <Field label={w.category}>
           <div className="grid grid-cols-2 gap-2">
             {RACK_CATEGORIES.map((c) => (
-              <button key={c} type="button" disabled={!!template}
-                onClick={() => { setTypeTouched(true); setForm({ ...form, category: c, levels: c === 'PALLET_ON_FLOOR' ? '1' : form.levels }); }}
-                className={cn('rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed',
-                  form.category === c ? 'border-green-500 bg-green-50 ring-1 ring-green-500' : 'border-slate-200 hover:border-slate-300',
-                  template && form.category !== c && 'opacity-50')}>
+              <button key={c} type="button"
+                onClick={() => {
+                  setTypeTouched(true);
+                  // A rack keeps its rack type only while the chosen category still
+                  // matches it. Picking the other one unlinks the rack, and the
+                  // type's numbers stay behind as the rack's own starting point so
+                  // the size fields are never handed back empty.
+                  const unlink = !!template && template.category !== c;
+                  if (unlink) {
+                    setSize((z) => ({
+                      lengthCm: z.lengthCm ?? template!.lengthCm,
+                      widthCm: z.widthCm ?? template!.widthCm,
+                      heightCm: z.heightCm ?? template!.heightCm,
+                    }));
+                  }
+                  setForm({
+                    ...form,
+                    category: c,
+                    rackTypeId: unlink ? '' : form.rackTypeId,
+                    levels: c === 'PALLET_ON_FLOOR' ? '1' : unlink ? String(template!.levels) : form.levels,
+                    columns: unlink ? String(template!.columns) : form.columns,
+                  });
+                }}
+                className={cn('rounded-lg border px-3 py-2 text-left transition-colors',
+                  form.category === c ? 'border-green-500 bg-green-50 ring-1 ring-green-500' : 'border-slate-200 hover:border-slate-300')}>
                 <span className="block text-sm font-medium text-slate-800">{m.warehouseMaster.category[c]}</span>
                 <span className="block text-xs text-slate-500">{m.warehouseMaster.categoryHint[c]}</span>
               </button>

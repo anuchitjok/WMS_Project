@@ -35,6 +35,7 @@ export const approvals: Messages['approvals'] = {
     title: '申请 {ref}',
     requester: '申请人',
     department: '部门',
+    shipTo: '收货地址',
     rma: 'RMA 案例',
     purpose: '用途',
     remarks: '备注',
