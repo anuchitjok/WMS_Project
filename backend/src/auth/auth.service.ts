@@ -8,6 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
+import { hashPassword, needsRehash } from './password';
 import { randomUUID } from 'node:crypto';
 import { GrantActor, assertCanGrantLegacyRole } from './role-grant';
 import { MasterDataService } from '../master-data/master-data.service';
@@ -65,6 +66,15 @@ export class AuthService {
 
     if (!user.isActive) throw new UnauthorizedException('Account is inactive');
 
+    // The cost a password was hashed with is baked into the hash, so changing
+    // BCRYPT_COST does nothing for an account that already exists. Re-hashing here is
+    // what carries the change to existing users, one account at a time, with nobody
+    // forced to reset a password. It only runs when the cost actually differs, so it
+    // is a single extra hash once per user and nothing at all thereafter.
+    const rehash = needsRehash(user.passwordHash)
+      ? { passwordHash: await hashPassword(dto.password) }
+      : {};
+
     // These three writes touch different tables and none reads the others' result, so
     // they go out together (WMS-08-002). On production the database is a network hop
     // away, and awaiting them one at a time added two round trips to every login for
@@ -73,7 +83,7 @@ export class AuthService {
     await Promise.all([
       this.prisma.user.update({
         where: { id: user.id },
-        data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
+        data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date(), ...rehash },
       }),
       this.prisma.loginHistory.create({ data: { userId: user.id, success: true, ipAddress: ip } }),
       this.prisma.auditLog.create({
@@ -120,7 +130,7 @@ export class AuthService {
     if (await bcrypt.compare(newPassword, user.passwordHash)) {
       throw new BadRequestException('New password must differ from the current password');
     }
-    const hash = await bcrypt.hash(newPassword, 12);
+    const hash = await hashPassword(newPassword);
     await this.prisma.user.update({
       where: { id: userId },
       data: { passwordHash: hash, forcePasswordChange: false, passwordChangedAt: new Date() },
@@ -141,7 +151,7 @@ export class AuthService {
     });
     if (exists) throw new ConflictException('Username or email already exists');
 
-    const hash = await bcrypt.hash(dto.password, 12);
+    const hash = await hashPassword(dto.password);
     const user = await this.prisma.user.create({
       data: {
         username: dto.username,

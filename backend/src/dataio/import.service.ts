@@ -13,6 +13,7 @@ import { MasterDataService } from '../master-data/master-data.service';
 import { passwordPolicyErrors } from '../common/password-policy';
 import { detectProductDuplicates, norm, DuplicateHit } from './product-dedupe';
 import { resolveProductName } from '../products/product-audit-names';
+import { hashPassword } from '../auth/password';
 
 export interface ValidatedRow {
   rowNumber: number;
@@ -368,9 +369,9 @@ export class ImportService {
         });
         inserted = res.count;
       } else if (type === 'users') {
-        const hash = await bcrypt.hash('Welcome@123', 12);
+        const hash = await hashPassword('Welcome@123');
         for (const d of validRows) {
-          const pwd = d.password ? await bcrypt.hash(String(d.password), 12) : hash;
+          const pwd = d.password ? await hashPassword(String(d.password)) : hash;
           const dept = d.department ? String(d.department).trim() : '';
           await tx.user.create({
             data: {

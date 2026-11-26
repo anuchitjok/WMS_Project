@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
+import { hashPassword } from '../auth/password';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
@@ -82,7 +83,7 @@ export class UsersService {
     });
     if (exists) throw new ConflictException('Username or email already exists');
 
-    const hash = await bcrypt.hash(dto.password || 'Welcome@123', 12);
+    const hash = await hashPassword(dto.password || 'Welcome@123');
     const user = await this.prisma.user.create({
       data: {
         username: dto.username,
@@ -135,7 +136,7 @@ export class UsersService {
     };
     if (dto.username) data.username = dto.username;
     if (dto.password) {
-      data.passwordHash = await bcrypt.hash(dto.password, 12);
+      data.passwordHash = await hashPassword(dto.password);
       data.passwordChangedAt = new Date();
       data.forcePasswordChange = false; // admin set an explicit password
       data.failedLoginCount = 0;
@@ -163,7 +164,7 @@ export class UsersService {
     const actorId = actor.id;
     assertCanManageTarget(actor, await this.findOne(id));
     const temp = 'Temp@' + Math.random().toString(36).slice(2, 8);
-    const hash = await bcrypt.hash(temp, 12);
+    const hash = await hashPassword(temp);
     await this.prisma.user.update({
       where: { id },
       data: { passwordHash: hash, forcePasswordChange: true, passwordChangedAt: new Date(), failedLoginCount: 0, lockedUntil: null },
