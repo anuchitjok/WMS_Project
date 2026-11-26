@@ -62,4 +62,10 @@ async function bootstrap() {
   logger.log(`WMS API running on http://localhost:${port} [${process.env.NODE_ENV ?? 'development'}]`);
   if (!isProd) logger.log(`Swagger docs: http://localhost:${port}/api/docs`);
 }
-bootstrap();
+// Without a catch, a startup failure (unreachable database, port in use) surfaces as an
+// unhandled rejection with no log line and a zero exit code (WMS-04-002).
+bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console -- the Nest logger may not exist yet at this point
+  console.error('[Bootstrap] WMS API failed to start:', err);
+  process.exit(1);
+});

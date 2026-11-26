@@ -67,7 +67,9 @@ export const ACCESS = {
   /** Cancelling someone else's request (the requester may always cancel their own). */
   requestCancelAny: { permissions: ['request.approve'], legacyRoles: APPROVERS },
   // P1 1.7: Product Master writes are SYSTEM_ADMIN + WAREHOUSE_MANAGER only.
-  productImport:    { permissions: ['product.manage'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER] },
+  // The rule itself lives in products/product-access.ts as PRODUCT_WRITE_ACCESS, which the
+  // product controller and the data-import guard both use. An unused duplicate here was
+  // removed in Phase 05 (WMS-01-006) so there is one definition, not two.
   dataImport:       { permissions: ['dataio.manage'], legacyRoles: SUPERVISORS },
   auditExport:      { permissions: ['audit.read'], legacyRoles: [SYSTEM_ADMIN, WAREHOUSE_MANAGER, AUDITOR] },
   approvalRules:    { permissions: ['settings.manage'], legacyRoles: [SYSTEM_ADMIN] },

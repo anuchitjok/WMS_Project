@@ -57,6 +57,9 @@ export class CycleCountController {
   @ApiOperation({ summary: 'Reset conflicting lines for recount (excludes lines whose stock left AVAILABLE)' })
   recountConflicts(@Param('id') id: string, @CurrentUser() user: any) { return this.svc.recountConflicts(id, user.id, user); }
 
+  // Deliberately NOT @Retired: a count locked before Step 5 was retired must still be
+  // cancellable so its stock lock can be released. Covered by
+  // auth/warehouse-write-authorization.spec.ts, "cancelling a cycle count stays open".
   @Post(':id/cancel')
   @Access(ACCESS.cycleCountApprove)
   cancel(@Param('id') id: string, @CurrentUser() user: any) { return this.svc.cancel(id, user.id, user); }

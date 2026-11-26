@@ -1,20 +1,18 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Query,
-  UseGuards, Res, UploadedFile, UseInterceptors,
+  UseGuards, Res, UploadedFile, UseInterceptors, BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiConsumes } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
 import { AccessGuard } from '../auth/guards/access.guard';
 import { Access } from '../auth/decorators/access.decorator';
-import { PRODUCT_WRITE_ACCESS, PRODUCT_WRITE_ROLES } from './product-access';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { PRODUCT_WRITE_ACCESS } from './product-access';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CreateProductDto, UpdateProductDto, ChangeProductStatusDto } from './dto/create-product.dto';
-import { UserRole, ProductType, ProductStatus } from '@prisma/client';
+import { ProductType, ProductStatus } from '@prisma/client';
 
 @ApiTags('Product Master')
 @ApiBearerAuth()
@@ -31,8 +29,8 @@ export class ProductsController {
   }
 
   @Post()
-  @UseGuards(RolesGuard)
-  @Roles(...PRODUCT_WRITE_ROLES)
+  @UseGuards(AccessGuard)
+  @Access(PRODUCT_WRITE_ACCESS)
   create(@Body() dto: CreateProductDto, @CurrentUser('id') userId: string) {
     return this.service.create(dto, userId);
   }
@@ -124,7 +122,9 @@ export class ProductsController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser('id') userId: string,
   ) {
-    if (!file) throw new Error('No file uploaded');
+    // A plain Error maps to 500; a missing upload is a client error, like the
+    // equivalent receiving and MRP import endpoints already return (WMS-01-008).
+    if (!file) throw new BadRequestException('No file uploaded');
     return this.service.importProducts(file.buffer, file.mimetype, userId);
   }
 
@@ -136,15 +136,15 @@ export class ProductsController {
   }
 
   @Patch(':id')
-  @UseGuards(RolesGuard)
-  @Roles(...PRODUCT_WRITE_ROLES)
+  @UseGuards(AccessGuard)
+  @Access(PRODUCT_WRITE_ACCESS)
   update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser('id') userId: string) {
     return this.service.update(id, dto, userId);
   }
 
   @Patch(':id/status')
-  @UseGuards(RolesGuard)
-  @Roles(...PRODUCT_WRITE_ROLES)
+  @UseGuards(AccessGuard)
+  @Access(PRODUCT_WRITE_ACCESS)
   @ApiOperation({ summary: 'Change product lifecycle status (Active/Inactive/Discontinued)' })
   changeStatus(@Param('id') id: string, @Body() dto: ChangeProductStatusDto, @CurrentUser('id') userId: string) {
     return this.service.changeStatus(id, dto.productStatus, userId);

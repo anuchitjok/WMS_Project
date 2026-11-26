@@ -188,7 +188,9 @@ export class RelocationService {
       this.prisma.relocationRequest.findMany({
         where,
         include: DETAIL,
-        orderBy: { createdAt: 'desc' },
+        // Unique tiebreaker: createdAt is not unique, and OFFSET paging over a tied
+        // sort can repeat rows on one page and skip them on another (WMS-01-007).
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (page - 1) * limit,
         take: limit,
       }),

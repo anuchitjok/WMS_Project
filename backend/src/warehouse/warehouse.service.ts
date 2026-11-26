@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RackType, SlotStatus, SlotType } from '@prisma/client';
 import { IN_LOCATION_COUNT, NOT_IN_LOCATION } from '../common/stock-presence';
@@ -366,7 +366,8 @@ export class WarehouseService {
 
   async createBrand(dto: { code?: string; name: string; contact?: string }, actorId?: string) {
     const name = dto.name?.trim();
-    if (!name) throw new ConflictException('Brand name is required');
+    // A missing required field is a malformed request (400), not a state conflict (409).
+    if (!name) throw new BadRequestException('Brand name is required');
 
     let code = dto.code?.trim();
     if (!code) {
@@ -474,7 +475,8 @@ export class WarehouseService {
 
   async createProductFamily(dto: { code?: string; name: string; description?: string; parentId?: string }, actorId?: string) {
     const name = dto.name?.trim();
-    if (!name) throw new ConflictException('Family name is required');
+    // A missing required field is a malformed request (400), not a state conflict (409).
+    if (!name) throw new BadRequestException('Family name is required');
 
     if (dto.parentId) {
       const parent = await this.prisma.productFamily.findUnique({ where: { id: dto.parentId } });
@@ -585,7 +587,8 @@ export class WarehouseService {
   async createVendor(dto: { code: string; name: string; contact?: string; email?: string }, actorId?: string) {
     const code = dto.code?.trim();
     const name = dto.name?.trim();
-    if (!code || !name) throw new ConflictException('Vendor code and name are required');
+    // A missing required field is a malformed request (400), not a state conflict (409).
+    if (!code || !name) throw new BadRequestException('Vendor code and name are required');
     const existing = await this.prisma.vendor.findUnique({ where: { code } });
     if (existing) throw new ConflictException(`Vendor code already exists: ${code}`);
     const vendor = await this.prisma.vendor.create({
