@@ -53,7 +53,9 @@ export class AuditService {
       this.prisma.auditLog.findMany({
         where,
         include: { user: { select: { fullName: true, username: true } } },
-        orderBy: { createdAt: 'desc' },
+        // Unique tiebreaker: createdAt is not unique, and OFFSET paging over a tied
+        // sort can repeat rows on one page and skip them on another (WMS-01-007).
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),

@@ -194,7 +194,9 @@ export class RequestsService {
         },
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        // Unique tiebreaker: createdAt is not unique, and OFFSET paging over a tied
+        // sort can repeat rows on one page and skip them on another (WMS-01-007).
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       }),
       this.prisma.withdrawalRequest.count({ where }),
     ]);

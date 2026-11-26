@@ -5,6 +5,7 @@ import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { Roles } from './decorators/roles.decorator';
@@ -64,7 +65,7 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Change own password (enforces policy)' })
   changePassword(
-    @Body() body: { oldPassword: string; newPassword: string },
+    @Body() body: ChangePasswordDto,
     @CurrentUser('id') userId: string,
   ) {
     return this.authService.changePassword(userId, body.oldPassword, body.newPassword);

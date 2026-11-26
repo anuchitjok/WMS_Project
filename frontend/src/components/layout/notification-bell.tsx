@@ -30,6 +30,53 @@ const MAX_WIDTH = 320;
 // Minimum clearance from any viewport edge
 const EDGE_CLEARANCE = 8;
 
+// ── Shared notification feed (WMS-08-001) ─────────────────────────────────────
+// The dashboard shell renders this bell twice: once in the mobile top bar and once
+// inside <AppHeader />. `lg:hidden` / `hidden lg:flex` only hide one of them with CSS —
+// both stay mounted, so a per-component poll made every user issue two identical
+// requests a minute for the whole session, one of them for a bell nobody can see.
+//
+// One module-level poller now serves every mount, however many there are. It starts on
+// the first subscriber and stops when the last one unmounts. A side benefit: marking a
+// notification read in one bell updates the other immediately, which it did not before.
+const POLL_MS = 60_000;
+let feedCache: any = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+const feedSubscribers = new Set<(data: any) => void>();
+
+/** Fetch once and push the result to every mounted bell. Errors stay silent, as before. */
+async function loadFeed(): Promise<void> {
+  try {
+    feedCache = await notifApi.list(1, 10);
+    feedSubscribers.forEach((notify) => notify(feedCache));
+  } catch {
+    /* silent */
+  }
+}
+
+function subscribeToFeed(notify: (data: any) => void): () => void {
+  feedSubscribers.add(notify);
+  // A bell mounting later gets what we already have, with no extra request.
+  if (feedCache !== null) notify(feedCache);
+  if (pollTimer === null) {
+    void loadFeed();
+    pollTimer = setInterval(() => void loadFeed(), POLL_MS);
+  }
+  return () => {
+    feedSubscribers.delete(notify);
+    if (feedSubscribers.size === 0) {
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      // Drop the cache with the last bell. Module state outlives a logout in the same
+      // tab, and the next person to sign in must not be handed the previous one's
+      // notifications while their own request is still in flight.
+      feedCache = null;
+    }
+  };
+}
+
 interface PanelPos {
   top: number;
   left: number;
@@ -56,10 +103,11 @@ export function NotificationBell() {
   useEffect(() => { setMounted(true); }, []);
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
-    try { setData(await notifApi.list(1, 10)); } catch { /* silent */ }
-  }, []);
-  useEffect(() => { load(); const iv = setInterval(load, 60_000); return () => clearInterval(iv); }, [load]);
+  // `data` starts as null so the first render is identical on the server (static
+  // export) and in the browser — the subscription happens in an effect, never
+  // during render, so there is nothing for React to find mismatched.
+  const load = useCallback(() => loadFeed(), []);
+  useEffect(() => subscribeToFeed(setData), []);
 
   // ── Positioning ───────────────────────────────────────────────────────────
   // Called every time the panel opens or the viewport changes.

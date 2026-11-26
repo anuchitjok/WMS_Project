@@ -196,6 +196,9 @@ export class MrpService {
   }
 
   async getRun(u: Principal, id: string) {
+    // Guard the unique filter: Prisma 7 panics its query compiler on `where: { id: undefined }`
+    // rather than returning null, which surfaced as a 500 instead of a 400 (WMS-01-003).
+    if (!id || typeof id !== 'string') throw new BadRequestException('A planning run id is required');
     const run = await this.prisma.mrpRun.findUnique({ where: { id } });
     if (!run) throw new NotFoundException('Planning run not found');
     this.assertRunVisible(u, run);
@@ -274,6 +277,11 @@ export class MrpService {
   }
 
   async compare(u: Principal, baseId: string, targetId: string) {
+    // Both query parameters are required. Without this, a call with neither reached
+    // findUnique with an undefined id and panicked the query engine (WMS-01-003).
+    if (!baseId || !targetId) {
+      throw new BadRequestException('base and target are both required to compare two planning runs');
+    }
     const [base, target] = await Promise.all([this.getRun(u, baseId), this.getRun(u, targetId)]);
     const pick = { productId: true, warehouseId: true, sku: true, description: true, planningStatus: true, suggestedQty: true, netReq: true, forecastQty: true, available: true, openPoQty: true, exceptionCodes: true, suggestedOrderDate: true } as const;
     const [a, b] = await Promise.all([

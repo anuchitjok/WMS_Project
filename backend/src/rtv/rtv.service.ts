@@ -84,7 +84,9 @@ export class RtvService {
       },
       skip,
       take: limit,
-      orderBy: { createdAt: 'desc' },
+      // Unique tiebreaker: createdAt is not unique, and OFFSET paging over a tied
+      // sort can repeat rows on one page and skip them on another (WMS-01-007).
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     const withAging = rows.map((r) => ({ ...r, ...rtvAging(r, slaDays) }));
     return filter.overdue ? withAging.filter((r) => r.overdue) : withAging;

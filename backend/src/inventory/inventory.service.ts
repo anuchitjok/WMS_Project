@@ -70,7 +70,9 @@ export class InventoryService {
         },
         skip,
         take: limit,
-        orderBy: { updatedAt: 'desc' },
+        // Unique tiebreaker: updatedAt is not unique, and OFFSET paging over a tied
+        // sort can repeat rows on one page and skip them on another (WMS-01-007).
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
       }),
       this.prisma.stockItem.count({ where }),
     ]);
@@ -465,7 +467,9 @@ export class InventoryService {
             take: 1,
           },
         },
-        orderBy: { updatedAt: 'desc' },
+        // Unique tiebreaker: updatedAt is not unique, and OFFSET paging over a tied
+        // sort can repeat rows on one page and skip them on another (WMS-01-007).
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
         skip,
         take: limit,
       }),

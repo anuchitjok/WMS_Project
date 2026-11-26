@@ -152,7 +152,9 @@ export class RolesService {
   }
 
   // ── Permissions (dynamic catalogue) ────────────────────────────────────────
-  async createPermission(dto: { code: string; module: string; action: string; description?: string }, actor: Actor) {
+  // `code` is optional: it defaults to `<module>.<action>` just below, which the previous
+  // required-string signature did not reflect.
+  async createPermission(dto: { code?: string; module: string; action: string; description?: string }, actor: Actor) {
     const code = dto.code?.trim() || `${dto.module}.${dto.action}`;
     if (await this.prisma.permission.findUnique({ where: { code } })) throw new ConflictException(`Permission exists: ${code}`);
     const p = await this.prisma.permission.create({

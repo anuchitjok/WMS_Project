@@ -65,15 +65,21 @@ export class AuthService {
 
     if (!user.isActive) throw new UnauthorizedException('Account is inactive');
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
-    });
-
-    await this.prisma.loginHistory.create({ data: { userId: user.id, success: true, ipAddress: ip } });
-    await this.prisma.auditLog.create({
-      data: { userId: user.id, action: 'LOGIN', entityType: 'User', entityId: user.id, ipAddress: ip },
-    });
+    // These three writes touch different tables and none reads the others' result, so
+    // they go out together (WMS-08-002). On production the database is a network hop
+    // away, and awaiting them one at a time added two round trips to every login for
+    // no reason. Still awaited as a group: a failure must surface, and the audit and
+    // login-history rows must exist before the caller is handed a token.
+    await Promise.all([
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() },
+      }),
+      this.prisma.loginHistory.create({ data: { userId: user.id, success: true, ipAddress: ip } }),
+      this.prisma.auditLog.create({
+        data: { userId: user.id, action: 'LOGIN', entityType: 'User', entityId: user.id, ipAddress: ip },
+      }),
+    ]);
 
     const payload = { sub: user.id, username: user.username, role: user.role };
     // Every token carries a jti so logout / revocation (TokenBlocklist) can target it.

@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { CreateRoleDto, CreatePermissionDto, UpdatePermissionDto } from './roles.dto';
 
 @ApiTags('Roles & Permissions')
 @ApiBearerAuth()
@@ -21,10 +22,10 @@ export class RolesController {
 
   @Post('permissions')
   @ApiOperation({ summary: 'Create permission' })
-  createPermission(@Body() dto: any, @CurrentUser() actor: any) { return this.service.createPermission(dto, actor); }
+  createPermission(@Body() dto: CreatePermissionDto, @CurrentUser() actor: any) { return this.service.createPermission(dto, actor); }
 
   @Patch('permissions/:permId')
-  updatePermission(@Param('permId') permId: string, @Body() dto: any, @CurrentUser() actor: any) {
+  updatePermission(@Param('permId') permId: string, @Body() dto: UpdatePermissionDto, @CurrentUser() actor: any) {
     return this.service.updatePermission(permId, dto, actor);
   }
 
@@ -33,7 +34,7 @@ export class RolesController {
     return this.service.deletePermission(permId, actor);
   }
 
-  @Post() create(@Body() dto: any, @CurrentUser() actor: any) { return this.service.create(dto, actor); }
+  @Post() create(@Body() dto: CreateRoleDto, @CurrentUser() actor: any) { return this.service.create(dto, actor); }
 
   // role :id routes
   @Get(':id') get(@Param('id') id: string) { return this.service.getRole(id); }
